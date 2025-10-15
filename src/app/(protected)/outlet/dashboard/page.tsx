@@ -16,7 +16,6 @@ type Customer = {
   package_amount?: number;
   took_package?: boolean;
   outlet?: string;
-  // add other fields if needed
 };
 
 export default function OutletDashboard() {
@@ -61,7 +60,7 @@ export default function OutletDashboard() {
 
       // Get recent customers for this outlet
       const { data: customers, error: customersError } = await supabase
-        .from<Customer>('customers')
+        .from('customers')
         .select('*')
         .eq('outlet', outlet.name)
         .order('date', { ascending: false })
@@ -71,13 +70,14 @@ export default function OutletDashboard() {
         console.error('Error fetching customers:', customersError);
         setRecentCustomers([]);
       } else {
-        setRecentCustomers(customers ?? []);
+        // cast to Customer[] for local usage
+        setRecentCustomers((customers as Customer[]) ?? []);
       }
 
       // Calculate daily sales
       const today = new Date().toISOString().split('T')[0];
       const { data: sales, error: salesError } = await supabase
-        .from<Customer>('customers')
+        .from('customers')
         .select('amount_paid, package_amount, took_package')
         .eq('outlet', outlet.name)
         .eq('date', today);
@@ -86,7 +86,7 @@ export default function OutletDashboard() {
         console.error('Error fetching sales:', salesError);
       }
 
-      const totalSales = (sales ?? []).reduce((sum: number, c: any) => {
+      const totalSales = ((sales ?? []) as any[]).reduce((sum: number, c: any) => {
         if (c.took_package) return sum + (c.package_amount || 0);
         return sum + (c.amount_paid || 0);
       }, 0);
