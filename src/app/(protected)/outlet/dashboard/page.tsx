@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS } from '@/lib/outlets';
+import { OUTLETS } from '@/lib/outlet';
 
 export default function OutletDashboard() {
   const router = useRouter();

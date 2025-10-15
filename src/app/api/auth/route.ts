@@ -1,6 +1,6 @@
 // src/app/api/auth/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { OUTLETS, ADMIN_CREDENTIALS } from '@/lib/outlets';
+import { OUTLETS, ADMIN_CREDENTIALS } from '@/lib/outlet';
 
 export async function POST(request: NextRequest) {
   try {
