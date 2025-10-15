@@ -2,100 +2,56 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
 
 type PackageCustomer = {
+  id: string;
   name: string;
   mobile: string;
-  packageAmount: number;
-  totalPackageHours: number;
-  usedPackageHours: number;
-  remainingHours: number;
-  expiryDate: string;
+  package_amount: number;
+  total_hours: number;
+  used_hours: number;
+  remaining_hours: number;
+  start_date: string;
+  expiry_date: string;
   status: 'active' | 'expired';
   outlet: string;
 };
 
 export default function PackagesPage() {
-  const [allCustomers, setAllCustomers] = useState<PackageCustomer[]>([]);
-  const [filteredCustomers, setFilteredCustomers] = useState<PackageCustomer[]>([]);
+  const [packages, setPackages] = useState<PackageCustomer[]>([]);
+  const [filteredPackages, setFilteredPackages] = useState<PackageCustomer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
   const [loading, setLoading] = useState(true);
 
-  const fetchPackageCustomers = async () => {
-    setLoading(true);
+  useEffect(() => {
+    fetchPackages();
+    
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchPackages, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchPackages = async () => {
     try {
-      const res = await fetch('/api/customers');
-      if (res.ok) {
-        const allCustomersData = await res.json();
-        
-        // Group by mobile to get unique clients with packages
-        const packageMap = new Map<string, PackageCustomer>();
-        
-        // First pass: find all package purchases
-        const packagePurchases = allCustomersData.filter((c: any) => c.tookPackage);
-        packagePurchases.forEach((purchase: any) => {
-          const key = purchase.mobile;
-          if (!packageMap.has(key)) {
-            const expiry = new Date(purchase.date);
-            expiry.setMonth(expiry.getMonth() + 2);
-            
-            packageMap.set(key, {
-              name: purchase.name,
-              mobile: purchase.mobile,
-              packageAmount: purchase.packageAmount || 0,
-              totalPackageHours: purchase.totalPackageHours || 0,
-              usedPackageHours: 0,
-              remainingHours: purchase.totalPackageHours || 0,
-              expiryDate: expiry.toISOString().split('T')[0],
-              status: 'active',
-              outlet: purchase.outlet || 'Unknown'
-            });
-          }
-        });
-
-        // Second pass: calculate used hours for each package client
-        allCustomersData.forEach((session: any) => {
-          const pkg = packageMap.get(session.mobile);
-          if (pkg) {
-            // Only count sessions that happened after package purchase
-            const purchaseDate = new Date(
-              packagePurchases.find((p: any) => p.mobile === session.mobile)?.date || ''
-            );
-            const sessionDate = new Date(session.date);
-            
-            if (sessionDate >= purchaseDate) {
-              pkg.usedPackageHours += session.sessionHours || 0;
-            }
-          }
-        });
-
-        // Update remaining hours and status
-        const now = new Date();
-        const result = Array.from(packageMap.values()).map(pkg => {
-          pkg.remainingHours = Math.max(0, pkg.totalPackageHours - pkg.usedPackageHours);
-          const expiry = new Date(pkg.expiryDate);
-          const hoursExhausted = pkg.remainingHours <= 0;
-          const timeExpired = now > expiry;
-          pkg.status = (hoursExhausted || timeExpired) ? 'expired' : 'active';
-          return pkg;
-        });
-
-        setAllCustomers(result);
-      }
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('packages')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      setPackages(data || []);
     } catch (err) {
-      console.error('Error:', err);
+      console.error('Error fetching packages:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchPackageCustomers();
-  }, []);
-
-  useEffect(() => {
-    let result = [...allCustomers];
+    let result = [...packages];
     
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
@@ -109,8 +65,8 @@ export default function PackagesPage() {
       result = result.filter(customer => customer.status === statusFilter);
     }
     
-    setFilteredCustomers(result);
-  }, [searchTerm, statusFilter, allCustomers]);
+    setFilteredPackages(result);
+  }, [searchTerm, statusFilter, packages]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
@@ -127,7 +83,7 @@ export default function PackagesPage() {
         
         <div className="flex flex-col sm:flex-row gap-3">
           <button
-            onClick={fetchPackageCustomers}
+            onClick={fetchPackages}
             disabled={loading}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center"
           >
@@ -165,16 +121,16 @@ export default function PackagesPage() {
       </div>
 
       <div className="mb-4 text-sm text-gray-600">
-        Showing {filteredCustomers.length} of {allCustomers.length} package clients
+        Showing {filteredPackages.length} of {packages.length} package clients
       </div>
 
       {loading ? (
         <div className="bg-white shadow rounded-lg p-8 text-center">
           Loading package clients...
         </div>
-      ) : filteredCustomers.length === 0 ? (
+      ) : filteredPackages.length === 0 ? (
         <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">
-          {allCustomers.length === 0 
+          {packages.length === 0 
             ? 'No package clients found.' 
             : 'No clients match your filters.'}
         </div>
@@ -196,8 +152,8 @@ export default function PackagesPage() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredCustomers.map((customer, index) => (
-                  <tr key={index} className="hover:bg-gray-50">
+                {filteredPackages.map((customer) => (
+                  <tr key={customer.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {customer.name}
                     </td>
@@ -208,27 +164,27 @@ export default function PackagesPage() {
                       {customer.outlet}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatCurrency(customer.packageAmount)}
+                      {formatCurrency(customer.package_amount)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {customer.totalPackageHours} hrs
+                      {customer.total_hours} hrs
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {customer.usedPackageHours.toFixed(1)} hrs
+                      {customer.used_hours.toFixed(1)} hrs
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <span className={
-                        customer.status === 'active' && customer.remainingHours < 1
+                        customer.status === 'active' && customer.remaining_hours < 1
                           ? 'text-red-600'
                           : customer.status === 'active'
                           ? 'text-green-600'
                           : 'text-gray-500'
                       }>
-                        {customer.remainingHours.toFixed(1)} hrs
+                        {customer.remaining_hours.toFixed(1)} hrs
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(customer.expiryDate).toLocaleDateString()}
+                      {new Date(customer.expiry_date).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
