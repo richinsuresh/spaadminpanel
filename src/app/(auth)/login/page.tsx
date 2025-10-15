@@ -2,88 +2,52 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 export default function LoginPage() {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError('');
-    
-    // Debug log
-    console.log('📤 SENDING PASSWORD:', JSON.stringify(password));
-
-    try {
-      const response = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ password }), // Must be exactly "password"
-      });
-
-      const data = await response.json();
-      console.log('📥 API RESPONSE:', data);
-
-      if (response.ok) {
-        router.push('/dashboard');
-      } else {
-        setError(data.error || 'Login failed');
-      }
-    } catch (err) {
-      console.error('💥 FETCH ERROR:', err);
-      setError('Network error. Check console.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-800">Admin Login</h1>
-          <p className="text-gray-600">Password: <strong>admin123</strong></p>
+          <h1 className="text-2xl font-bold text-gray-800">Berry Spa Admin Panel</h1>
+          <p className="text-gray-600 mt-2">Choose your login type</p>
         </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          <div className="mb-6">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                console.log('✏️ INPUT VALUE:', e.target.value); // Debug
-              }}
-              required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
-              placeholder="Enter password (admin123)"
-            />
+        <div className="space-y-6">
+          {/* Admin Login Card */}
+          <div className="border border-purple-200 rounded-xl p-6 hover:shadow-md transition-shadow">
+            <h2 className="text-lg font-semibold text-purple-700 mb-3 flex items-center">
+              <span className="mr-2">👑</span>
+              Main Admin Login
+            </h2>
+            <p className="text-gray-600 text-sm mb-4">
+              Access all outlets, manage staff, and view company-wide reports
+            </p>
+            <Link
+              href="/admin-login"
+              className="w-full block text-center bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition duration-300"
+            >
+              Admin Login →
+            </Link>
           </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-70"
-          >
-            {isLoading ? 'Logging in...' : 'Login'}
-          </button>
-        </form>
+          {/* Outlet Login Card */}
+          <div className="border border-blue-200 rounded-xl p-6 hover:shadow-md transition-shadow">
+            <h2 className="text-lg font-semibold text-blue-700 mb-3 flex items-center">
+              <span className="mr-2">🏪</span>
+              Outlet Staff Login
+            </h2>
+            <p className="text-gray-600 text-sm mb-4">
+              Manage your outlet's customers, packages, and daily operations
+            </p>
+            <Link
+              href="/outlet-login"
+              className="w-full block text-center bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition duration-300"
+            >
+              Outlet Login →
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

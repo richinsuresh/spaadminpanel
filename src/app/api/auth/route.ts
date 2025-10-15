@@ -1,36 +1,31 @@
 // src/app/api/auth/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-
-const ADMIN_PASSWORD = 'admin123';
+import { OUTLETS, ADMIN_CREDENTIALS } from '@/lib/outlets';
 
 export async function POST(request: NextRequest) {
   try {
-    const { password } = await request.json();
+    const { username, password, outletId } = await request.json();
     
-    if (password === ADMIN_PASSWORD) {
-      // ✅ CORRECT WAY: Use NextResponse.json() with cookies
-      const response = NextResponse.json({ success: true });
-      
-      // Set cookie on the response
-      response.cookies.set('admin_auth', 'true', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 3600, // 1 hour
-        path: '/',
-      });
-      
+    // Admin login
+    if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.password) {
+      const response = NextResponse.json({ success: true, role: 'admin' });
+      response.cookies.set('auth_role', 'admin', { httpOnly: true, maxAge: 3600, path: '/' });
       return response;
     }
     
-    return NextResponse.json(
-      { error: 'Invalid password' },
-      { status: 401 }
-    );
+    // Outlet login
+    if (outletId) {
+      const outlet = OUTLETS.find(o => o.id === outletId && o.password === password);
+      if (outlet) {
+        const response = NextResponse.json({ success: true, role: 'outlet', outletId });
+        response.cookies.set('auth_role', 'outlet', { httpOnly: true, maxAge: 3600, path: '/' });
+        response.cookies.set('outlet_id', outletId, { httpOnly: true, maxAge: 3600, path: '/' });
+        return response;
+      }
+    }
+    
+    return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
   } catch (error) {
-    console.error('💥 SERVER ERROR:', error);
-    return NextResponse.json(
-      { error: 'Authentication failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Authentication failed' }, { status: 500 });
   }
 }
