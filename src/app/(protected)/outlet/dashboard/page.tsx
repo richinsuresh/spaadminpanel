@@ -6,10 +6,23 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
+type Customer = {
+  id?: string;
+  name?: string;
+  mobile?: string;
+  treatment?: string;
+  date?: string;
+  amount_paid?: number;
+  package_amount?: number;
+  took_package?: boolean;
+  outlet?: string;
+  // add other fields if needed
+};
+
 export default function OutletDashboard() {
   const router = useRouter();
   const [outletName, setOutletName] = useState('');
-  const [recentCustomers, setRecentCustomers] = useState<any[]>([]);
+  const [recentCustomers, setRecentCustomers] = useState<Customer[]>([]);
   const [dailyTarget, setDailyTarget] = useState({
     target: 50000,
     achieved: 0,
@@ -25,47 +38,62 @@ export default function OutletDashboard() {
         const outlet = OUTLETS.find(o => o.id === outletId);
         if (outlet) setOutletName(outlet.name);
       }
-      
+
       await fetchData();
     };
-    
+
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
       const outletId = document.cookie.split('; ').find(row => row.startsWith('outlet_id='))?.split('=')[1];
-      if (!outletId) return;
-      
+      if (!outletId) {
+        setRecentCustomers([]);
+        setDailyTarget(prev => ({ ...prev, achieved: 0, percentage: 0 }));
+        return;
+      }
+
       const outlet = OUTLETS.find(o => o.id === outletId);
       if (!outlet) return;
 
       // Get recent customers for this outlet
-      const {  customers } = await supabase
-        .from('customers')
+      const { data: customers, error: customersError } = await supabase
+        .from<Customer>('customers')
         .select('*')
         .eq('outlet', outlet.name)
         .order('date', { ascending: false })
         .limit(5);
-      
-      setRecentCustomers(customers || []);
+
+      if (customersError) {
+        console.error('Error fetching customers:', customersError);
+        setRecentCustomers([]);
+      } else {
+        setRecentCustomers(customers ?? []);
+      }
 
       // Calculate daily sales
       const today = new Date().toISOString().split('T')[0];
-      const {  sales } = await supabase
-        .from('customers')
+      const { data: sales, error: salesError } = await supabase
+        .from<Customer>('customers')
         .select('amount_paid, package_amount, took_package')
         .eq('outlet', outlet.name)
         .eq('date', today);
-      
-      const totalSales = (sales || []).reduce((sum: number, c: any) => {
+
+      if (salesError) {
+        console.error('Error fetching sales:', salesError);
+      }
+
+      const totalSales = (sales ?? []).reduce((sum: number, c: any) => {
         if (c.took_package) return sum + (c.package_amount || 0);
         return sum + (c.amount_paid || 0);
       }, 0);
-      
+
       const target = 50000;
-      const percentage = Math.min(100, Math.round((totalSales / target) * 100));
-      
+      const percentage = target > 0 ? Math.min(100, Math.round((totalSales / target) * 100)) : 0;
+
       setDailyTarget({ target, achieved: totalSales, percentage });
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -74,15 +102,15 @@ export default function OutletDashboard() {
     }
   };
 
-  const formatCurrency = (amount: number) => 
+  const formatCurrency = (amount: number) =>
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
 
   return (
     <div className="space-y-8">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-800">{outletName} Dashboard</h1>
+        <h1 className="text-2xl font-bold text-gray-800">{outletName || 'Outlet'} Dashboard</h1>
         <div className="flex gap-3">
-          <button 
+          <button
             onClick={() => {
               document.cookie = 'auth_role=; Max-Age=0; path=/';
               document.cookie = 'outlet_id=; Max-Age=0; path=/';
@@ -111,9 +139,9 @@ export default function OutletDashboard() {
               <span>{dailyTarget.percentage}%</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
-              <div 
+              <div
                 className={`h-2 rounded-full ${
-                  dailyTarget.percentage >= 80 ? 'bg-green-500' : 
+                  dailyTarget.percentage >= 80 ? 'bg-green-500' :
                   dailyTarget.percentage >= 50 ? 'bg-yellow-500' : 'bg-red-500'
                 }`}
                 style={{ width: `${dailyTarget.percentage}%` }}
@@ -144,7 +172,7 @@ export default function OutletDashboard() {
             <div className="p-6 text-center text-gray-500">No customers yet</div>
           ) : (
             recentCustomers.map((c, i) => (
-              <div key={i} className="p-6">
+              <div key={c.id ?? i} className="p-6">
                 <div className="flex justify-between">
                   <div>
                     <h3 className="font-medium">{c.name}</h3>
@@ -153,7 +181,7 @@ export default function OutletDashboard() {
                   <div className="text-right">
                     <p className="font-medium">{c.treatment}</p>
                     <p className="text-sm text-gray-500">
-                      {new Date(c.date).toLocaleDateString()}
+                      {c.date ? new Date(c.date).toLocaleDateString('en-IN') : '-'}
                     </p>
                   </div>
                 </div>
