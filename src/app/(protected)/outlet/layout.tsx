@@ -7,12 +7,13 @@ export default async function OutletLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // ✅ Add 'async' and 'await'
   const cookieStore = await cookies();
-  const role = cookieStore.get('auth_role')?.value;
+  // ✅ Check admin_auth (set by your current API)
+  const isAuthenticated = cookieStore.get('admin_auth')?.value === 'true';
   const outletId = cookieStore.get('outlet_id')?.value;
   
-  if (role !== 'outlet' || !outletId) {
+  // Outlet staff must have both admin_auth AND outlet_id
+  if (!isAuthenticated || !outletId) {
     redirect('/outlet-login');
   }
   
