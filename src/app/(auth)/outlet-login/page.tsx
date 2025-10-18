@@ -24,13 +24,17 @@ export default function OutletLogin() {
         body: JSON.stringify({ outletId, password }),
       });
 
+      const data = await res.json();
+
       if (res.ok) {
-        router.push('/outlet/dashboard');
+        // ✅ Force page reload to ensure cookies are recognized
+        window.location.href = '/outlet/dashboard';
       } else {
-        setError('Invalid outlet ID or password');
+        setError(data.error || 'Invalid outlet ID or password');
       }
     } catch (err) {
       setError('Login failed. Please try again.');
+      console.error('Login error:', err);
     } finally {
       setIsLoading(false);
     }
