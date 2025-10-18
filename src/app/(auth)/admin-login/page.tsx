@@ -1,9 +1,8 @@
-// src/app/(auth)/admin-login/page.tsx
 'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ADMIN_CREDENTIALS } from '@/lib/outlet'; // Import constant
+import { ADMIN_CREDENTIALS } from '@/lib/outlet';
 
 export default function AdminLogin() {
   const [password, setPassword] = useState('');
@@ -20,12 +19,13 @@ export default function AdminLogin() {
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // IMPORTANT: Send the hardcoded username to trigger the Admin path in the API route
-        body: JSON.stringify({ username: ADMIN_CREDENTIALS.username, password }), 
+        body: JSON.stringify({ username: 'admin', password }),
       });
 
       if (res.ok) {
-        router.push('/dashboard');
+        // CRITICAL FIX: Use window.location.href for hard reload 
+        // to force the server to read the newly set cookies.
+        window.location.href = '/dashboard';
       } else {
         const data = await res.json();
         setError(data.error || 'Invalid password');
@@ -42,8 +42,7 @@ export default function AdminLogin() {
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-gray-800">Admin Login</h1>
-          {/* Update the message to reflect Supabase setup */}
-          <p className="text-gray-600">Enter the password for `admin@berryspa.com`</p> 
+          <p className="text-gray-600">Enter the password for `admin@berryspa.com`</p>
         </div>
 
         {error && (

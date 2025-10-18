@@ -1,4 +1,3 @@
-// src/app/(protected)/outlet/layout.tsx
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
@@ -9,16 +8,16 @@ export default async function OutletLayout({
 }) {
   const cookieStore = await cookies();
   
-  // 1. Get the cookies
+  // 1. Explicitly check if the 'auth_role' cookie exists AND its value is 'outlet'
   const authRoleCookie = cookieStore.get('auth_role');
   const outletIdCookie = cookieStore.get('outlet_id');
   
-  // 2. Explicitly check if the role is 'outlet' AND the outlet_id exists
   const isOutletAuthenticated = 
     authRoleCookie?.value === 'outlet' && 
-    !!outletIdCookie;
-  
+    !!outletIdCookie?.value; // Ensure outlet ID is also present
+
   if (!isOutletAuthenticated) {
+    // If not authenticated as an outlet, redirect to outlet login
     redirect('/outlet-login');
   }
   

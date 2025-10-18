@@ -1,4 +1,3 @@
-// src/app/(auth)/outlet-login/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -27,8 +26,9 @@ export default function OutletLogin() {
       const data = await res.json();
 
       if (res.ok) {
-        // ✅ Force page reload to ensure cookies are recognized
-        window.location.href = '/outlet/dashboard';
+        // CRITICAL FIX: Use window.location.href for hard reload 
+        // to force the server to read the newly set cookies.
+        window.location.href = '/outlet/dashboard'; 
       } else {
         setError(data.error || 'Invalid outlet ID or password');
       }
