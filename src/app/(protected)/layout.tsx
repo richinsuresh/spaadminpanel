@@ -12,7 +12,8 @@ export default async function ProtectedLayout({
 }: ProtectedLayoutProps) {
   // Get cookies asynchronously (required in Next.js 15+ server components)
   const cookieStore = await cookies();
-  const isAuthenticated = cookieStore.has('admin_auth');
+  // FIX: Check for 'auth_role' cookie set by your API, not 'admin_auth'
+  const isAuthenticated = cookieStore.has('auth_role');
 
   // Redirect to login if not authenticated
   if (!isAuthenticated) {

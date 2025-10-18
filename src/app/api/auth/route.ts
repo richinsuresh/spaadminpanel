@@ -1,13 +1,29 @@
-// MUST use 'auth_role' for both admin and outlet
+// src/app/api/auth/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { OUTLETS, ADMIN_CREDENTIALS } from '@/lib/outlet';
+import { supabase } from '@/lib/supabase'; // Import Supabase client
 
 export async function POST(request: NextRequest) {
   try {
     const { username, password, outletId } = await request.json();
-    
-    // Admin login
-    if (username === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.password) {
+
+    // --- ADMIN LOGIN (MIGRATED TO SUPABASE AUTH) ---
+    if (username === ADMIN_CREDENTIALS.username) {
+      // 1. Use a defined Admin Email for Supabase Auth lookup
+      const adminEmail = 'admin@berryspa.com'; 
+
+      // 2. Sign in with Supabase Authentication to verify the password
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: adminEmail,
+        password: password,
+      });
+
+      if (error) {
+        // Handle Supabase authentication errors (e.g., Invalid login credentials)
+        return NextResponse.json({ error: error.message || 'Invalid password' }, { status: 401 });
+      }
+
+      // 3. If successful, set the role cookie (keeping your current structure)
       const response = NextResponse.json({ success: true, role: 'admin' });
       response.cookies.set('auth_role', 'admin', { // ✅ auth_role
         httpOnly: true,
@@ -18,8 +34,8 @@ export async function POST(request: NextRequest) {
       });
       return response;
     }
-    
-    // Outlet login
+
+    // --- OUTLET LOGIN (KEPT AS IS FOR NOW) ---
     if (outletId) {
       const outlet = OUTLETS.find(o => o.id === outletId && o.password === password);
       if (outlet) {
@@ -41,9 +57,10 @@ export async function POST(request: NextRequest) {
         return response;
       }
     }
-    
+
     return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
   } catch (error) {
+    console.error('Authentication error:', error);
     return NextResponse.json({ error: 'Authentication failed' }, { status: 500 });
   }
 }

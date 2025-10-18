@@ -9,8 +9,16 @@ export default async function OutletLayout({
 }) {
   const cookieStore = await cookies();
   
-  // Efficient single check: both cookies must exist
-  if (!cookieStore.get('auth_role') || !cookieStore.get('outlet_id')) {
+  // 1. Get the cookies
+  const authRoleCookie = cookieStore.get('auth_role');
+  const outletIdCookie = cookieStore.get('outlet_id');
+  
+  // 2. Explicitly check if the role is 'outlet' AND the outlet_id exists
+  const isOutletAuthenticated = 
+    authRoleCookie?.value === 'outlet' && 
+    !!outletIdCookie;
+  
+  if (!isOutletAuthenticated) {
     redirect('/outlet-login');
   }
   
