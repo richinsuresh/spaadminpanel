@@ -7,11 +7,11 @@ export default async function OutletLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const cookieStore = cookies();
+  // ✅ Add 'async' and 'await'
+  const cookieStore = await cookies();
   const role = cookieStore.get('auth_role')?.value;
   const outletId = cookieStore.get('outlet_id')?.value;
   
-  // ✅ Check both role AND outlet ID
   if (role !== 'outlet' || !outletId) {
     redirect('/outlet-login');
   }
