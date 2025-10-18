@@ -1,4 +1,4 @@
-// MUST use await cookies()
+// src/app/(protected)/outlet/layout.tsx
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
@@ -7,11 +7,12 @@ export default async function OutletLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const cookieStore = await cookies(); // ✅ await cookies()
+  const cookieStore = await cookies();
   const role = cookieStore.get('auth_role')?.value;
   const outletId = cookieStore.get('outlet_id')?.value;
   
-  if (role !== 'outlet' || !outletId) { // ✅ Check both
+  // ✅ Only check if both are present (don't require specific values)
+  if (!role || !outletId) {
     redirect('/outlet-login');
   }
   
