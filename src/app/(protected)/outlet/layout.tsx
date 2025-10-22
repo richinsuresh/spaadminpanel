@@ -23,3 +23,4 @@ export default async function OutletLayout({
   
   return <>{children}</>;
 }
+    
