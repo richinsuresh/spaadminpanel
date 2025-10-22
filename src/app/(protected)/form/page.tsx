@@ -123,6 +123,13 @@ export default function ClientForm() {
 
       if (response.ok) {
         setSuccess(true);
+        
+        // FIX 1: Use router.refresh() to force the previous page (dashboard) to re-fetch data.
+        router.refresh(); 
+        
+        // FIX 2: Redirect to the Outlet Dashboard.
+        router.push('/outlet/dashboard'); 
+        
         setMobile('');
         setClientInfo(null);
         setFormData({
@@ -138,7 +145,8 @@ export default function ClientForm() {
         });
       }
     } catch (error) {
-      alert('Error saving record');
+      // NOTE: Using console.error instead of alert for better DX
+      console.error('Error saving record:', error);
     } finally {
       setIsSubmitting(false);
     }
@@ -152,7 +160,8 @@ export default function ClientForm() {
       
       <button
         type="button"
-        onClick={() => router.push('/dashboard')}
+        // FIX: The close/back button should also point to the Outlet Dashboard for the Outlet user context.
+        onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
         &times;
