@@ -121,7 +121,7 @@ export default function ClientForm() {
         // FIX: Explicitly include the separate 'mobile' state in the submission body.
         body: JSON.stringify({ 
             ...formData, 
-            mobile: mobile, // <--- ADDED LINE
+            mobile: mobile, 
             amountPaid: finalAmountPaid 
         })
       });
@@ -129,10 +129,13 @@ export default function ClientForm() {
       if (response.ok) {
         setSuccess(true);
         
-        // Refresh dashboard data and navigate back to the outlet dashboard
-        router.refresh(); 
-        router.push('/outlet/dashboard'); 
+        // Show success message for 1.5 seconds, then navigate and refresh.
+        setTimeout(() => {
+            router.refresh(); 
+            router.push('/outlet/dashboard'); 
+        }, 1500); 
         
+        // Reset form immediately after successful API call
         setMobile('');
         setClientInfo(null);
         setFormData({
@@ -146,12 +149,19 @@ export default function ClientForm() {
           isPackageCustomer: false,
           outlet: 'Indiranagar',
         });
+      } else {
+         const errorData = await response.json();
+         console.error('Submission failed:', errorData.error);
+         alert(errorData.error || 'Error saving record');
       }
     } catch (error) {
-      // NOTE: Using console.error instead of alert for better DX
       console.error('Error saving record:', error);
+      alert('Error saving record');
     } finally {
-      setIsSubmitting(false);
+      // Only reset submitting state if no success message is pending
+      if (!success) {
+         setIsSubmitting(false); 
+      }
     }
   };
 
@@ -163,16 +173,17 @@ export default function ClientForm() {
       
       <button
         type="button"
-        // The close/back button should also point to the Outlet Dashboard for the Outlet user context.
+        // Close/back button goes to the Outlet Dashboard
         onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
         &times;
       </button>
 
+      {/* SUCCESS MESSAGE DIALOG */}
       {success && (
         <div className="mb-6 p-4 bg-green-50 text-green-700 rounded-lg border border-green-200">
-          ✅ Record saved successfully!
+          ✅ Client added successfully! Redirecting...
         </div>
       )}
 
