@@ -135,7 +135,7 @@ export default function OutletDashboardPage() {
           <h3 className="text-sm text-gray-500">Daily Target</h3>
           <p className="mt-4 text-xl font-semibold text-gray-400">{formatCurrency(dailyTarget.target)}</p>
           <div className="mt-4 text-sm text-gray-400">Achieved</div>
-          <div className="mt-2 w-full bg-gray-100 rounded-full h-2">
+          <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div
               className={`h-2 rounded-full ${
                 dailyTarget.percentage >= 80 ? 'bg-green-500' :
