@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation'; // Keep for Add Customer button logic
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
@@ -28,6 +28,7 @@ export default function OutletDashboard() {
     percentage: 0
   });
   const [loading, setLoading] = useState(true);
+  const [packageAlerts, setPackageAlerts] = useState(0);
 
   useEffect(() => {
     const init = async () => {
@@ -52,6 +53,7 @@ export default function OutletDashboard() {
       if (!outletId) {
         setRecentCustomers([]);
         setDailyTarget(prev => ({ ...prev, achieved: 0, percentage: 0 }));
+        setPackageAlerts(0);
         return;
       }
 
@@ -70,11 +72,13 @@ export default function OutletDashboard() {
         console.error('Error fetching customers:', customersError);
         setRecentCustomers([]);
       } else {
-        // cast to Customer[] for local usage
-        setRecentCustomers((customers as Customer[]) ?? []);
+        const casted = (customers as Customer[]) ?? [];
+        setRecentCustomers(casted);
+        // simple heuristic: package alerts = number of recent customers who took package
+        setPackageAlerts(casted.filter(c => c.took_package).length);
       }
 
-      // Calculate daily sales
+      // Calculate daily sales (all customers for today)
       const today = new Date().toISOString().split('T')[0];
       const { data: sales, error: salesError } = await supabase
         .from('customers')
@@ -106,87 +110,132 @@ export default function OutletDashboard() {
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
 
   return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-center">
-        {/* Title updated to just be the dashboard title, outlet name is in layout */}
-        <h1 className="text-2xl font-bold text-gray-800">Outlet Summary Dashboard</h1> 
-        <div className="flex gap-3">
-          {/* Logout button removed - now handled by layout */}
-          <button
-            onClick={() => router.push('/outlet/form')}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
-          >
-            ➕ Add Customer
-          </button>
-        </div>
-      </div>
+    <div className="min-h-screen bg-gray-50">
+      {/* Page container */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">{outletName || 'Outlet'} Dashboard</h1>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow">
-          <h3 className="text-gray-500 text-sm font-medium">Daily Sales</h3>
-          <p className="text-2xl font-bold mt-2 text-green-600">{formatCurrency(dailyTarget.achieved)}</p>
-          <div className="mt-4">
-            <div className="flex justify-between text-sm mb-1">
-              <span>Target: {formatCurrency(dailyTarget.target)}</span>
-              <span>{dailyTarget.percentage}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className={`h-2 rounded-full ${
-                  dailyTarget.percentage >= 80 ? 'bg-green-500' :
-                  dailyTarget.percentage >= 50 ? 'bg-yellow-500' : 'bg-red-500'
-                }`}
-                style={{ width: `${dailyTarget.percentage}%` }}
-              ></div>
-            </div>
+          <div className="flex items-center gap-3">
+            <button
+              disabled
+              className="px-4 py-2 border border-gray-200 rounded-md text-gray-400 bg-white cursor-not-allowed"
+            >
+              ← Back to Outlets
+            </button>
+
+            <button
+              onClick={() => router.push('/outlet/form')}
+              className="px-4 py-2 rounded-md bg-purple-600 text-white hover:bg-purple-700 shadow"
+            >
+              + Add Customer
+            </button>
           </div>
         </div>
 
-        {/* Removed redundant Total Customers and Outlet name card - will be calculated/displayed on dedicated pages or in the layout */}
-        {/* Placeholder cards for consistency */}
-        <div className="bg-white p-6 rounded-xl shadow">
-          <h3 className="text-gray-500 text-sm font-medium">Total Customers (All Time)</h3>
-          <p className="text-2xl font-bold mt-2">...</p>
+        {/* Top summary cards (4) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+          {/* Daily Sales */}
+          <div className="bg-white rounded-lg p-6 shadow-sm border border-transparent">
+            <h3 className="text-sm text-gray-500">Daily Sales</h3>
+            <p className="mt-4 text-2xl font-bold text-green-600">{formatCurrency(dailyTarget.achieved)}</p>
+          </div>
+
+          {/* Daily Target */}
+          <div className="bg-white rounded-lg p-6 shadow-sm border border-transparent">
+            <h3 className="text-sm text-gray-500">Daily Target</h3>
+            <p className="mt-4 text-xl font-semibold text-gray-400">{formatCurrency(dailyTarget.target)}</p>
+            <div className="mt-4 text-sm text-gray-400">Achieved</div>
+            <div className="mt-2 w-full bg-gray-100 rounded-full h-2">
+              <div
+                className="h-2 rounded-full bg-gray-300"
+                style={{ width: `${dailyTarget.percentage}%` }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-gray-400">{dailyTarget.percentage}%</div>
+          </div>
+
+          {/* Total Customers */}
+          <div className="bg-white rounded-lg p-6 shadow-sm border border-transparent">
+            <h3 className="text-sm text-gray-500">Total Customers</h3>
+            <p className="mt-4 text-2xl font-bold text-gray-800">{recentCustomers.length}</p>
+          </div>
+
+          {/* Package Alerts */}
+          <div className="bg-white rounded-lg p-6 shadow-sm border border-transparent">
+            <h3 className="text-sm text-gray-500">Package Alerts</h3>
+            <p className="mt-4 text-2xl font-bold text-red-600">{packageAlerts}</p>
+          </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow">
-          <h3 className="text-gray-500 text-sm font-medium">Active Packages</h3>
-          <p className="text-2xl font-bold mt-2">...</p>
-        </div>
-      </div>
+        {/* Lower panels: Recent Customers + Package Alerts panel */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Recent Customers */}
+          <div className="bg-white rounded-lg shadow-sm border border-transparent">
+            <div className="p-6 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-800">Recent Customers</h2>
+            </div>
 
-      <div className="bg-white rounded-xl shadow">
-        <div className="p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800">Recent Customers</h2>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {loading ? (
-            <div className="p-6 text-center text-gray-500">Loading...</div>
-          ) : recentCustomers.length === 0 ? (
-            <div className="p-6 text-center text-gray-500">No customers yet</div>
-          ) : (
-            recentCustomers.map((c, i) => (
-              <div key={c.id ?? i} className="p-6">
-                <div className="flex justify-between">
-                  <div>
-                    <h3 className="font-medium">{c.name}</h3>
-                    <p className="text-sm text-gray-500">{c.mobile}</p>
+            <div className="divide-y divide-gray-100">
+              {loading ? (
+                <div className="p-6 text-center text-gray-500">Loading...</div>
+              ) : recentCustomers.length === 0 ? (
+                <div className="p-6 text-center text-gray-500">No customers yet</div>
+              ) : (
+                recentCustomers.map((c, i) => (
+                  <div key={c.id ?? i} className="p-6 flex justify-between items-start">
+                    <div>
+                      <h3 className="text-md font-medium text-gray-800">{c.name}</h3>
+                      <p className="text-sm text-gray-500 mt-1">{c.mobile}</p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-sm font-medium text-gray-800">{c.treatment}</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {c.date ? new Date(c.date).toLocaleDateString('en-IN') : '-'}
+                      </p>
+                      {c.took_package && (
+                        <span className="mt-2 inline-block px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                          Package Client
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-medium">{c.treatment}</p>
-                    <p className="text-sm text-gray-500">
-                      {c.date ? new Date(c.date).toLocaleDateString('en-IN') : '-'}
-                    </p>
-                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Package Alerts panel (wide) */}
+          <div className="bg-white rounded-lg shadow-sm border border-transparent">
+            <div className="p-6 border-b border-gray-100 flex items-center">
+              <span className="mr-3 text-yellow-600">⚠️</span>
+              <h2 className="text-lg font-semibold text-red-600">Package Alerts</h2>
+            </div>
+
+            <div className="p-6 text-center text-gray-500">
+              {/* If there are alerts show a list, else show healthy */}
+              {packageAlerts > 0 ? (
+                <div>
+                  <p className="mb-4 text-gray-700 font-medium">{packageAlerts} package alert(s)</p>
+                  <ul className="text-left text-sm text-gray-600 space-y-2">
+                    {/* Simple list from recent customers who took package */}
+                    {recentCustomers.filter(c => c.took_package).map((c, i) => (
+                      <li key={c.id ?? i} className="flex justify-between">
+                        <span>{c.name}</span>
+                        <span className="text-gray-400 text-xs">{c.date ? new Date(c.date).toLocaleDateString('en-IN') : '-'}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                {c.took_package && (
-                  <span className="mt-2 inline-block px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                    Package Client
-                  </span>
-                )}
-              </div>
-            ))
-          )}
+              ) : (
+                <div className="text-gray-500">All packages healthy</div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
