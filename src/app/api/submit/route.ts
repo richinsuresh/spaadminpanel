@@ -6,12 +6,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Save customer session
+    // Save customer session (Now guaranteed to include mobile)
     const { error: customerError } = await supabase
       .from('customers')
       .insert([{
         name: body.name,
-        mobile: body.mobile,
+        mobile: body.mobile, // This field is now correctly populated from the client
         date: body.date,
         treatment: body.treatment,
         session_hours: body.sessionHours,
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     } 
     // --- Existing Package Usage (Deducting Credits) ---
     else if (body.isPackageCustomer && body.sessionHours > 0) {
-      // Get current package including its ID
+      // Get current package including its ID (Crucial for update robustness)
       const { data: pkg, error: fetchError } = await supabase
         .from('packages')
         .select('id, used_hours, total_hours, expiry_date') // Ensure ID is selected

@@ -118,16 +118,19 @@ export default function ClientForm() {
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, amountPaid: finalAmountPaid })
+        // FIX: Explicitly include the separate 'mobile' state in the submission body.
+        body: JSON.stringify({ 
+            ...formData, 
+            mobile: mobile, // <--- ADDED LINE
+            amountPaid: finalAmountPaid 
+        })
       });
 
       if (response.ok) {
         setSuccess(true);
         
-        // FIX 1: Use router.refresh() to force the previous page (dashboard) to re-fetch data.
+        // Refresh dashboard data and navigate back to the outlet dashboard
         router.refresh(); 
-        
-        // FIX 2: Redirect to the Outlet Dashboard.
         router.push('/outlet/dashboard'); 
         
         setMobile('');
@@ -160,7 +163,7 @@ export default function ClientForm() {
       
       <button
         type="button"
-        // FIX: The close/back button should also point to the Outlet Dashboard for the Outlet user context.
+        // The close/back button should also point to the Outlet Dashboard for the Outlet user context.
         onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
