@@ -123,6 +123,8 @@ export default function ClientForm() {
 
       if (response.ok) {
         setSuccess(true);
+        // FIX: Redirect to the Outlet Dashboard instead of the Admin Dashboard.
+        router.push('/outlet/dashboard'); 
         setMobile('');
         setClientInfo(null);
         setFormData({
@@ -152,7 +154,8 @@ export default function ClientForm() {
       
       <button
         type="button"
-        onClick={() => router.push('/dashboard')}
+        // FIX: The close/back button should also point to the Outlet Dashboard for the Outlet user context.
+        onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
         &times;
