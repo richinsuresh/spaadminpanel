@@ -5,13 +5,18 @@ import { supabase } from '@/lib/supabase';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    
+    // Quick validation check for critical fields that should be mandatory
+    if (!body.mobile || !body.name || !body.outlet) {
+      return Response.json({ error: 'Missing required fields: mobile, name, or outlet.' }, { status: 400 });
+    }
 
-    // Save customer session (Now guaranteed to include mobile)
+    // Save customer session 
     const { error: customerError } = await supabase
       .from('customers')
       .insert([{
         name: body.name,
-        mobile: body.mobile, // This field is now correctly populated from the client
+        mobile: body.mobile, 
         date: body.date,
         treatment: body.treatment,
         session_hours: body.sessionHours,
@@ -21,14 +26,17 @@ export async function POST(request: NextRequest) {
         outlet: body.outlet
       }]);
 
-    if (customerError) throw customerError;
+    if (customerError) {
+        console.error('Supabase Customer INSERT Error:', customerError);
+        throw customerError;
+    }
 
     // Handle package logic (New Package or Existing Customer using credits)
     
     // --- New Package Registration ---
     if (body.tookPackage) {
       const expiry = new Date(body.date);
-      expiry.setMonth(expiry.getMonth() + 2); // Assuming 2 month expiry
+      expiry.setMonth(expiry.getMonth() + 2);
       
       const { error: upsertError } = await supabase.from('packages').upsert({
         mobile: body.mobile,
@@ -39,34 +47,34 @@ export async function POST(request: NextRequest) {
         start_date: body.date,
         expiry_date: expiry.toISOString().split('T')[0],
         outlet: body.outlet,
-        used_hours: 0, // Ensure this is initialized
-        status: 'active' // Ensure status is set
-      }, { onConflict: 'mobile' });
+        used_hours: 0,
+        status: 'active'
+      }, { onConflict: 'mobile', ignoreDuplicates: false }); // onConflict: 'mobile' is the key here
       
-      if (upsertError) throw upsertError;
+      if (upsertError) {
+          console.error('Supabase Package UPSERT Error:', upsertError);
+          throw upsertError;
+      }
     } 
     // --- Existing Package Usage (Deducting Credits) ---
     else if (body.isPackageCustomer && body.sessionHours > 0) {
-      // Get current package including its ID (Crucial for update robustness)
       const { data: pkg, error: fetchError } = await supabase
         .from('packages')
-        .select('id, used_hours, total_hours, expiry_date') // Ensure ID is selected
+        .select('id, used_hours, total_hours, expiry_date') 
         .eq('mobile', body.mobile)
         .single();
         
-      if (fetchError) {
-          // If the package doesn't exist, simply log and continue (no package to update)
-          console.warn(`Package not found for mobile: ${body.mobile}. Skipping usage update.`);
+      if (fetchError && fetchError.code !== 'PGRST116') {
+          console.error('Package FETCH Error:', fetchError);
+          throw fetchError;
       } else if (pkg) {
         const newUsed = (pkg.used_hours || 0) + body.sessionHours;
         const newRemaining = Math.max(0, pkg.total_hours - newUsed);
         
-        // Determine status
         const now = new Date();
         const expiry = new Date(pkg.expiry_date);
         const status = (newRemaining <= 0 || now > expiry) ? 'expired' : 'active';
 
-        // Update the package using the primary key ID
         const { error: updateError } = await supabase
           .from('packages')
           .update({
@@ -74,16 +82,22 @@ export async function POST(request: NextRequest) {
             remaining_hours: newRemaining,
             status
           })
-          .eq('id', pkg.id); // Use ID for update
+          .eq('id', pkg.id); 
 
-        if (updateError) throw updateError;
+        if (updateError) {
+            console.error('Supabase Package UPDATE Error:', updateError);
+            throw updateError;
+        }
       }
     }
 
     return Response.json({ success: true });
-  } catch (error) {
-    console.error('Submit error:', error);
-    // Return a 500 error if any operation failed
-    return Response.json({ error: 'Failed to save or update data' }, { status: 500 });
+  } catch (error: any) {
+    console.error('Submit failed:', error);
+    // Return a detailed error message to the client for immediate debugging
+    return Response.json({ 
+        error: `Failed to save or update data. Error: ${error.message || 'Unknown DB error'}`,
+        db_code: error.code // Include the database error code if available
+    }, { status: 500 });
   }
 }
