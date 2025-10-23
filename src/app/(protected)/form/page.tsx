@@ -357,18 +357,18 @@ export default function ClientForm() {
             <h3 className="text-md font-semibold text-purple-800">Package Details</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Package Amount (₹)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Package Amount (₹)</label>
                 <input
                   name="packageAmount"
                   type="number"
                   min="0"
                   value={formData.packageAmount || ''}
                   onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Total Hours</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Total Hours</label>
                 <input
                   name="totalPackageHours"
                   type="number"
@@ -376,7 +376,7 @@ export default function ClientForm() {
                   step="0.1"
                   value={formData.totalPackageHours || ''}
                   onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
             </div>
