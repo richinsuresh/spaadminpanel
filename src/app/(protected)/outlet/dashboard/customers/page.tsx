@@ -1,10 +1,9 @@
-// src/app/(protected)/outlet/dashboard/customers/page.tsx
+// src/app/(protected)/dashboard/customers/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS } from '@/lib/outlet';
 
 type Customer = {
   id: string;
@@ -20,37 +19,29 @@ type Customer = {
   amount_paid?: number;
 };
 
-export default function OutletCustomersPage() {
+export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [outletName, setOutletName] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [outletFilter, setOutletFilter] = useState('all');
 
-  useEffect(() => {
-    fetchCustomers();
-    
-    const interval = setInterval(fetchCustomers, 30000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const outlets = [
+    'all',
+    'Indiranagar',
+    'Kaggadaspura',
+    'Kalyan Nagar',
+    'Cunningham Road',
+    'HSR Layout',
+    'Malleswaram',
+    'Marathahalli'
+  ];
 
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      
-      // Determine current outlet name from cookie
-      const outletId = document.cookie.split('; ').find(row => row.startsWith('outlet_id='))?.split('=')[1];
-      if (!outletId) return;
-
-      const outlet = OUTLETS.find(o => o.id === outletId);
-      if (!outlet) return;
-
-      setOutletName(outlet.name);
-
-      // Fetch customers filtered by the current outlet
       const { data, error } = await supabase
         .from('customers')
         .select('*')
-        .eq('outlet', outlet.name)
         .order('date', { ascending: false });
       
       if (error) throw error;
@@ -62,6 +53,24 @@ export default function OutletCustomersPage() {
     }
   };
 
+  useEffect(() => {
+    fetchCustomers();
+    
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchCustomers, 30000);
+    return () => clearInterval(interval);
+  }, []); // Depend on empty array: fetches once and then relies on interval/router.refresh
+
+  const filteredCustomers = customers.filter(customer => {
+    const matchesSearch = !searchTerm || 
+      customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      customer.mobile.includes(searchTerm);
+    
+    const matchesOutlet = outletFilter === 'all' || customer.outlet === outletFilter;
+    
+    return matchesSearch && matchesOutlet;
+  });
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -72,10 +81,10 @@ export default function OutletCustomersPage() {
 
   return (
     <div>
-      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-8 gap-4">
-        <h1 className="text-2xl font-bold text-gray-800">{outletName} - All Customers</h1>
+      <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start mb-8 gap-4">
+        <h1 className="text-2xl font-bold text-gray-800">All Customers</h1>
         
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <button
             onClick={fetchCustomers}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center"
@@ -84,7 +93,7 @@ export default function OutletCustomersPage() {
           </button>
           
           <Link
-            href="/outlet/form"
+            href="/form"
             className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
           >
             ➕ Add New Customer
@@ -92,17 +101,54 @@ export default function OutletCustomersPage() {
         </div>
       </div>
 
+      {/* Filters */}
+      <div className="bg-white p-6 rounded-xl shadow mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div>
+            <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-1">
+              Search
+            </label>
+            <input
+              id="search"
+              type="text"
+              placeholder="Name or mobile..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+            />
+          </div>
+          
+          <div>
+            <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
+              Outlet
+            </label>
+            <select
+              id="outlet"
+              value={outletFilter}
+              onChange={(e) => setOutletFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+            >
+              {outlets.map(outlet => (
+                <option key={outlet} value={outlet}>
+                  {outlet === 'all' ? 'All Outlets' : outlet}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div className="mb-4 text-sm text-gray-600">
-        Showing {customers.length} customers for {outletName}
+        Showing {filteredCustomers.length} customers
       </div>
 
       {loading ? (
         <div className="bg-white shadow rounded-lg p-8 text-center">
           Loading customers...
         </div>
-      ) : customers.length === 0 ? (
+      ) : filteredCustomers.length === 0 ? (
         <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">
-          No customers found for {outletName}.
+          No customers match your filters.
         </div>
       ) : (
         <div className="bg-white shadow rounded-lg overflow-hidden">
@@ -114,12 +160,12 @@ export default function OutletCustomersPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Treatment</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Paid</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package?</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outlet</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {customers.map((customer) => (
+                {filteredCustomers.map((customer) => (
                   <tr key={customer.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
                       {customer.name}
@@ -128,14 +174,10 @@ export default function OutletCustomersPage() {
                       {customer.mobile}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(customer.date).toLocaleDateString('en-IN')}
+                      {new Date(customer.date).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {customer.treatment}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {/* Display amount paid or package amount */}
-                      {formatCurrency(customer.amount_paid || customer.package_amount || 0)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {customer.took_package ? (
@@ -147,6 +189,9 @@ export default function OutletCustomersPage() {
                           No
                         </span>
                       )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {customer.outlet}
                     </td>
                   </tr>
                 ))}

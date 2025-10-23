@@ -24,18 +24,17 @@ export default function PackagesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchPackages();
-    
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchPackages, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  
+  const outlets = [
+    'all', 'Indiranagar', 'Kaggadaspura', 'Kalyan Nagar', 'Cunningham Road', 
+    'HSR Layout', 'Malleswaram', 'Marathahalli'
+  ];
+  const [outletFilter, setOutletFilter] = useState('all');
 
   const fetchPackages = async () => {
     try {
       setLoading(true);
+      // Admin fetches ALL packages
       const { data, error } = await supabase
         .from('packages')
         .select('*')
@@ -49,6 +48,14 @@ export default function PackagesPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchPackages();
+    
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchPackages, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let result = [...packages];
@@ -65,8 +72,12 @@ export default function PackagesPage() {
       result = result.filter(customer => customer.status === statusFilter);
     }
     
+    if (outletFilter !== 'all') {
+        result = result.filter(customer => customer.outlet === outletFilter);
+    }
+    
     setFilteredPackages(result);
-  }, [searchTerm, statusFilter, packages]);
+  }, [searchTerm, statusFilter, outletFilter, packages]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
@@ -79,7 +90,7 @@ export default function PackagesPage() {
   return (
     <div>
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-8 gap-4">
-        <h1 className="text-2xl font-bold text-gray-800">Package Clients</h1>
+        <h1 className="text-2xl font-bold text-gray-800">All Package Clients</h1>
         
         <div className="flex flex-col sm:flex-row gap-3">
           <button
@@ -107,16 +118,44 @@ export default function PackagesPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
-          
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
-          >
-            <option value="all">All Statuses</option>
-            <option value="active">Active</option>
-            <option value="expired">Expired</option>
-          </select>
+        </div>
+      </div>
+      
+      {/* Filters */}
+      <div className="bg-white p-6 rounded-xl shadow mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+                <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-1">
+                Status
+                </label>
+                <select
+                    id="status"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                >
+                    <option value="all">All Statuses</option>
+                    <option value="active">Active</option>
+                    <option value="expired">Expired</option>
+                </select>
+            </div>
+            <div>
+                <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
+                Outlet Filter
+                </label>
+                <select
+                    id="outlet"
+                    value={outletFilter}
+                    onChange={(e) => setOutletFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                >
+                    {outlets.map(outlet => (
+                      <option key={outlet} value={outlet}>
+                        {outlet === 'all' ? 'All Outlets' : outlet}
+                      </option>
+                    ))}
+                </select>
+            </div>
         </div>
       </div>
 
@@ -184,7 +223,7 @@ export default function PackagesPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(customer.expiry_date).toLocaleDateString()}
+                      {new Date(customer.expiry_date).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
