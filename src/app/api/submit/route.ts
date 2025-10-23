@@ -1,9 +1,26 @@
 // src/app/api/submit/route.ts
 import { NextRequest } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// Function to create a client that bypasses RLS for server-side writes
+const createServiceRoleClient = () => {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || ''; // Must use the Service Key
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+        throw new Error('Supabase URL or Service Key missing in environment variables.');
+    }
+
+    // Initialize client using the Service Role Key
+    return createClient(supabaseUrl, supabaseServiceKey);
+};
+
 
 export async function POST(request: NextRequest) {
+  let serviceSupabase;
   try {
+    // 1. Initialize the Service Role Client
+    serviceSupabase = createServiceRoleClient();
     const body = await request.json();
     
     // Quick validation check for critical fields that should be mandatory
@@ -12,7 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Save customer session 
-    const { error: customerError } = await supabase
+    const { error: customerError } = await serviceSupabase // <-- Use serviceSupabase
       .from('customers')
       .insert([{
         name: body.name,
@@ -31,14 +48,12 @@ export async function POST(request: NextRequest) {
         throw customerError;
     }
 
-    // Handle package logic (New Package or Existing Customer using credits)
-    
     // --- New Package Registration ---
     if (body.tookPackage) {
       const expiry = new Date(body.date);
       expiry.setMonth(expiry.getMonth() + 2);
       
-      const { error: upsertError } = await supabase.from('packages').upsert({
+      const { error: upsertError } = await serviceSupabase.from('packages').upsert({ // <-- Use serviceSupabase
         mobile: body.mobile,
         name: body.name,
         package_amount: body.packageAmount,
@@ -49,7 +64,7 @@ export async function POST(request: NextRequest) {
         outlet: body.outlet,
         used_hours: 0,
         status: 'active'
-      }, { onConflict: 'mobile', ignoreDuplicates: false }); // onConflict: 'mobile' is the key here
+      }, { onConflict: 'mobile', ignoreDuplicates: false });
       
       if (upsertError) {
           console.error('Supabase Package UPSERT Error:', upsertError);
@@ -58,7 +73,8 @@ export async function POST(request: NextRequest) {
     } 
     // --- Existing Package Usage (Deducting Credits) ---
     else if (body.isPackageCustomer && body.sessionHours > 0) {
-      const { data: pkg, error: fetchError } = await supabase
+      // Get current package including its ID
+      const { data: pkg, error: fetchError } = await serviceSupabase // <-- Use serviceSupabase
         .from('packages')
         .select('id, used_hours, total_hours, expiry_date') 
         .eq('mobile', body.mobile)
@@ -75,7 +91,7 @@ export async function POST(request: NextRequest) {
         const expiry = new Date(pkg.expiry_date);
         const status = (newRemaining <= 0 || now > expiry) ? 'expired' : 'active';
 
-        const { error: updateError } = await supabase
+        const { error: updateError } = await serviceSupabase // <-- Use serviceSupabase
           .from('packages')
           .update({
             used_hours: newUsed,
@@ -94,10 +110,10 @@ export async function POST(request: NextRequest) {
     return Response.json({ success: true });
   } catch (error: any) {
     console.error('Submit failed:', error);
-    // Return a detailed error message to the client for immediate debugging
+    // Return a detailed error message to the client
     return Response.json({ 
         error: `Failed to save or update data. Error: ${error.message || 'Unknown DB error'}`,
-        db_code: error.code // Include the database error code if available
+        db_code: error.code
     }, { status: 500 });
   }
 }

@@ -131,11 +131,12 @@ export default function ClientForm() {
         
         // Show success message for 1.5 seconds, then navigate and refresh.
         setTimeout(() => {
+            // Force refresh of the destination page before navigating
             router.refresh(); 
             router.push('/outlet/dashboard'); 
         }, 1500); 
         
-        // Reset form immediately after successful API call
+        // Reset form data immediately
         setMobile('');
         setClientInfo(null);
         setFormData({
@@ -158,7 +159,7 @@ export default function ClientForm() {
       console.error('Error saving record:', error);
       alert('Error saving record');
     } finally {
-      // Only reset submitting state if no success message is pending
+      // Keep loading state true if success dialog is showing
       if (!success) {
          setIsSubmitting(false); 
       }
@@ -227,7 +228,7 @@ export default function ClientForm() {
               value={formData.name}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:focus:border-blue-500 text-gray-900"
             />
           </div>
           

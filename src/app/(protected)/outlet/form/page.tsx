@@ -1,8 +1,11 @@
-// src/app/(protected)/form/page.tsx
+// src/app/(protected)/outlet/form/page.tsx
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { OUTLETS } from '@/lib/outlet';
+
+// NOTE: supabase import removed as it wasn't present in the original (using generic client in API route)
 
 type ClientInfo = {
   status: 'active' | 'expired';
@@ -29,10 +32,11 @@ type FormData = {
   outlet: string;
 };
 
-export default function ClientForm() {
+export default function OutletClientForm() {
   const router = useRouter();
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
+  const [outletName, setOutletName] = useState('Indiranagar'); // State to hold the current outlet name
   const [formData, setFormData] = useState<FormData>({
     name: '',
     mobile: '',
@@ -48,7 +52,17 @@ export default function ClientForm() {
   const [success, setSuccess] = useState(false);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
 
+  // Get current outlet name from cookie on mount
   useEffect(() => {
+    const outletId = document.cookie.split('; ').find(row => row.startsWith('outlet_id='))?.split('=')[1];
+    if (outletId) {
+      const outlet = OUTLETS.find(o => o.id === outletId);
+      if (outlet) {
+        setOutletName(outlet.name);
+        // Set the hidden outlet field in the form data
+        setFormData(prev => ({ ...prev, outlet: outlet.name }));
+      }
+    }
     return () => {
       if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     };
@@ -58,6 +72,7 @@ export default function ClientForm() {
     if (mobile.length >= 10) {
       const lookup = async () => {
         try {
+          // Fetch package status for lookup
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           const data = res.ok ? await res.json() : null;
           setClientInfo(data);
@@ -118,10 +133,11 @@ export default function ClientForm() {
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // FIX: Explicitly include the separate 'mobile' state in the submission body.
+        // FIX: Explicitly include the separate 'mobile' state and current outlet name
         body: JSON.stringify({ 
             ...formData, 
             mobile: mobile, 
+            outlet: outletName,
             amountPaid: finalAmountPaid 
         })
       });
@@ -135,7 +151,7 @@ export default function ClientForm() {
             router.push('/outlet/dashboard'); 
         }, 1500); 
         
-        // Reset form immediately after successful API call
+        // Reset form data immediately
         setMobile('');
         setClientInfo(null);
         setFormData({
@@ -147,7 +163,7 @@ export default function ClientForm() {
           sessionHours: 0,
           tookPackage: false,
           isPackageCustomer: false,
-          outlet: 'Indiranagar',
+          outlet: outletName, // Retain the current outlet name
         });
       } else {
          const errorData = await response.json();
@@ -158,7 +174,7 @@ export default function ClientForm() {
       console.error('Error saving record:', error);
       alert('Error saving record');
     } finally {
-      // Only reset submitting state if no success message is pending
+      // Keep loading state true if success dialog is showing
       if (!success) {
          setIsSubmitting(false); 
       }
@@ -169,11 +185,10 @@ export default function ClientForm() {
 
   return (
     <div className="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-md mt-8 relative">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">Client Treatment Record</h1>
+      <h1 className="text-2xl font-bold text-gray-800 mb-6">Client Treatment Record - {outletName}</h1>
       
       <button
         type="button"
-        // Close/back button goes to the Outlet Dashboard
         onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
@@ -233,21 +248,14 @@ export default function ClientForm() {
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
-            <select
+            <input
               name="outlet"
-              value={formData.outlet}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
-            >
-              <option value="Indiranagar">Indiranagar</option>
-              <option value="Kaggadaspura">Kaggadaspura</option>
-              <option value="Kalyan Nagar">Kalyan Nagar</option>
-              <option value="Cunningham Road">Cunningham Road</option>
-              <option value="HSR Layout">HSR Layout</option>
-              <option value="Malleswaram">Malleswaram</option>
-              <option value="Marathahalli">Marathahalli</option>
-            </select>
+              type="text"
+              value={outletName}
+              readOnly
+              disabled
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 cursor-not-allowed"
+            />
           </div>
           
           <div>
