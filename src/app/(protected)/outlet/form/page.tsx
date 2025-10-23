@@ -5,8 +5,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 
-// NOTE: supabase import removed as it wasn't present in the original (using generic client in API route)
-
 type ClientInfo = {
   status: 'active' | 'expired';
   name: string;
@@ -36,7 +34,7 @@ export default function OutletClientForm() {
   const router = useRouter();
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
-  const [outletName, setOutletName] = useState('Indiranagar'); // State to hold the current outlet name
+  const [outletName, setOutletName] = useState('Indiranagar'); 
   const [formData, setFormData] = useState<FormData>({
     name: '',
     mobile: '',
@@ -58,9 +56,9 @@ export default function OutletClientForm() {
     if (outletId) {
       const outlet = OUTLETS.find(o => o.id === outletId);
       if (outlet) {
-        setOutletName(outlet.name);
-        // Set the hidden outlet field in the form data
-        setFormData(prev => ({ ...prev, outlet: outlet.name }));
+        const currentOutletName = outlet.name;
+        setOutletName(currentOutletName);
+        setFormData(prev => ({ ...prev, outlet: currentOutletName }));
       }
     }
     return () => {
@@ -68,11 +66,14 @@ export default function OutletClientForm() {
     };
   }, []);
 
+  // FIX 2: Autopopulate name and package status based on mobile lookup
   useEffect(() => {
+    if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
+    setClientInfo(null);
+    
     if (mobile.length >= 10) {
       const lookup = async () => {
         try {
-          // Fetch package status for lookup
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           const data = res.ok ? await res.json() : null;
           setClientInfo(data);
@@ -80,7 +81,7 @@ export default function OutletClientForm() {
           if (data) {
             setFormData(prev => ({
               ...prev,
-              name: data.name,
+              name: data.name, // AUTOFILL NAME
               isPackageCustomer: data.status === 'active'
             }));
           } else {
@@ -91,13 +92,21 @@ export default function OutletClientForm() {
             }));
           }
         } catch (e) {
+          console.error("Lookup error:", e);
           setClientInfo(null);
         }
       };
       
       lookupTimeout.current = setTimeout(lookup, 500);
-    } else {
-      setClientInfo(null);
+    } 
+    // Clear name and flags if mobile is too short
+    else if (mobile.length < 10) {
+        setFormData(prev => ({
+            ...prev,
+            name: '',
+            isPackageCustomer: false,
+            tookPackage: false,
+        }));
     }
   }, [mobile]);
 
@@ -133,7 +142,6 @@ export default function OutletClientForm() {
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // FIX: Explicitly include the separate 'mobile' state and current outlet name
         body: JSON.stringify({ 
             ...formData, 
             mobile: mobile, 

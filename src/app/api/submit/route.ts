@@ -4,11 +4,13 @@ import { createClient } from '@supabase/supabase-js';
 
 // Function to create a client that bypasses RLS for server-side writes
 const createServiceRoleClient = () => {
+    // IMPORTANT: Reads private server variables (not NEXT_PUBLIC_)
     const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || ''; // Must use the Service Key
 
     if (!supabaseUrl || !supabaseServiceKey) {
-        throw new Error('Supabase URL or Service Key missing in environment variables.');
+        // We throw a detailed error here to help diagnose missing .env variables
+        throw new Error('Supabase URL or Service Key missing in environment variables. Check .env.local.');
     }
 
     // Initialize client using the Service Role Key
@@ -23,7 +25,6 @@ export async function POST(request: NextRequest) {
     serviceSupabase = createServiceRoleClient();
     const body = await request.json();
     
-    // Quick validation check for critical fields that should be mandatory
     if (!body.mobile || !body.name || !body.outlet) {
       return Response.json({ error: 'Missing required fields: mobile, name, or outlet.' }, { status: 400 });
     }

@@ -54,7 +54,11 @@ export default function ClientForm() {
     };
   }, []);
 
+  // FIX 2: Autopopulate name and package status based on mobile lookup
   useEffect(() => {
+    if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
+    setClientInfo(null);
+    
     if (mobile.length >= 10) {
       const lookup = async () => {
         try {
@@ -65,7 +69,7 @@ export default function ClientForm() {
           if (data) {
             setFormData(prev => ({
               ...prev,
-              name: data.name,
+              name: data.name, // AUTOFILL NAME
               isPackageCustomer: data.status === 'active'
             }));
           } else {
@@ -76,13 +80,21 @@ export default function ClientForm() {
             }));
           }
         } catch (e) {
+          console.error("Lookup error:", e);
           setClientInfo(null);
         }
       };
       
       lookupTimeout.current = setTimeout(lookup, 500);
-    } else {
-      setClientInfo(null);
+    } 
+    // Clear name and flags if mobile is too short
+    else if (mobile.length < 10) {
+        setFormData(prev => ({
+            ...prev,
+            name: '',
+            isPackageCustomer: false,
+            tookPackage: false,
+        }));
     }
   }, [mobile]);
 
@@ -118,7 +130,6 @@ export default function ClientForm() {
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // FIX: Explicitly include the separate 'mobile' state in the submission body.
         body: JSON.stringify({ 
             ...formData, 
             mobile: mobile, 
@@ -131,9 +142,8 @@ export default function ClientForm() {
         
         // Show success message for 1.5 seconds, then navigate and refresh.
         setTimeout(() => {
-            // Force refresh of the destination page before navigating
             router.refresh(); 
-            router.push('/outlet/dashboard'); 
+            router.push('/dashboard'); // FIX: Redirects to Admin Dashboard
         }, 1500); 
         
         // Reset form data immediately
@@ -174,8 +184,8 @@ export default function ClientForm() {
       
       <button
         type="button"
-        // Close/back button goes to the Outlet Dashboard
-        onClick={() => router.push('/outlet/dashboard')} 
+        // Close/back button goes to the Admin Dashboard
+        onClick={() => router.push('/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
         &times;

@@ -1,5 +1,5 @@
 // src/app/(protected)/dashboard/layout.tsx
-'use client'; // 👈 ADD THIS AT THE VERY TOP
+'use client'; 
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -12,11 +12,25 @@ export default function DashboardLayout({
   const pathname = usePathname();
   
   const navItems = [
+    // FIX 3: Added Home/Dashboard Summary link
+    { name: 'Home', href: '/dashboard', icon: '🏠' }, 
     { name: 'All Customers', href: '/dashboard/customers', icon: '👥' },
     { name: 'Package Clients', href: '/dashboard/packages', icon: '🎁' },
-    { name: 'Outlets', href: '/dashboard/outlets', icon: '🏢' },
+    { name: 'Outlets', href: '/dashboard/outlets', icon: '🏪' },
     { name: 'Attendance', href: '/dashboard/attendance', icon: '📅' },
   ];
+  
+  // Simple check to highlight the correct nav item
+  const getLinkClass = (href: string) => {
+    // Check if pathname matches exactly or is a nested route under /dashboard (except the root, which is handled by exact match)
+    const isActive = pathname === href || (href === '/dashboard' && pathname === '/dashboard') || (href !== '/dashboard' && pathname.startsWith(href));
+    
+    return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
+        isActive
+          ? 'bg-purple-50 text-purple-700 border-r-4 border-purple-600'
+          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+      }`;
+  };
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -30,17 +44,14 @@ export default function DashboardLayout({
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center px-6 py-3 text-sm font-medium ${
-                pathname === item.href
-                  ? 'bg-purple-50 text-purple-700 border-r-4 border-purple-600'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              }`}
+              className={getLinkClass(item.href)}
             >
               <span className="mr-3 text-lg">{item.icon}</span>
               {item.name}
             </Link>
           ))}
         </nav>
+        {/* NOTE: Logout is implicitly handled by the top-level protected layout */}
       </div>
 
       {/* Main Content */}
