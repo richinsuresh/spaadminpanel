@@ -1,140 +1,142 @@
-// src/app/api/submit/route.ts
-import { NextRequest, NextResponse } from 'next/server'; // Import NextResponse
-import { createClient } from '@supabase/supabase-js';
+// src/app/(protected)/form/page.tsx
+'use client';
 
-// Function to create a client that bypasses RLS for server-side writes
-const createServiceRoleClient = () => {
-    // IMPORTANT: Reads private server variables (not NEXT_PUBLIC_)
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || ''; // Must use the Service Key
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
-    if (!supabaseUrl || !supabaseServiceKey) {
-        // We throw a detailed error here to help diagnose missing .env variables
-        throw new Error('Supabase URL or Service Key missing in environment variables. Check .env.local.');
-    }
+export default function OutletAddCustomerPage() {
+  const router = useRouter();
 
-    // Initialize client using the Service Role Key
-    return createClient(supabaseUrl, supabaseServiceKey);
-};
+  const [name, setName] = useState('');
+  const [mobile, setMobile] = useState('');
+  const [treatment, setTreatment] = useState('');
+  const [tookPackage, setTookPackage] = useState(false);
+  const [sessionHours, setSessionHours] = useState<number | ''>('');
+  const [packageAmount, setPackageAmount] = useState<number | ''>('');
+  const [totalPackageHours, setTotalPackageHours] = useState<number | ''>('');
+  const [amountPaid, setAmountPaid] = useState<number | ''>('');
+  const [date, setDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-export async function POST(request: NextRequest) {
-  let serviceSupabase;
-  try {
-    // 1. Initialize the Service Role Client
-    serviceSupabase = createServiceRoleClient();
-    const body = await request.json();
-    
-    // Basic validation
-    if (!body.mobile || !body.name || !body.outlet) {
-      return NextResponse.json({ error: 'Missing required fields: mobile, name, or outlet.' }, { status: 400 });
-    }
-    if (body.isPackageCustomer && body.sessionHours <= 0) {
-        return NextResponse.json({ error: 'Session hours must be greater than 0 when using a package.'}, { status: 400 });
-    }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); // prevents browser full-page navigation
+    setError(null);
+    setSuccess(null);
+    setLoading(true);
 
+    try {
+      const outlet = document.cookie.split('; ').find(row => row.trim().startsWith('outlet_id='))?.split('=')[1];
 
-    // Save customer session (includes amount_paid logic)
-    const { error: customerError } = await serviceSupabase // <-- Use serviceSupabase
-      .from('customers')
-      .insert([{
-        name: body.name,
-        mobile: body.mobile, 
-        date: body.date,
-        treatment: body.treatment,
-        session_hours: body.sessionHours,
-        took_package: body.tookPackage,
-        package_amount: body.packageAmount,
-        total_package_hours: body.totalPackageHours,
-        outlet: body.outlet,
-        amount_paid: body.amountPaid // Ensure amountPaid is saved
-      }]);
+      const payload = {
+        name,
+        mobile,
+        treatment,
+        tookPackage,
+        isPackageCustomer: !!tookPackage,
+        sessionHours: typeof sessionHours === 'number' ? sessionHours : Number(sessionHours || 0),
+        packageAmount: typeof packageAmount === 'number' ? packageAmount : Number(packageAmount || 0),
+        totalPackageHours: typeof totalPackageHours === 'number' ? totalPackageHours : Number(totalPackageHours || 0),
+        amountPaid: typeof amountPaid === 'number' ? amountPaid : Number(amountPaid || 0),
+        date,
+        outlet, // server expects body.outlet
+      };
 
-    if (customerError) {
-        console.error('Supabase Customer INSERT Error:', customerError);
-        throw customerError; // Throw to trigger catch block
-    }
+      const res = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    // --- New Package Registration ---
-    if (body.tookPackage) {
-      const expiry = new Date(body.date);
-      expiry.setMonth(expiry.getMonth() + 2); // Assuming 2-month expiry
-      
-      // Upsert package details
-      const { error: upsertError } = await serviceSupabase.from('packages').upsert({ // <-- Use serviceSupabase
-        mobile: body.mobile,
-        name: body.name,
-        package_amount: body.packageAmount,
-        total_hours: body.totalPackageHours,
-        remaining_hours: body.totalPackageHours, // Initially remaining = total
-        start_date: body.date,
-        expiry_date: expiry.toISOString().split('T')[0],
-        outlet: body.outlet,
-        used_hours: 0, // Initialize used_hours to 0 for new packages
-        status: 'active' // Set status to active
-      }, { onConflict: 'mobile', ignoreDuplicates: false }); // Use mobile as conflict target
-      
-      if (upsertError) {
-          console.error('Supabase Package UPSERT Error:', upsertError);
-          throw upsertError; // Throw to trigger catch block
+      console.log('submit response status:', res.status, 'redirected:', res.redirected, 'url:', res.url);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Request failed with status ${res.status}`);
       }
-    } 
-    // --- Existing Package Usage (Deducting Credits) ---
-    else if (body.isPackageCustomer && body.sessionHours > 0) {
-      // Get current package including its ID
-      const { data: pkg, error: fetchError } = await serviceSupabase // <-- Use serviceSupabase
-        .from('packages')
-        .select('id, used_hours, total_hours, expiry_date') 
-        .eq('mobile', body.mobile)
-        .maybeSingle(); // Use maybeSingle to handle null gracefully if no package found
-        
-      if (fetchError) { // Handle errors other than 'not found'
-          console.error('Package FETCH Error:', fetchError);
-          throw fetchError; // Throw to trigger catch block
-      } 
-      
-      if (pkg) { // Only proceed if a package was found
-        // Calculate new used and remaining hours
-        const currentUsedHours = pkg.used_hours || 0;
-        const sessionHoursUsed = body.sessionHours || 0;
-        const newUsed = currentUsedHours + sessionHoursUsed;
-        const totalHours = pkg.total_hours || 0;
-        const newRemaining = Math.max(0, totalHours - newUsed); // Ensure remaining doesn't go below 0
-        
-        // Determine status based on remaining hours and expiry date
-        const now = new Date();
-        const expiry = new Date(pkg.expiry_date);
-        const status = (newRemaining <= 0 || now > expiry) ? 'expired' : 'active';
 
-        // Update the package using its primary key ID
-        const { error: updateError } = await serviceSupabase // <-- Use serviceSupabase
-          .from('packages')
-          .update({
-            used_hours: newUsed,
-            remaining_hours: newRemaining,
-            status: status
-          })
-          .eq('id', pkg.id); // Update using the specific package ID
+      const data = await res.json().catch(() => null);
+      setSuccess('Customer saved successfully');
 
-        if (updateError) {
-            console.error('Supabase Package UPDATE Error:', updateError);
-            throw updateError; // Throw to trigger catch block
-        }
-      } else {
-          // Log if no package found, but don't throw error - customer entry still saved
-          console.warn(`No active package found for mobile ${body.mobile}. Cannot deduct hours.`);
-      }
+      // Do not route to /admin here - keep user in outlet area.
+      // Uncomment/adjust below if you want to navigate after save:
+      // router.push('/outlet'); 
+      // Or just clear form and optionally refresh local dashboard data:
+      setName(''); setMobile(''); setTreatment(''); setTookPackage(false);
+      setSessionHours(''); setPackageAmount(''); setTotalPackageHours(''); setAmountPaid('');
+    } catch (err: any) {
+      console.error('Save failed', err);
+      setError(err?.message || 'Failed to save customer');
+    } finally {
+      setLoading(false);
     }
+  };
 
-    // If all operations successful
-    return NextResponse.json({ success: true });
+  return (
+    <div className="max-w-3xl mx-auto p-6 bg-white rounded-md shadow">
+      <h1 className="text-2xl font-semibold mb-4">Add Customer</h1>
 
-  } catch (error: any) {
-    console.error('Submit failed:', error);
-    // Return a detailed error message to the client for immediate debugging
-    return NextResponse.json({ 
-        error: `Failed to save or update data. Error: ${error.message || 'Unknown DB error'}`,
-        db_code: error.code // Include database error code if available
-    }, { status: 500 });
-  }
+      <form onSubmit={handleSubmit} className="grid gap-4">
+        <label>
+          <div className="text-sm text-gray-600">Name</div>
+          <input value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full border px-3 py-2 rounded-md" required />
+        </label>
+
+        <label>
+          <div className="text-sm text-gray-600">Mobile</div>
+          <input value={mobile} onChange={e => setMobile(e.target.value)} className="mt-1 w-full border px-3 py-2 rounded-md" required />
+        </label>
+
+        <label>
+          <div className="text-sm text-gray-600">Treatment</div>
+          <input value={treatment} onChange={e => setTreatment(e.target.value)} className="mt-1 w-full border px-3 py-2 rounded-md" />
+        </label>
+
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={tookPackage} onChange={e => setTookPackage(e.target.checked)} />
+          <span className="text-sm">Took Package</span>
+        </label>
+
+        {tookPackage && (
+          <>
+            <label>
+              <div className="text-sm text-gray-600">Package Amount</div>
+              <input type="number" value={packageAmount ?? ''} onChange={e => setPackageAmount(Number(e.target.value))} className="mt-1 w-full border px-3 py-2 rounded-md" />
+            </label>
+
+            <label>
+              <div className="text-sm text-gray-600">Total Package Hours</div>
+              <input type="number" value={totalPackageHours ?? ''} onChange={e => setTotalPackageHours(Number(e.target.value))} className="mt-1 w-full border px-3 py-2 rounded-md" />
+            </label>
+          </>
+        )}
+
+        <label>
+          <div className="text-sm text-gray-600">Session Hours</div>
+          <input type="number" value={sessionHours ?? ''} onChange={e => setSessionHours(Number(e.target.value))} className="mt-1 w-full border px-3 py-2 rounded-md" />
+        </label>
+
+        <label>
+          <div className="text-sm text-gray-600">Amount Paid</div>
+          <input type="number" value={amountPaid ?? ''} onChange={e => setAmountPaid(Number(e.target.value))} className="mt-1 w-full border px-3 py-2 rounded-md" />
+        </label>
+
+        <label>
+          <div className="text-sm text-gray-600">Date</div>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="mt-1 w-full border px-3 py-2 rounded-md" />
+        </label>
+
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={loading} className="px-4 py-2 bg-purple-600 text-white rounded-md">
+            {loading ? 'Saving...' : 'Save'}
+          </button>
+
+          {error && <div className="text-red-600 text-sm">{error}</div>}
+          {success && <div className="text-green-600 text-sm">{success}</div>}
+        </div>
+      </form>
+    </div>
+  );
 }
