@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
         took_package: body.tookPackage,
         package_amount: body.packageAmount,
         total_package_hours: body.totalPackageHours,
-        outlet: body.outlet
+        outlet: body.outlet,
+        amount_paid: body.amountPaid // Ensure amountPaid is saved
       }]);
 
     if (customerError) {
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
         start_date: body.date,
         expiry_date: expiry.toISOString().split('T')[0],
         outlet: body.outlet,
-        used_hours: 0,
+        used_hours: 0, // Initialize used_hours
         status: 'active'
       }, { onConflict: 'mobile', ignoreDuplicates: false });
       
@@ -81,30 +82,39 @@ export async function POST(request: NextRequest) {
         .eq('mobile', body.mobile)
         .single();
         
-      if (fetchError && fetchError.code !== 'PGRST116') {
+      if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = No rows found (expected if no package)
           console.error('Package FETCH Error:', fetchError);
-          throw fetchError;
+          // Don't throw if package not found, just means nothing to update
+          // throw fetchError; 
       } else if (pkg) {
-        const newUsed = (pkg.used_hours || 0) + body.sessionHours;
-        const newRemaining = Math.max(0, pkg.total_hours - newUsed);
+        // Calculate new used and remaining hours
+        const currentUsedHours = pkg.used_hours || 0;
+        const sessionHoursUsed = body.sessionHours || 0;
+        const newUsed = currentUsedHours + sessionHoursUsed;
+        const totalHours = pkg.total_hours || 0;
+        const newRemaining = Math.max(0, totalHours - newUsed);
         
+        // Determine status based on remaining hours and expiry
         const now = new Date();
         const expiry = new Date(pkg.expiry_date);
         const status = (newRemaining <= 0 || now > expiry) ? 'expired' : 'active';
 
+        // Update the package using its primary key ID
         const { error: updateError } = await serviceSupabase // <-- Use serviceSupabase
           .from('packages')
           .update({
             used_hours: newUsed,
             remaining_hours: newRemaining,
-            status
+            status: status
           })
-          .eq('id', pkg.id); 
+          .eq('id', pkg.id); // Update using the specific package ID
 
         if (updateError) {
             console.error('Supabase Package UPDATE Error:', updateError);
             throw updateError;
         }
+      } else {
+          console.warn(`No active package found for mobile ${body.mobile}. Cannot deduct hours.`);
       }
     }
 
