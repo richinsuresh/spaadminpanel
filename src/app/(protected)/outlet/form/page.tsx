@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 
+// Type definition for the data returned by /api/client-lookup
 type ClientInfo = {
   status: 'active' | 'expired';
   name: string;
@@ -16,9 +17,10 @@ type ClientInfo = {
   expiryDate: string;
 };
 
+// Type definition for the form's internal data state
 type FormData = {
   name: string;
-  mobile: string;
+  mobile: string; // Keep this in formData if needed, though 'mobile' state is primary driver
   date: string;
   treatment: string;
   amountPaid: number;
@@ -32,25 +34,26 @@ type FormData = {
 
 export default function OutletClientForm() {
   const router = useRouter();
-  const [mobile, setMobile] = useState('');
-  const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
-  const [outletName, setOutletName] = useState('Indiranagar'); // State to hold the current outlet name
-  const [formData, setFormData] = useState<FormData>({
+  const [mobile, setMobile] = useState(''); // State for the mobile input field
+  const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null); // State to store fetched client/package details
+  const [outletName, setOutletName] = useState('Loading...'); // State to hold the current outlet name, fetched from cookie
+  const [formData, setFormData] = useState<FormData>({ // State for the rest of the form data
     name: '',
-    mobile: '',
+    mobile: '', // This will be set on submit using the 'mobile' state
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
     sessionHours: 0,
     tookPackage: false,
     isPackageCustomer: false,
-    outlet: 'Indiranagar',
+    outlet: 'Loading...', // Will be updated from cookie
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
-  const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [inputError, setInputError] = useState(''); // State for input validation error
+  const lookupTimeout = useRef<NodeJS.Timeout | null>(null); // Ref for debouncing API calls
 
-  // Get current outlet name from cookie on mount
+  // Get current outlet name from cookie on component mount
   useEffect(() => {
     const outletId = document.cookie.split('; ').find(row => row.startsWith('outlet_id='))?.split('=')[1];
     if (outletId) {
@@ -58,58 +61,88 @@ export default function OutletClientForm() {
       if (outlet) {
         const currentOutletName = outlet.name;
         setOutletName(currentOutletName);
+        // Set the outlet in formData as well, as it's needed for submission
         setFormData(prev => ({ ...prev, outlet: currentOutletName }));
+      } else {
+         setOutletName('Unknown Outlet'); // Handle case where cookie ID is invalid
+         setFormData(prev => ({ ...prev, outlet: 'Unknown Outlet' }));
       }
+    } else {
+        // Handle case where cookie is missing (should be caught by layout, but good practice)
+        console.error("Outlet ID cookie missing!");
+        setOutletName('Error: Outlet not found');
+        setFormData(prev => ({ ...prev, outlet: 'Error: Outlet not found' }));
+        // Potentially redirect here if critical: router.replace('/outlet-login');
     }
+    // Cleanup timeout on unmount
     return () => {
       if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     };
-  }, []);
+  }, []); // Run only once on mount
 
-  // FIX 2: Autopopulate name and package status based on mobile lookup
+  // Effect to perform client lookup based on mobile number
   useEffect(() => {
+    // Clear previous timeout and client info when mobile changes
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
-    
-    if (mobile.length >= 10) {
+    setInputError(''); // Clear errors on mobile change
+
+    // Only trigger lookup if mobile number is 10 digits
+    if (mobile.length === 10) {
       const lookup = async () => {
         try {
+          setInputError(''); // Clear error before fetch
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
-          const data = res.ok ? await res.json() : null;
-          setClientInfo(data);
+          
+          if (!res.ok) {
+              console.warn(`Client lookup failed with status: ${res.status}`);
+              setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
+              setClientInfo(null);
+              return;
+          }
+
+          const data: ClientInfo | null = await res.json();
+          setClientInfo(data); // Store the full client info (or null)
           
           if (data) {
+            // Autofill name and set package status
             setFormData(prev => ({
               ...prev,
               name: data.name, // AUTOFILL NAME
-              isPackageCustomer: data.status === 'active'
+              isPackageCustomer: data.status === 'active' // Set based on package status
             }));
           } else {
+            // No client/package found, clear relevant fields
             setFormData(prev => ({
               ...prev,
+              name: '', // Clear name if no client exists
               isPackageCustomer: false,
-              tookPackage: false
+              tookPackage: false // Ensure 'new package' isn't checked
             }));
           }
         } catch (e) {
           console.error("Lookup error:", e);
           setClientInfo(null);
+          setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
         }
       };
       
+      // Debounce the API call by 500ms
       lookupTimeout.current = setTimeout(lookup, 500);
     } 
-    // Clear name and flags if mobile is too short
+    // If mobile length is not 10, clear autofilled fields
     else if (mobile.length < 10) {
         setFormData(prev => ({
             ...prev,
-            name: '',
+            name: '', // Clear name if mobile is incomplete
             isPackageCustomer: false,
             tookPackage: false,
         }));
     }
-  }, [mobile]);
+  }, [mobile]); // Re-run effect when mobile state changes
 
+
+  // Handle changes for form inputs (excluding mobile)
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = (e.target as HTMLInputElement).checked;
@@ -120,6 +153,7 @@ export default function OutletClientForm() {
         [name]: type === 'checkbox' ? checked : type === 'number' ? (value === '' ? 0 : Number(value)) : value
       };
       
+      // Ensure only one package option is selected
       if (name === 'isPackageCustomer' && checked) updated.tookPackage = false;
       if (name === 'tookPackage' && checked) updated.isPackageCustomer = false;
       
@@ -127,68 +161,74 @@ export default function OutletClientForm() {
     });
   };
 
+  // Handle session duration input
   const handleTimeChange = (hours: string, minutes: string) => {
     const h = parseFloat(hours) || 0;
     const m = parseFloat(minutes) || 0;
     setFormData(prev => ({ ...prev, sessionHours: h + (m / 60) }));
   };
 
+  // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setInputError(''); // Clear previous errors
+
+    // Client-side validation for package usage
+    if (formData.isPackageCustomer && formData.sessionHours <= 0) {
+        setInputError('Please enter Session Duration when using package credits.');
+        setIsSubmitting(false);
+        return;
+    }
     
     try {
+      // Determine final amount paid (0 if package related)
       const finalAmountPaid = (formData.tookPackage || formData.isPackageCustomer) ? 0 : formData.amountPaid;
+      
+      // Submit data to API route
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             ...formData, 
-            mobile: mobile, 
-            outlet: outletName,
+            mobile: mobile, // Use the separate mobile state for submission
+            outlet: outletName, // Ensure the current outlet name is sent
             amountPaid: finalAmountPaid 
         })
       });
 
       if (response.ok) {
-        setSuccess(true);
+        setSuccess(true); // Show success dialog
         
-        // Show success message for 1.5 seconds, then navigate and refresh.
+        // After 1.5 seconds, refresh data on the target page and redirect
         setTimeout(() => {
-            router.refresh(); 
-            router.push('/outlet/dashboard'); 
+            router.refresh(); // Crucial for updating dashboard data
+            router.push('/outlet/dashboard'); // Redirect Outlet staff to Outlet Dashboard
         }, 1500); 
         
-        // Reset form data immediately
+        // Reset form immediately
         setMobile('');
         setClientInfo(null);
         setFormData({
-          name: '',
-          mobile: '',
-          date: new Date().toISOString().split('T')[0],
-          treatment: '',
-          amountPaid: 0,
-          sessionHours: 0,
-          tookPackage: false,
-          isPackageCustomer: false,
-          outlet: outletName, // Retain the current outlet name
+          name: '', mobile: '', date: new Date().toISOString().split('T')[0],
+          treatment: '', amountPaid: 0, sessionHours: 0, tookPackage: false,
+          isPackageCustomer: false, outlet: outletName, // Keep current outlet
         });
       } else {
+         // Handle API errors
          const errorData = await response.json();
          console.error('Submission failed:', errorData.error);
-         alert(errorData.error || 'Error saving record');
+         alert(`Error: ${errorData.error}` || 'Error saving record');
+         setIsSubmitting(false); // Allow retry on error
       }
     } catch (error) {
       console.error('Error saving record:', error);
-      alert('Error saving record');
-    } finally {
-      // Keep loading state true if success dialog is showing
-      if (!success) {
-         setIsSubmitting(false); 
-      }
-    }
+      alert('An unexpected error occurred while saving.');
+      setIsSubmitting(false); // Allow retry on error
+    } 
   };
 
+  // Determine if the Amount Paid field should be visible
   const showAmountField = !formData.tookPackage && !formData.isPackageCustomer;
 
   return (
@@ -197,6 +237,7 @@ export default function OutletClientForm() {
       
       <button
         type="button"
+        // Close button goes to the Outlet Dashboard
         onClick={() => router.push('/outlet/dashboard')} 
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
       >
@@ -209,37 +250,50 @@ export default function OutletClientForm() {
           ✅ Client added successfully! Redirecting...
         </div>
       )}
+      
+      {/* Input Validation Error Message */}
+      {inputError && (
+          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+            {inputError}
+          </div>
+        )}
 
+      {/* Mobile Number Input */}
       <div className="mb-6">
         <label className="block text-sm font-medium text-gray-700 mb-2">Mobile Number *</label>
         <input
           type="tel"
-          value={mobile}
-          onChange={(e) => setMobile(e.target.value)}
+          value={mobile} // Controlled by mobile state
+          onChange={(e) => setMobile(e.target.value)} // Update mobile state
           required
+          maxLength={10} // Optional: limit input length
           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
-          placeholder="Enter mobile number"
+          placeholder="Enter 10-digit mobile to lookup client"
         />
       </div>
 
+      {/* Display Client Package Info if lookup successful */}
       {clientInfo && (
         <div className={`mb-6 p-4 rounded-lg border ${
-          clientInfo.status === 'active' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+          clientInfo.status === 'active' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200' // Use yellow for expired/none
         }`}>
           <div className="flex justify-between items-center">
             <div>
               <span className="font-medium">
-                {clientInfo.status === 'active' ? '✅ Active Package' : '❌ Expired Package'}
+                {clientInfo.status === 'active' ? '✅ Active Package' : '⚠️ Package Expired/None'}
               </span>
-              <span className="ml-2 font-semibold">{clientInfo.name}</span>
+              <span className="ml-2 font-semibold">{clientInfo.name}</span> 
             </div>
-            <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">
-              Remaining: {clientInfo.remainingHours.toFixed(1)} hrs
-            </span>
+            {clientInfo.status === 'active' && (
+              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                Remaining: {clientInfo.remainingHours.toFixed(1)} hrs
+              </span>
+            )}
           </div>
         </div>
       )}
 
+      {/* Main Form */}
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
@@ -247,22 +301,24 @@ export default function OutletClientForm() {
             <input
               name="name"
               type="text"
-              value={formData.name}
+              value={formData.name} // Controlled by formData, updated via lookup or manually
               onChange={handleChange}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
             />
           </div>
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
+            {/* Display outlet name, but disable selection */}
             <input
               name="outlet"
               type="text"
               value={outletName}
               readOnly
               disabled
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 cursor-not-allowed"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500 cursor-not-allowed"
             />
           </div>
           
@@ -280,7 +336,7 @@ export default function OutletClientForm() {
           
           {showAmountField && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid ($)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹)</label>
               <input
                 name="amountPaid"
                 type="number"
@@ -301,7 +357,7 @@ export default function OutletClientForm() {
                   type="number"
                   min="0"
                   placeholder="Hrs"
-                  value={Math.floor(formData.sessionHours)}
+                  value={formData.sessionHours >= 1 ? Math.floor(formData.sessionHours) : ''} 
                   onChange={(e) => handleTimeChange(e.target.value, ((formData.sessionHours % 1) * 60).toString())}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
                 />
@@ -312,7 +368,7 @@ export default function OutletClientForm() {
                   min="0"
                   max="59"
                   placeholder="Mins"
-                  value={Math.round((formData.sessionHours % 1) * 60)}
+                  value={formData.sessionHours > 0 ? Math.round((formData.sessionHours % 1) * 60) : ''}
                   onChange={(e) => handleTimeChange(Math.floor(formData.sessionHours).toString(), e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
                 />
@@ -321,8 +377,9 @@ export default function OutletClientForm() {
           </div>
         </div>
 
+        {/* Package Options */}
         <div className="pt-4 border-t border-gray-200 space-y-3">
-          <label className="flex items-center cursor-pointer">
+           <label className="flex items-center cursor-pointer">
             <div className="relative">
               <input
                 type="checkbox"
@@ -330,11 +387,12 @@ export default function OutletClientForm() {
                 checked={formData.isPackageCustomer}
                 onChange={handleChange}
                 className="sr-only"
+                disabled={!clientInfo || clientInfo.status !== 'active'} // Can only check if lookup found an ACTIVE package
               />
-              <div className={`block w-14 h-8 rounded-full ${formData.isPackageCustomer ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+              <div className={`block w-14 h-8 rounded-full ${formData.isPackageCustomer ? 'bg-blue-500' : 'bg-gray-300'} ${(!clientInfo || clientInfo.status !== 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.isPackageCustomer ? 'transform translate-x-6' : ''}`}></div>
             </div>
-            <div className="ml-3 text-gray-700 text-sm">
+            <div className={`ml-3 text-gray-700 text-sm ${(!clientInfo || clientInfo.status !== 'active') ? 'opacity-50' : ''}`}>
               Existing package customer (use package credits)
             </div>
           </label>
@@ -347,19 +405,21 @@ export default function OutletClientForm() {
                 checked={formData.tookPackage}
                 onChange={handleChange}
                 className="sr-only"
+                disabled={!!clientInfo && clientInfo.status === 'active'} // Disable if client already has an active package
               />
-              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
-            <div className="ml-3 text-gray-700 text-sm">
+            <div className={`ml-3 text-gray-700 text-sm ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50' : ''}`}>
               Taking a new package today
             </div>
           </label>
         </div>
 
+        {/* New Package Details */}
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
-            <h3 className="text-md font-semibold text-purple-800">Package Details</h3>
+            <h3 className="text-md font-semibold text-purple-800">New Package Details</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Package Amount (₹)</label>
@@ -369,6 +429,7 @@ export default function OutletClientForm() {
                   min="0"
                   value={formData.packageAmount || ''}
                   onChange={handleChange}
+                  required={formData.tookPackage} // Make required only if taking new package
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
@@ -381,6 +442,7 @@ export default function OutletClientForm() {
                   step="0.1"
                   value={formData.totalPackageHours || ''}
                   onChange={handleChange}
+                  required={formData.tookPackage} // Make required only if taking new package
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
@@ -388,6 +450,7 @@ export default function OutletClientForm() {
           </div>
         )}
 
+        {/* Submit Button */}
         <button
           type="submit"
           disabled={isSubmitting}

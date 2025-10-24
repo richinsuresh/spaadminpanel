@@ -20,10 +20,13 @@ export default function DashboardLayout({
     { name: 'Attendance', href: '/dashboard/attendance', icon: '📅' },
   ];
   
-  // Simple check to highlight the correct nav item
+  // Logic to highlight the correct nav item
   const getLinkClass = (href: string) => {
-    // Check if pathname matches exactly or is a nested route under /dashboard (except the root, which is handled by exact match)
-    const isActive = pathname === href || (href === '/dashboard' && pathname === '/dashboard') || (href !== '/dashboard' && pathname.startsWith(href));
+    // Check if pathname matches exactly OR is the root dashboard page OR starts with the href (for nested pages)
+    const isActive = 
+        (pathname === href) || 
+        (href === '/dashboard' && pathname === '/dashboard') || 
+        (href !== '/dashboard' && pathname.startsWith(href));
     
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
         isActive
@@ -51,7 +54,6 @@ export default function DashboardLayout({
             </Link>
           ))}
         </nav>
-        {/* NOTE: Logout is implicitly handled by the top-level protected layout */}
       </div>
 
       {/* Main Content */}
