@@ -1,10 +1,9 @@
-// src/app/(protected)/form/page.tsx
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { OUTLETS } from '@/lib/outlet'; // ensure this exports [{ id, name }, ...]
 
-// Type definition for the data returned by /api/client-lookup
 type ClientInfo = {
   status: 'active' | 'expired';
   name: string;
@@ -16,198 +15,270 @@ type ClientInfo = {
   expiryDate: string;
 };
 
-// Type definition for the form's internal data state
 type FormData = {
   name: string;
-  mobile: string; // Keep this in formData if needed, though 'mobile' state is primary driver
+  mobile: string;
   date: string;
   treatment: string;
   amountPaid: number;
   sessionHours: number;
   tookPackage: boolean;
   isPackageCustomer: boolean;
-  packageAmount?: number;
-  totalPackageHours?: number;
+  packageAmount?: number | '';
+  totalPackageHours?: number | '';
   outlet: string;
 };
 
 export default function ClientForm() {
   const router = useRouter();
-  const [mobile, setMobile] = useState(''); // State for the mobile input field
-  const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null); // State to store fetched client/package details
-  const [formData, setFormData] = useState<FormData>({ // State for the rest of the form data
+
+  // form and lookup state
+  const [mobile, setMobile] = useState('');
+  const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
+  const [formData, setFormData] = useState<FormData>({
     name: '',
-    mobile: '', // This will be set on submit using the 'mobile' state
+    mobile: '',
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
     sessionHours: 0,
     tookPackage: false,
     isPackageCustomer: false,
-    outlet: 'Indiranagar', // Default outlet for Admin form
+    packageAmount: '',
+    totalPackageHours: '',
+    outlet: '', // will be resolved
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [inputError, setInputError] = useState('');
-  const lookupTimeout = useRef<NodeJS.Timeout | null>(null); // Ref for debouncing API calls
+  const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // Cleanup timeout on component unmount
+  // cookie/outlet/role state
+  const [authRole, setAuthRole] = useState<string | null>(null);
+  const [checkedOutlet, setCheckedOutlet] = useState(false);
+  const [resolvingOutlet, setResolvingOutlet] = useState(false);
+
+  // outlets list (use your OUTLETS mapping if available)
+  const outletsList = OUTLETS?.map((o: any) => o.name) ?? [
+    'Indiranagar', 'Kaggadaspura', 'Kalyan Nagar', 'Cunningham Road', 'HSR Layout', 'Malleswaram', 'Marathahalli'
+  ];
+
+  // cleanup lookup timeout
   useEffect(() => {
     return () => {
       if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     };
   }, []);
 
-  // --- AUTOFILL LOGIC ---
+  // Resolve auth_role and outlet (client cookie -> server /api/outlet fallback)
   useEffect(() => {
-    // Clear previous timeout and client info when mobile changes
+    const cookieStr = typeof document !== 'undefined' ? document.cookie : '';
+    const getCookieVal = (name: string) => cookieStr.split('; ').find(row => row.trim().startsWith(name + '='))?.split('=')[1];
+
+    const outletCookie = getCookieVal('outlet_id');
+    const authRoleCookie = getCookieVal('auth_role');
+
+    if (authRoleCookie) setAuthRole(authRoleCookie);
+    else setAuthRole(null);
+
+    const setOutletFromValue = (val?: string) => {
+      if (!val) return;
+      const matched = OUTLETS?.find((o: any) => o.id === val || o.name === val);
+      const outletName = matched ? matched.name : val;
+      setFormData(prev => ({ ...prev, outlet: outletName }));
+    };
+
+    if (outletCookie) {
+      // cookie readable client-side (fast)
+      setOutletFromValue(outletCookie);
+      setCheckedOutlet(true);
+      return;
+    }
+
+    // cookie not readable (HttpOnly or missing) -> call server endpoint to resolve
+    (async () => {
+      setResolvingOutlet(true);
+      try {
+        const res = await fetch('/api/outlet');
+        if (res.status === 204) {
+          // server couldn't find cookie
+          if (authRoleCookie === 'outlet') {
+            // outlet user with no server cookie -> redirect to login
+            setInputError('Outlet session missing. Redirecting to login...');
+            router.replace('/outlet-login');
+            return;
+          }
+          // admin user: leave outlet blank (admin can choose)
+        } else if (res.ok) {
+          const data = await res.json();
+          if (data?.outlet) {
+            setOutletFromValue(data.outlet);
+          } else {
+            // no outlet returned
+            if (authRoleCookie === 'outlet') {
+              setInputError('Outlet session missing. Redirecting to login...');
+              router.replace('/outlet-login');
+              return;
+            }
+          }
+        } else {
+          console.warn('/api/outlet returned status', res.status);
+        }
+      } catch (err) {
+        console.warn('Error fetching /api/outlet', err);
+      } finally {
+        setResolvingOutlet(false);
+        setCheckedOutlet(true);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // AUTOFILL logic (mobile lookup)
+  useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
-    setInputError(''); // Clear errors on mobile change
+    setInputError('');
 
-    // Only trigger lookup if mobile number is 10 digits
     if (mobile.length === 10) {
       const lookup = async () => {
         try {
-          setInputError(''); // Clear error before fetch
+          setInputError('');
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
-          
-          if (!res.ok) { // Handle potential server errors during lookup
-            console.warn(`Client lookup failed with status: ${res.status}`);
-             setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
-             setClientInfo(null);
+          if (!res.ok) {
+            setClientInfo(null);
+            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
             return;
           }
-
           const data: ClientInfo | null = await res.json();
-          setClientInfo(data); // Store the full client info (or null)
-          
+          setClientInfo(data);
           if (data) {
-            // Autofill name and set package status
-            setFormData(prev => ({
-              ...prev,
-              name: data.name, // Autofill the name
-              isPackageCustomer: data.status === 'active' // Set based on package status
-            }));
+            setFormData(prev => ({ ...prev, name: data.name, isPackageCustomer: data.status === 'active' }));
           } else {
-            // No client/package found, clear relevant fields
-            setFormData(prev => ({
-              ...prev,
-              name: '', // Clear name if no client exists
-              isPackageCustomer: false,
-              tookPackage: false // Ensure 'new package' isn't checked
-            }));
+            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
           }
         } catch (e) {
-          console.error("Lookup error:", e);
+          console.error('Lookup error', e);
           setClientInfo(null);
           setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
         }
       };
-      
-      // Debounce the API call by 500ms
       lookupTimeout.current = setTimeout(lookup, 500);
-    } 
-    // If mobile length is not 10, clear autofilled fields
-    else if (mobile.length < 10) {
-        setFormData(prev => ({
-            ...prev,
-            name: '', // Clear name if mobile is incomplete
-            isPackageCustomer: false,
-            tookPackage: false,
-        }));
+    } else if (mobile.length < 10) {
+      setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
     }
-  }, [mobile]); // This effect runs whenever the 'mobile' state changes
+  }, [mobile]);
 
-  // Handle changes for form inputs (excluding mobile)
+  // input change handler
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = (e.target as HTMLInputElement).checked;
-    
     setFormData(prev => {
       const updated = {
         ...prev,
-        [name]: type === 'checkbox' ? checked : type === 'number' ? (value === '' ? 0 : Number(value)) : value
+        [name]: type === 'checkbox' ? checked : (type === 'number' ? (value === '' ? 0 : Number(value)) : value)
       };
-      
-      // Ensure only one package option is selected
+      // ensure only one package flag active
       if (name === 'isPackageCustomer' && checked) updated.tookPackage = false;
       if (name === 'tookPackage' && checked) updated.isPackageCustomer = false;
-      
       return updated;
     });
   };
 
-  // Handle session duration input
   const handleTimeChange = (hours: string, minutes: string) => {
     const h = parseFloat(hours) || 0;
     const m = parseFloat(minutes) || 0;
     setFormData(prev => ({ ...prev, sessionHours: h + (m / 60) }));
   };
 
-  // Handle form submission
+  // submit handler
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setInputError(''); // Clear previous errors
+    setInputError('');
 
-    // Client-side validation for package usage
-    if (formData.isPackageCustomer && formData.sessionHours <= 0) {
-        setInputError('Please enter Session Duration when using package credits.');
-        setIsSubmitting(false);
-        return;
+    if (!checkedOutlet) {
+      setInputError('Verifying session — please wait.');
+      setIsSubmitting(false);
+      return;
     }
-    
+
+    if (formData.isPackageCustomer && formData.sessionHours <= 0) {
+      setInputError('Please enter Session Duration when using package credits.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    // If outlet user and outlet isn't set, redirect to login
+    if (authRole === 'outlet' && !formData.outlet) {
+      setInputError('Outlet session missing. Redirecting to login...');
+      setIsSubmitting(false);
+      router.replace('/outlet-login');
+      return;
+    }
+
     try {
       const finalAmountPaid = (formData.tookPackage || formData.isPackageCustomer) ? 0 : formData.amountPaid;
+      const payload = {
+        ...formData,
+        mobile,
+        amountPaid: finalAmountPaid
+      };
+
       const response = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            ...formData, 
-            mobile: mobile, // Send the mobile number from its dedicated state
-            amountPaid: finalAmountPaid 
-        })
+        body: JSON.stringify(payload)
       });
 
       if (response.ok) {
         setSuccess(true);
         setTimeout(() => {
-            router.refresh(); // Refresh data on the target page
-            router.push('/dashboard'); // Redirect Admin to Admin Dashboard
-        }, 1500); 
-        
-        // Reset form state
+          // redirect based on role
+          const redirectTo = authRole === 'outlet' ? '/outlet' : '/dashboard';
+          router.refresh();
+          router.push(redirectTo);
+        }, 900);
+
+        // reset (keep outlet)
         setMobile('');
         setClientInfo(null);
-        setFormData({
+        setFormData(prev => ({
+          ...prev,
           name: '', mobile: '', date: new Date().toISOString().split('T')[0],
           treatment: '', amountPaid: 0, sessionHours: 0, tookPackage: false,
-          isPackageCustomer: false, outlet: 'Indiranagar',
-        });
+          isPackageCustomer: false, packageAmount: '', totalPackageHours: ''
+        }));
       } else {
-         const errorData = await response.json();
-         console.error('Submission failed:', errorData.error);
-         alert(`Error: ${errorData.error}` || 'Error saving record');
-         setIsSubmitting(false); 
+        const err = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Submission failed:', err.error);
+        setInputError(err.error || 'Error saving record');
+        setIsSubmitting(false);
       }
-    } catch (error) {
-      console.error('Error saving record:', error);
-      alert('An unexpected error occurred.');
-      setIsSubmitting(false); 
-    } 
+    } catch (err) {
+      console.error('Error saving record:', err);
+      setInputError('An unexpected error occurred.');
+      setIsSubmitting(false);
+    }
   };
 
   const showAmountField = !formData.tookPackage && !formData.isPackageCustomer;
 
   return (
     <div className="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-md mt-8 relative">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">Client Treatment Record</h1>
-      
+      <h1 className="text-2xl font-bold text-gray-800 mb-6">
+        Client Treatment Record
+        { formData.outlet ? ` — ${formData.outlet}` : ' ' }
+      </h1>
+
       <button
         type="button"
-        onClick={() => router.push('/dashboard')} 
+        onClick={() => {
+          if (authRole === 'outlet') router.push('/outlet');
+          else router.push('/dashboard');
+        }}
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
+        aria-label="Close"
       >
         &times;
       </button>
@@ -217,40 +288,33 @@ export default function ClientForm() {
           ✅ Client added successfully! Redirecting...
         </div>
       )}
-      
+
       {inputError && (
-          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
-            {inputError}
-          </div>
-        )}
+        <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+          {inputError}
+        </div>
+      )}
 
       <div className="mb-6">
         <label className="block text-sm font-medium text-gray-700 mb-2">Mobile Number *</label>
         <input
           type="tel"
-          value={mobile} // Controlled by mobile state
-          onChange={(e) => setMobile(e.target.value)} // Update mobile state
+          value={mobile}
+          onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
           required
-          maxLength={10} // Optional: limit input length
+          maxLength={10}
           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
           placeholder="Enter 10-digit mobile to lookup client"
         />
       </div>
 
-      {/* Display Client Package Info if lookup successful */}
       {clientInfo && (
-        <div className={`mb-6 p-4 rounded-lg border ${
-          clientInfo.status === 'active' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200' // Changed expired to yellow
-        }`}>
+        <div className={`mb-6 p-4 rounded-lg border ${clientInfo.status === 'active' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
           <div className="flex justify-between items-center">
             <div>
-              <span className="font-medium">
-                {clientInfo.status === 'active' ? '✅ Active Package' : '⚠️ Package Expired/None'}
-              </span>
-              {/* Display name from clientInfo, not formData, as it's the source */}
-              <span className="ml-2 font-semibold">{clientInfo.name}</span> 
+              <span className="font-medium">{clientInfo.status === 'active' ? '✅ Active Package' : '⚠️ Package Expired/None'}</span>
+              <span className="ml-2 font-semibold">{clientInfo.name}</span>
             </div>
-            {/* Show remaining hours only if package is active */}
             {clientInfo.status === 'active' && (
               <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">
                 Remaining: {clientInfo.remainingHours.toFixed(1)} hrs
@@ -260,7 +324,6 @@ export default function ClientForm() {
         </div>
       )}
 
-      {/* Main Form Starts Here */}
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
@@ -268,33 +331,29 @@ export default function ClientForm() {
             <input
               name="name"
               type="text"
-              value={formData.name} // Controlled by formData, updated via lookup or manually
+              value={formData.name}
               onChange={handleChange}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
               placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
             />
           </div>
-          
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
             <select
               name="outlet"
-              value={formData.outlet}
+              value={checkedOutlet ? formData.outlet : ''}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
+              disabled={authRole === 'outlet' || resolvingOutlet}
             >
-              <option value="Indiranagar">Indiranagar</option>
-              <option value="Kaggadaspura">Kaggadaspura</option>
-              <option value="Kalyan Nagar">Kalyan Nagar</option>
-              <option value="Cunningham Road">Cunningham Road</option>
-              <option value="HSR Layout">HSR Layout</option>
-              <option value="Malleswaram">Malleswaram</option>
-              <option value="Marathahalli">Marathahalli</option>
+              {!checkedOutlet && <option value="">Resolving outlet…</option>}
+              {outletsList.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
-          
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Treatment *</label>
             <input
@@ -306,7 +365,7 @@ export default function ClientForm() {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
             />
           </div>
-          
+
           {showAmountField && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹)</label>
@@ -321,7 +380,7 @@ export default function ClientForm() {
               />
             </div>
           )}
-          
+
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration</label>
             <div className="flex space-x-3">
@@ -330,7 +389,7 @@ export default function ClientForm() {
                   type="number"
                   min="0"
                   placeholder="Hrs"
-                  value={formData.sessionHours >= 1 ? Math.floor(formData.sessionHours) : ''} 
+                  value={formData.sessionHours >= 1 ? Math.floor(formData.sessionHours) : ''}
                   onChange={(e) => handleTimeChange(e.target.value, ((formData.sessionHours % 1) * 60).toString())}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
                 />
@@ -350,7 +409,6 @@ export default function ClientForm() {
           </div>
         </div>
 
-        {/* Package Options */}
         <div className="pt-4 border-t border-gray-200 space-y-3">
           <label className="flex items-center cursor-pointer">
             <div className="relative">
@@ -360,7 +418,7 @@ export default function ClientForm() {
                 checked={formData.isPackageCustomer}
                 onChange={handleChange}
                 className="sr-only"
-                disabled={!clientInfo || clientInfo.status !== 'active'} // Can only check if lookup found an ACTIVE package
+                disabled={!clientInfo || clientInfo.status !== 'active'}
               />
               <div className={`block w-14 h-8 rounded-full ${formData.isPackageCustomer ? 'bg-blue-500' : 'bg-gray-300'} ${(!clientInfo || clientInfo.status !== 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.isPackageCustomer ? 'transform translate-x-6' : ''}`}></div>
@@ -369,7 +427,7 @@ export default function ClientForm() {
               Existing package customer (use package credits)
             </div>
           </label>
-          
+
           <label className="flex items-center cursor-pointer">
             <div className="relative">
               <input
@@ -378,7 +436,7 @@ export default function ClientForm() {
                 checked={formData.tookPackage}
                 onChange={handleChange}
                 className="sr-only"
-                disabled={!!clientInfo && clientInfo.status === 'active'} // Disable if client already has an active package
+                disabled={!!clientInfo && clientInfo.status === 'active'}
               />
               <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
@@ -389,7 +447,6 @@ export default function ClientForm() {
           </label>
         </div>
 
-        {/* New Package Details */}
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
             <h3 className="text-md font-semibold text-purple-800">New Package Details</h3>
@@ -402,7 +459,7 @@ export default function ClientForm() {
                   min="0"
                   value={formData.packageAmount || ''}
                   onChange={handleChange}
-                  required={formData.tookPackage} // Make required only if taking new package
+                  required={formData.tookPackage}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
@@ -415,7 +472,7 @@ export default function ClientForm() {
                   step="0.1"
                   value={formData.totalPackageHours || ''}
                   onChange={handleChange}
-                  required={formData.tookPackage} // Make required only if taking new package
+                  required={formData.tookPackage}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
                 />
               </div>
@@ -423,7 +480,6 @@ export default function ClientForm() {
           </div>
         )}
 
-        {/* Submit Button */}
         <button
           type="submit"
           disabled={isSubmitting}
@@ -435,3 +491,4 @@ export default function ClientForm() {
     </div>
   );
 }
+  
