@@ -1,7 +1,7 @@
 // src/app/(protected)/dashboard/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react'; // <-- 1. IMPORTED useCallback
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 
@@ -22,50 +22,69 @@ export default function Dashboard() {
   const [totalCustomers, setTotalCustomers] = useState(0);
   const [dailyTarget, setDailyTarget] = useState({
     target: 350000, // Aggregate target based on 7 outlets * 50000
-    achieved: 0,
+    achieved: 0, // Stored in PAISA
     percentage: 0
   });
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const fetchDashboardData = async () => {
+  // --- 2. WRAPPED in useCallback ---
+  const fetchDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch all customer sessions (no outlet filter for Admin view)
-      const { data: customers, error: customersError } = await supabase
+      // Fetch all customer sessions for today
+      const today = new Date().toISOString().split('T')[0];
+      const { data: customers, error: customersError, count } = await supabase
         .from('customers')
-        .select('date, package_amount, amount_paid, took_package'); // Only need these fields for aggregation
+        .select('date, package_amount, amount_paid, took_package', { count: 'exact' }) // Get count
+        .eq('date', today); // Filter by today
       
       if (customersError) throw customersError;
 
-      const allCustomers = customers || [];
-      setTotalCustomers(allCustomers.length);
+      const todaySales = customers || [];
+      setTotalCustomers(count || 0); // Set today's customer count
 
       // Calculate total daily sales across all outlets
-      const today = new Date().toISOString().split('T')[0];
-      const todaySales = allCustomers.filter(c => c.date === today);
-
-      const totalDailySales = todaySales.reduce((sum: number, c: any) => {
+      const totalDailySalesInPaise = todaySales.reduce((sum: number, c: any) => {
         if (c.took_package) return sum + (c.package_amount || 0);
         return sum + (c.amount_paid || 0);
       }, 0);
 
-      const target = 350000;
-      const percentage = target > 0 ? Math.min(100, Math.round((totalDailySales / target) * 100)) : 0;
+      const targetInRupees = 350000;
+      // --- 3. FIXED: Correctly calculate percentage with paise/rupees ---
+      const salesInRupees = totalDailySalesInPaise / 100;
+      const percentage = targetInRupees > 0 
+        ? Math.min(100, Math.round((salesInRupees / targetInRupees) * 100)) 
+        : 0;
 
-      setDailyTarget({ target, achieved: totalDailySales, percentage });
+      setDailyTarget({ target: targetInRupees, achieved: totalDailySalesInPaise, percentage });
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []); // <-- Added dependency array
 
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  // --- 4. FIXED: formatCurrency function to divide by 100 ---
+  const formatCurrency = (amountInPaise: number) =>
+    new Intl.NumberFormat('en-IN', { 
+      style: 'currency', 
+      currency: 'INR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amountInPaise / 100); // <-- The fix
+
+  // --- 5. ADDED: formatTarget function for clarity ---
+  const formatTarget = (amountInRupees: number) =>
+    new Intl.NumberFormat('en-IN', { 
+      style: 'currency', 
+      currency: 'INR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amountInRupees); // Target is already in rupees
 
   return (
     <div className="space-y-8">
@@ -83,6 +102,7 @@ export default function Dashboard() {
         <div className="bg-white p-6 rounded-xl shadow">
           <h3 className="text-gray-500 text-sm font-medium">Today's Total Sales</h3>
           <p className="text-2xl font-bold mt-2 text-green-600">
+            {/* This will now display the correct value (e.g., ₹500) */}
             {loading ? '...' : formatCurrency(dailyTarget.achieved)}
           </p>
         </div>
@@ -91,7 +111,7 @@ export default function Dashboard() {
         <div className="bg-white p-6 rounded-xl shadow">
           <h3 className="text-gray-500 text-sm font-medium">Company Daily Target</h3>
           <p className="text-2xl font-bold mt-2 text-gray-800">
-            {formatCurrency(dailyTarget.target)}
+            {loading ? '...' : formatTarget(dailyTarget.target)}
           </p>
           <div className="mt-4">
             <div className="flex justify-between text-sm mb-1">
@@ -112,14 +132,14 @@ export default function Dashboard() {
 
         {/* Total Customers Card */}
         <div className="bg-white p-6 rounded-xl shadow">
-          <h3 className="text-gray-500 text-sm font-medium">Total Customers (All Time)</h3>
+          {/* --- 6. CHANGED: Text to be "Today's" to match logic --- */}
+          <h3 className="text-gray-500 text-sm font-medium">Today's Customers (All Outlets)</h3>
           <p className="text-2xl font-bold mt-2 text-gray-800">
             {loading ? '...' : totalCustomers}
           </p>
         </div>
       </div>
       
-      {/* Link to view detailed outlet performance */}
       <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
         <p className="text-blue-700">
           💡 For detailed customer lists, package status, or outlet performance, please use the sidebar navigation.

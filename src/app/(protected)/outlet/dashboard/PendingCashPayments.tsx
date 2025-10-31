@@ -1,7 +1,7 @@
 // src/app/(protected)/outlet/dashboard/PendingCashPayments.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react'; // <-- 1. FIXED: Imported useCallback
 import { supabase } from '@/lib/supabase';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
@@ -12,6 +12,7 @@ type Notification = {
   mobile: string;
   treatment: string;
   amount: number; // in paise
+  status: 'pending' | 'confirmed';
 };
 
 export default function PendingCashPayments({ outletId }: { outletId: string }) {
@@ -19,28 +20,37 @@ export default function PendingCashPayments({ outletId }: { outletId: string }) 
   const [loading, setLoading] = useState(true);
 
   // 1. Fetch initial pending payments
-  useEffect(() => {
-    const fetchPending = async () => {
-      if (!outletId) return;
-      setLoading(true);
+  const fetchPending = useCallback(async () => {
+    if (!outletId) return;
+    setLoading(true);
+    try {
       const { data, error } = await supabase
         .from('cash_notifications')
         .select('*')
         .eq('outlet_id', outletId)
         .eq('status', 'pending')
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: false }); // Show newest first
 
       if (error) {
         console.error('Error fetching pending payments:', error);
+        throw error;
       } else {
         setPending(data || []);
       }
+    } catch (error) {
+      console.error('Error in fetchPending:', error);
+      setPending([]);
+    } finally {
       setLoading(false);
-    };
-    fetchPending();
+    }
   }, [outletId]);
 
-  // 2. Listen for REAL-TIME new payments
+  // Effect to fetch initial data
+  useEffect(() => {
+    fetchPending();
+  }, [fetchPending]);
+
+  // 2. Listen for ALL real-time changes
   useEffect(() => {
     if (!outletId) return;
 
@@ -48,28 +58,35 @@ export default function PendingCashPayments({ outletId }: { outletId: string }) 
       .on<Notification>(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', // Listen to ALL events
           schema: 'public',
           table: 'cash_notifications',
           filter: `outlet_id=eq.${outletId}`
         },
-        (payload: RealtimePostgresChangesPayload<Notification>) => {
-          // Add new notification to the top of the list
-          setPending(currentPending => [payload.new, ...currentPending]);
+        (payload) => {
+          // Just refetch the list
+          console.log('Real-time event received, refetching payments...');
+          fetchPending();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('Real-time channel subscribed: cash_notifications');
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [outletId]);
+  }, [outletId, fetchPending]); 
   
   const handleAccept = async (notificationId: string) => {
+    const itemToAccept = pending.find(n => n.id === notificationId);
+    if (!itemToAccept) return;
+
     // Optimistically remove from UI
     setPending(prev => prev.filter(n => n.id !== notificationId));
 
-    // Update DB in the background
     const { error } = await supabase
       .from('cash_notifications')
       .update({ status: 'confirmed' })
@@ -77,7 +94,13 @@ export default function PendingCashPayments({ outletId }: { outletId: string }) 
       
     if (error) {
       console.error('Error confirming payment:', error);
-      // TODO: Add notification back to UI if update failed
+      alert('Error: Could not accept payment. Adding it back to the list.');
+      // Add item back if update fails
+      setPending(prev => 
+        [...prev, itemToAccept].sort((a, b) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+      );
     }
   };
 

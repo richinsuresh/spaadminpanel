@@ -12,21 +12,16 @@ export default function DashboardLayout({
   const pathname = usePathname();
   
   const navItems = [
-    // FIX 3: Added Home/Dashboard Summary link
-    { name: 'Home', href: '/dashboard', icon: '🏠' }, 
+    { name: 'Home', href: '/dashboard', icon: '📊' },
     { name: 'All Customers', href: '/dashboard/customers', icon: '👥' },
-    { name: 'Package Clients', href: '/dashboard/packages', icon: '🎁' },
+    { name: 'Package Clients', href: '/dashboard/packages', icon: '📦' },
     { name: 'Outlets', href: '/dashboard/outlets', icon: '🏪' },
+    { name: 'Sales', href: '/dashboard/sales', icon: '💰' },
     { name: 'Attendance', href: '/dashboard/attendance', icon: '📅' },
   ];
   
-  // Logic to highlight the correct nav item
   const getLinkClass = (href: string) => {
-    // Check if pathname matches exactly OR is the root dashboard page OR starts with the href (for nested pages)
-    const isActive = 
-        (pathname === href) || 
-        (href === '/dashboard' && pathname === '/dashboard') || 
-        (href !== '/dashboard' && pathname.startsWith(href));
+    const isActive = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
     
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
         isActive
@@ -37,7 +32,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      {/* Sidebar */}
+      {/* Admin Sidebar */}
       <div className="w-64 bg-white shadow-md">
         <div className="p-6 border-b border-gray-200">
           <h1 className="text-xl font-bold text-purple-700">Berry Spa Admin</h1>
@@ -49,7 +44,7 @@ export default function DashboardLayout({
               href={item.href}
               className={getLinkClass(item.href)}
             >
-              <span className="mr-3 text-lg">{item.icon}</span>
+              <span className="mr-3 text-lg w-6 text-center">{item.icon}</span>
               {item.name}
             </Link>
           ))}
