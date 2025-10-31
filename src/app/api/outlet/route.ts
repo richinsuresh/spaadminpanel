@@ -1,11 +1,13 @@
 // src/app/api/outlet/route.ts
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { OUTLETS } from '@/lib/outlet'; // <--- matches your file: src/lib/outlets.ts
+import { OUTLETS } from '@/lib/outlet';
 
 export async function GET() {
   try {
-    const cookieStore = cookies();
+    // --- THIS IS THE FIX ---
+    // The cookies() function is asynchronous and must be awaited
+    const cookieStore = await cookies();
     const outletCookie = cookieStore.get('outlet_id')?.value;
 
     if (!outletCookie) {
