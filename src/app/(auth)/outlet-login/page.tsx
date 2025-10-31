@@ -1,3 +1,4 @@
+// src/app/(auth)/outlet-login/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -26,9 +27,10 @@ export default function OutletLogin() {
       const data = await res.json();
 
       if (res.ok) {
-        // CRITICAL FIX: Use window.location.href for hard reload 
-        // to force the server to read the newly set cookies.
-        window.location.href = '/outlet/dashboard'; 
+        // --- THIS IS THE FIX ---
+        // Redirect directly to the sales page as it's now the main page
+        window.location.href = '/outlet/dashboard/sales'; 
+        // --- END OF FIX ---
       } else {
         setError(data.error || 'Invalid outlet ID or password');
       }
@@ -67,6 +69,7 @@ export default function OutletLogin() {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
             >
               <option value="">Choose your outlet</option>
+              {/* This will automatically show the new outlet names */}
               {OUTLETS.map(outlet => (
                 <option key={outlet.id} value={outlet.id}>
                   {outlet.name}

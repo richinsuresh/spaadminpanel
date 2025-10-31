@@ -236,13 +236,27 @@ export default function ClientCheckinForm() {
 
 
   // --- Form Submission Handler ---
+  // This helper function calls Supabase to set the check-in time
+  // after a successful online payment.
+  const setCheckInTime = async (customerSessionId: string) => {
+    try {
+      await supabase
+        .from('customers')
+        .update({ check_in_time: new Date().toISOString() })
+        .eq('id', customerSessionId);
+    } catch (err) {
+      console.error("Error setting check-in time:", err);
+      // Not critical to show user, but log it
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
 
-    // Validations
+    // Validations (no change)
     if (!outlet) {
         setError("Outlet information is missing. Cannot submit.");
         setLoading(false);
@@ -292,6 +306,14 @@ export default function ClientCheckinForm() {
     const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
 
     try {
+      // --- THIS IS THE FIX ---
+      // We must access the values from the formData state object
+      let checkInTime: string | null = null;
+      if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
+        checkInTime = new Date().toISOString();
+      }
+      // --- END OF FIX ---
+
       const payload = {
           name: formData.name.trim(),
           mobile: mobile,
@@ -307,6 +329,7 @@ export default function ClientCheckinForm() {
           outlet_id: outlet.id,
           paymentMethod: effectivePaymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
+          check_in_time: checkInTime // Set time if cash/package
       };
 
       // Submit to API
@@ -349,6 +372,9 @@ export default function ClientCheckinForm() {
           description: `Payment for ${formData.tookPackage ? 'New Package' : treatmentName}`,
           order_id: data.razorpayOrder.id,
           handler: function (response: any) {
+             // Payment was successful, so we set the check-in time
+             setCheckInTime(data.customer_session_id);
+             
              setSuccess('Payment successful! Redirecting...');
              setTimeout(() => {
                 window.location.href = '/client-thank-you';
@@ -431,7 +457,6 @@ export default function ClientCheckinForm() {
                 onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
                 required
                 maxLength={10}
-                // --- CHANGED ---: Added text-black
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                 placeholder="10-digit mobile"
                 disabled={loading}
@@ -446,7 +471,6 @@ export default function ClientCheckinForm() {
                 value={formData.name}
                 onChange={handleChange}
                 required
-                // --- CHANGED ---: Added text-black
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                 placeholder="Client's full name"
                 disabled={loading}
@@ -454,10 +478,10 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* Package Info Display */}
+          {/* --- Simplified Package Info Display --- */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-center text-green-800">
-              Active package found: <strong>{clientInfo.remainingHours.toFixed(1)} hrs</strong> remaining.
+              <strong>Active package found.</strong>
             </div>
           )}
            {clientInfo && clientInfo.status !== 'active' && (
@@ -465,6 +489,8 @@ export default function ClientCheckinForm() {
               Package found but it's expired or has no hours left.
             </div>
           )}
+          {/* --- End of Change --- */}
+
 
           {/* Section 2: Service & Duration */}
           <div>
@@ -475,7 +501,6 @@ export default function ClientCheckinForm() {
               value={formData.treatment}
               onChange={handleChange}
               required
-              // --- CHANGED ---: Added text-black
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm bg-white disabled:bg-gray-100 text-black"
               disabled={loading || treatments.length === 0}
             >
@@ -499,7 +524,6 @@ export default function ClientCheckinForm() {
                   placeholder="Hours"
                   value={formData.sessionHours || ''}
                   onChange={handleChange}
-                  // --- CHANGED ---: Added text-black
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                   disabled={loading}
                   required={formData.isPackageCustomer}
@@ -512,7 +536,6 @@ export default function ClientCheckinForm() {
                   placeholder="Mins"
                   value={formData.sessionMinutes || ''}
                   onChange={handleChange}
-                  // --- CHANGED ---: Added text-black
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                   disabled={loading}
                 />
@@ -564,7 +587,6 @@ export default function ClientCheckinForm() {
                 step="1"
                 value={formData.amountPaid || ''}
                 onChange={handleChange}
-                // --- CHANGED ---: Added text-black
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                 placeholder="Enter amount (e.g., 500)"
                 disabled={loading}
@@ -586,7 +608,6 @@ export default function ClientCheckinForm() {
                     value={formData.packageAmount || ''}
                     onChange={handleChange}
                     required={formData.tookPackage}
-                    // --- CHANGED ---: Added text-black
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
                     disabled={loading}
                   />
@@ -600,7 +621,6 @@ export default function ClientCheckinForm() {
                     value={formData.totalPackageHours || ''}
                     onChange={handleChange}
                     required={formData.tookPackage}
-                    // --- CHANGED ---: Added text-black
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
                     disabled={loading}
                   />
@@ -618,7 +638,6 @@ export default function ClientCheckinForm() {
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}
-                // --- CHANGED ---: Added text-black
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm bg-white disabled:bg-gray-100 text-black"
                 disabled={loading}
               >

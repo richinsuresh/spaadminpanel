@@ -2,24 +2,21 @@
 'use client'; 
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-// --- REMOVED: OUTLETS import ---
+import { useRouter } from 'next/navigation';
 
 export default function OutletDashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
   const router = useRouter();
   const [outletName, setOutletName] = useState('Outlet Panel');
 
-  // --- MODIFIED: Fetch name from your API ---
+  // Fetch outlet name from our secure API
   useEffect(() => {
     async function fetchOutletSession() {
       try {
-        const res = await fetch('/api/outlet'); // Use your existing route
+        const res = await fetch('/api/outlet');
         const data = await res.json();
         if (data.outletName) {
           setOutletName(data.outletName);
@@ -29,16 +26,9 @@ export default function OutletDashboardLayout({
       }
     }
     fetchOutletSession();
-  }, []); // Runs once on mount
+  }, []);
 
-  const navItems = [
-    { name: 'Summary', href: '/outlet/dashboard', icon: '📊' },
-    { name: 'All Customers', href: '/outlet/dashboard/customers', icon: '👥' },
-    { name: 'Package Clients', href: '/outlet/dashboard/packages', icon: '📦' },
-    { name: 'Sales', href: '/outlet/dashboard/sales', icon: '💰' },
-    { name: 'Attendance', href: '/outlet/dashboard/attendance', icon: '📅' },
-  ];
-  
+  // Handles logout
   const handleLogout = () => {
     document.cookie = 'auth_role=; Max-Age=0; path=/';
     document.cookie = 'outlet_id=; Max-Age=0; path=/';
@@ -47,31 +37,27 @@ export default function OutletDashboardLayout({
 
   return (
     <div className="flex min-h-screen bg-gray-50">
+      {/* --- SIDEBAR (Now just a header and logout) --- */}
       <div className="w-64 bg-white shadow-xl flex flex-col">
         <div className="p-6 border-b border-gray-200">
           <h1 className="text-xl font-bold text-blue-700" title="Outlet Panel">
             {outletName}
           </h1>
         </div>
-        <nav className="flex-1 mt-6">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center px-6 py-3 text-sm font-medium transition-colors ${
-                pathname === item.href
-                  ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600'
-                  : pathname.startsWith(item.href) && item.href !== '/outlet/dashboard'
-                    ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              }`}
-            >
-              <span className="mr-3 text-lg w-6 text-center">{item.icon}</span>
-              {item.name}
-            </Link>
-          ))}
-        </nav>
         
+        {/* --- Navigation Removed --- */}
+        <div className="flex-1 mt-6">
+           {/* You can add a link back to the sales page if needed */}
+           <a
+              href="/outlet/dashboard/sales"
+              className="flex items-center px-6 py-3 text-sm font-medium bg-blue-50 text-blue-700 border-r-4 border-blue-600"
+            >
+              <span className="mr-3 text-lg w-6 text-center">💰</span>
+              Sales
+            </a>
+        </div>
+        
+        {/* Logout Button */}
         <div className="p-6 border-t border-gray-200">
           <button
             onClick={handleLogout}
@@ -82,6 +68,8 @@ export default function OutletDashboardLayout({
           </button>
         </div>
       </div>
+
+      {/* Main Content (This will be the Sales Page) */}
       <div className="flex-1 p-8 overflow-y-auto">
         <div className="max-w-7xl mx-auto">
           {children}
