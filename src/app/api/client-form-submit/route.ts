@@ -40,11 +40,9 @@ export async function POST(req: NextRequest) {
     // --- CASE A: CLIENT BOUGHT A NEW PACKAGE (via Admin Form) ---
     if (payload.tookPackage) {
       
-      // --- FIX: Calculate expiry date based on 'packageValidity' from form ---
       const validityMonths = parseInt(payload.packageValidity || '3', 10);
       const expiryDate = new Date(payload.date); // Start from the date of purchase
       expiryDate.setMonth(expiryDate.getMonth() + validityMonths);
-      // --- END OF EXPIRY FIX ---
 
       const { error: newPackageError } = await supabase
         .from('packages')
@@ -53,10 +51,8 @@ export async function POST(req: NextRequest) {
           mobile: payload.mobile,
           total_hours: payload.totalPackageHours,
           remaining_hours: payload.totalPackageHours,
-          
-          // --- FIX: Add missing 'start_date' ---
+          used_hours: 0, // <-- Start with 0 used hours
           start_date: payload.date, 
-          
           expiry_date: expiryDate.toISOString(),
           status: 'active',
           outlet: payload.outlet, 
@@ -78,9 +74,11 @@ export async function POST(req: NextRequest) {
         throw new Error('Session hours must be provided for package clients.');
       }
 
+      // Find the client's active package
       const { data: activePackage, error: findError } = await supabase
         .from('packages')
-        .select('id, remaining_hours')
+        // --- FIX 1: Select 'used_hours' ---
+        .select('id, remaining_hours, used_hours') 
         .eq('mobile', payload.mobile)
         .eq('status', 'active')
         .gt('remaining_hours', 0) 
@@ -92,14 +90,22 @@ export async function POST(req: NextRequest) {
         throw new Error('No active package found for this client. Please sell them a new package.');
       }
 
+      // Calculate new hours and status
       const currentRemaining = parseFloat(activePackage.remaining_hours as any || '0');
+      const currentUsed = parseFloat(activePackage.used_hours as any || '0'); // Get current used
+      
       const newRemainingHours = currentRemaining - hoursToDeduct;
+      // --- FIX 2: Calculate new 'used_hours' ---
+      const newUsedHours = currentUsed + hoursToDeduct; 
       const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
+      // Update the package
       const { error: updateError } = await supabase
         .from('packages')
         .update({
           remaining_hours: newRemainingHours < 0 ? 0 : newRemainingHours,
+          // --- FIX 3: Add 'used_hours' to the update ---
+          used_hours: newUsedHours,
           status: newStatus,
         })
         .eq('id', activePackage.id);
