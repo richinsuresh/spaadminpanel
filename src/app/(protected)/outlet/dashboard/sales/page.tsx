@@ -194,7 +194,8 @@ export default function OutletSalesPage() {
             id="date"
             type="date"
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.targeT_VALUE)}
+            // --- FIX: Corrected typo from e.targeT_VALUE to e.target.value ---
+            onChange={(e) => setDateFilter(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
           />
         </div>
