@@ -6,7 +6,7 @@ export async function POST(req: NextRequest) {
     const payload = await req.json();
 
     // --- 1. INSERT THE CLIENT SESSION (to 'customers' table) ---
-    // This part is simplified, no new package fields
+    // This logs the individual visit/session
     const { data: sessionData, error: sessionError } = await supabase
       .from('customers')
       .insert({
@@ -14,21 +14,21 @@ export async function POST(req: NextRequest) {
         mobile: payload.mobile,
         date: payload.date,
         treatment: payload.treatment,
-        amount_paid: payload.amountPaid,
+        amount_paid: payload.amountPaid, 
         session_hours: payload.sessionHours,
         
         // Package tracking fields
         is_package_customer: payload.isPackageCustomer,
-        took_package: false, // Hardcoded to false
-        package_amount: 0,
-        total_package_hours: 0,
-        package_sold_by: null,
+        took_package: payload.tookPackage, // Will be false from client-form
+        package_amount: payload.packageAmount,
+        total_package_hours: payload.totalPackageHours,
+        package_sold_by: payload.packageSoldBy,
         
         // Outlet and payment fields
         outlet_id: payload.outlet_id,
         outlet_name: payload.outlet, 
         payment_method: payload.paymentMethod,
-        check_in_time: payload.check_in_time,
+        check_in_time: payload.check_in_time, 
       })
       .select('id')
       .single();
@@ -42,10 +42,40 @@ export async function POST(req: NextRequest) {
 
     // --- 2. HANDLE PACKAGE LOGIC ---
 
-    // --- CASE A: REMOVED (No longer creating packages here) ---
+    // --- CASE A: CLIENT BOUGHT A NEW PACKAGE (via Admin Form) ---
+    if (payload.tookPackage) {
+      const expiryDate = new Date();
+      // --- FIX: Use packageValidity from admin form ---
+      const validityMonths = parseInt(payload.packageValidity || '3', 10);
+      expiryDate.setMonth(expiryDate.getMonth() + validityMonths);
+
+      const { error: newPackageError } = await supabase
+        .from('packages')
+        .insert({
+          // --- FIX: Use 'name' (not 'client_name') ---
+          name: payload.name,
+          mobile: payload.mobile,
+          total_hours: payload.totalPackageHours,
+          remaining_hours: payload.totalPackageHours,
+          expiry_date: expiryDate.toISOString(),
+          status: 'active',
+          
+          // --- FIX: Use 'outlet' (the name) NOT 'outlet_id' ---
+          outlet: payload.outlet, 
+
+          sold_by: payload.packageSoldBy,
+          // --- ADDED: Store the package amount in the packages table ---
+          package_amount: payload.packageAmount 
+        });
+      
+      if (newPackageError) {
+        console.error('Supabase new package error:', newPackageError);
+        throw new Error(`Error creating new package: ${newPackageError.message}`);
+      }
+    }
     
-    // --- CASE B: CLIENT USED AN EXISTING PACKAGE ---
-    if (payload.isPackageCustomer) {
+    // --- CASE B: CLIENT USED AN EXISTING PACKAGE (via Client Form) ---
+    else if (payload.isPackageCustomer) {
       const hoursToDeduct = payload.sessionHours;
 
       if (!hoursToDeduct || hoursToDeduct <= 0) {
@@ -64,10 +94,10 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (findError || !activePackage) {
-        throw new Error('No active package found for this client.');
+        throw new Error('No active package found for this client. Please sell them a new package.');
       }
 
-      // Calculate new hours and status
+      // --- FIX: Safely parse numeric value from Supabase ---
       const currentRemaining = parseFloat(activePackage.remaining_hours as any || '0');
       const newRemainingHours = currentRemaining - hoursToDeduct;
       const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
