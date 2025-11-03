@@ -27,10 +27,7 @@ export default function OutletLogin() {
       const data = await res.json();
 
       if (res.ok) {
-        // --- THIS IS THE FIX ---
-        // Redirect directly to the sales page as it's now the main page
         window.location.href = '/outlet/dashboard/sales'; 
-        // --- END OF FIX ---
       } else {
         setError(data.error || 'Invalid outlet ID or password');
       }
@@ -43,22 +40,24 @@ export default function OutletLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+    // --- UPDATED THEME: Dark gradient background ---
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-800">Outlet Login</h1>
-          <p className="text-gray-600">Enter your outlet credentials</p>
+          <h1 className="text-2xl font-bold text-white">Outlet Login</h1>
+          {/* --- UPDATED THEME: Text color --- */}
+          <p className="text-gray-400">Enter your outlet credentials</p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+          <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700">
             {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit}>
           <div className="mb-6">
-            <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="outlet" className="block text-sm font-medium text-gray-300 mb-2">
               Select Outlet
             </label>
             <select
@@ -66,10 +65,10 @@ export default function OutletLogin() {
               value={outletId}
               onChange={(e) => setOutletId(e.target.value)}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+              // --- UPDATED THEME: Dark select ---
+              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 text-white rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
             >
               <option value="">Choose your outlet</option>
-              {/* This will automatically show the new outlet names */}
               {OUTLETS.map(outlet => (
                 <option key={outlet.id} value={outlet.id}>
                   {outlet.name}
@@ -79,7 +78,7 @@ export default function OutletLogin() {
           </div>
 
           <div className="mb-6">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
               Password
             </label>
             <input
@@ -88,7 +87,8 @@ export default function OutletLogin() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+              // --- UPDATED THEME: Dark input ---
+              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 text-white rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
               placeholder="Enter your password"
             />
           </div>
@@ -96,7 +96,8 @@ export default function OutletLogin() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-70"
+            // --- UPDATED THEME: Red button ---
+            className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-70"
           >
             {isLoading ? 'Logging in...' : 'Login to Dashboard'}
           </button>

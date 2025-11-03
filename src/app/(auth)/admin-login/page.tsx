@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ADMIN_CREDENTIALS } from '@/lib/outlet';
 
 export default function AdminLogin() {
   const [password, setPassword] = useState('');
@@ -23,8 +22,6 @@ export default function AdminLogin() {
       });
 
       if (res.ok) {
-        // CRITICAL FIX: Use window.location.href for hard reload 
-        // to force the server to read the newly set cookies.
         window.location.href = '/dashboard';
       } else {
         const data = await res.json();
@@ -38,22 +35,24 @@ export default function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+    // --- UPDATED THEME: Dark gradient background ---
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-800">Admin Login</h1>
-          <p className="text-gray-600">Enter the password for `admin@berryspa.com`</p>
+          <h1 className="text-2xl font-bold text-white">Admin Login</h1>
+          {/* --- UPDATED THEME: Text color --- */}
+          <p className="text-gray-400">Enter your master admin password</p>
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200">
+          <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700">
             {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit}>
           <div className="mb-6">
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
               Password
             </label>
             <input
@@ -62,7 +61,8 @@ export default function AdminLogin() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+              // --- UPDATED THEME: Dark inputs ---
+              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 text-white rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
               placeholder="Enter password"
             />
           </div>
@@ -70,7 +70,8 @@ export default function AdminLogin() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-70"
+            // --- UPDATED THEME: Red button ---
+            className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-70"
           >
             {isLoading ? 'Logging in...' : 'Login'}
           </button>
