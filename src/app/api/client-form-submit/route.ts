@@ -51,7 +51,9 @@ export async function POST(req: NextRequest) {
       const { error: newPackageError } = await supabase
         .from('packages')
         .insert({
-          client_name: payload.name,
+          // --- THIS IS THE FIX ---
+          name: payload.name, // Changed from 'client_name'
+          // --- END OF FIX ---
           mobile: payload.mobile,
           total_hours: payload.totalPackageHours,
           remaining_hours: payload.totalPackageHours, // Starts full
