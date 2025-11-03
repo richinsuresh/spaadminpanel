@@ -1,8 +1,10 @@
+// src/app/(protected)/form/page.tsx
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { OUTLETS } from '@/lib/outlet'; // ensure this exports [{ id, name }, ...]
+import { OUTLETS } from '@/lib/outlet';
+import { supabase } from '@/lib/supabase';
 
 type ClientInfo = {
   status: 'active' | 'expired';
@@ -15,126 +17,47 @@ type ClientInfo = {
   expiryDate: string;
 };
 
-type FormData = {
-  name: string;
-  mobile: string;
-  date: string;
-  treatment: string;
-  amountPaid: number;
-  sessionHours: number;
-  tookPackage: boolean;
-  isPackageCustomer: boolean;
-  packageAmount?: number | '';
-  totalPackageHours?: number | '';
-  outlet: string;
-};
+const outletsList = OUTLETS.map((o: any) => o.name);
 
 export default function ClientForm() {
   const router = useRouter();
 
-  // form and lookup state
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
-  const [formData, setFormData] = useState<FormData>({
+  
+  // --- 1. ADD packageValidity to state ---
+  const [formData, setFormData] = useState({
     name: '',
-    mobile: '',
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
     sessionHours: 0,
+    sessionMinutes: 0,
     tookPackage: false,
     isPackageCustomer: false,
-    packageAmount: '',
-    totalPackageHours: '',
-    outlet: '', // will be resolved
+    packageAmount: 0,
+    totalPackageHours: 0,
+    outlet: '',
+    paymentMethod: 'cash',
+    sold_by: '',
+    packageValidity: '3 months', // <-- ADDED (default value)
   });
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [inputError, setInputError] = useState('');
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // cookie/outlet/role state
-  const [authRole, setAuthRole] = useState<string | null>(null);
-  const [checkedOutlet, setCheckedOutlet] = useState(false);
-  const [resolvingOutlet, setResolvingOutlet] = useState(false);
-
-  // outlets list (use your OUTLETS mapping if available)
-  const outletsList = OUTLETS?.map((o: any) => o.name) ?? [
-    'Indiranagar', 'Kaggadaspura', 'Kalyan Nagar', 'Cunningham Road', 'HSR Layout', 'Malleswaram', 'Marathahalli'
-  ];
-
-  // cleanup lookup timeout
   useEffect(() => {
+    if (outletsList.length > 0) {
+      setFormData(prev => ({ ...prev, outlet: outletsList[0] }));
+    }
+    
     return () => {
       if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     };
   }, []);
 
-  // Resolve auth_role and outlet (client cookie -> server /api/outlet fallback)
-  useEffect(() => {
-    const cookieStr = typeof document !== 'undefined' ? document.cookie : '';
-    const getCookieVal = (name: string) => cookieStr.split('; ').find(row => row.trim().startsWith(name + '='))?.split('=')[1];
-
-    const outletCookie = getCookieVal('outlet_id');
-    const authRoleCookie = getCookieVal('auth_role');
-
-    if (authRoleCookie) setAuthRole(authRoleCookie);
-    else setAuthRole(null);
-
-    const setOutletFromValue = (val?: string) => {
-      if (!val) return;
-      const matched = OUTLETS?.find((o: any) => o.id === val || o.name === val);
-      const outletName = matched ? matched.name : val;
-      setFormData(prev => ({ ...prev, outlet: outletName }));
-    };
-
-    if (outletCookie) {
-      // cookie readable client-side (fast)
-      setOutletFromValue(outletCookie);
-      setCheckedOutlet(true);
-      return;
-    }
-
-    // cookie not readable (HttpOnly or missing) -> call server endpoint to resolve
-    (async () => {
-      setResolvingOutlet(true);
-      try {
-        const res = await fetch('/api/outlet');
-        if (res.status === 204) {
-          // server couldn't find cookie
-          if (authRoleCookie === 'outlet') {
-            // outlet user with no server cookie -> redirect to login
-            setInputError('Outlet session missing. Redirecting to login...');
-            router.replace('/outlet-login');
-            return;
-          }
-          // admin user: leave outlet blank (admin can choose)
-        } else if (res.ok) {
-          const data = await res.json();
-          if (data?.outlet) {
-            setOutletFromValue(data.outlet);
-          } else {
-            // no outlet returned
-            if (authRoleCookie === 'outlet') {
-              setInputError('Outlet session missing. Redirecting to login...');
-              router.replace('/outlet-login');
-              return;
-            }
-          }
-        } else {
-          console.warn('/api/outlet returned status', res.status);
-        }
-      } catch (err) {
-        console.warn('Error fetching /api/outlet', err);
-      } finally {
-        setResolvingOutlet(false);
-        setCheckedOutlet(true);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // AUTOFILL logic (mobile lookup)
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -169,7 +92,6 @@ export default function ClientForm() {
     }
   }, [mobile]);
 
-  // input change handler
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = (e.target as HTMLInputElement).checked;
@@ -178,105 +100,150 @@ export default function ClientForm() {
         ...prev,
         [name]: type === 'checkbox' ? checked : (type === 'number' ? (value === '' ? 0 : Number(value)) : value)
       };
-      // ensure only one package flag active
       if (name === 'isPackageCustomer' && checked) updated.tookPackage = false;
       if (name === 'tookPackage' && checked) updated.isPackageCustomer = false;
       return updated;
     });
   };
 
-  const handleTimeChange = (hours: string, minutes: string) => {
-    const h = parseFloat(hours) || 0;
-    const m = parseFloat(minutes) || 0;
-    setFormData(prev => ({ ...prev, sessionHours: h + (m / 60) }));
-  };
+  const getSessionDuration = useCallback(() => {
+    const hours = Number(formData.sessionHours) || 0;
+    const minutes = Number(formData.sessionMinutes) || 0;
+    return hours + (minutes / 60);
+  }, [formData.sessionHours, formData.sessionMinutes]);
 
-  // submit handler
+  const getFinalAmountInPaise = useCallback(() => {
+    if (formData.isPackageCustomer) return 0;
+    if (formData.tookPackage) {
+      return (Number(formData.packageAmount) || 0) * 100;
+    }
+    return (Number(formData.amountPaid) || 0) * 100;
+  }, [formData.isPackageCustomer, formData.tookPackage, formData.packageAmount, formData.amountPaid]);
+
+  
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setInputError('');
 
-    if (!checkedOutlet) {
-      setInputError('Verifying session — please wait.');
-      setIsSubmitting(false);
-      return;
-    }
-
-    if (formData.isPackageCustomer && formData.sessionHours <= 0) {
+    const sessionHours = getSessionDuration();
+    if (formData.isPackageCustomer && sessionHours <= 0) {
       setInputError('Please enter Session Duration when using package credits.');
       setIsSubmitting(false);
       return;
     }
-
-    // If outlet user and outlet isn't set, redirect to login
-    if (authRole === 'outlet' && !formData.outlet) {
-      setInputError('Outlet session missing. Redirecting to login...');
+    if (formData.tookPackage) {
+      if (!formData.packageAmount || formData.packageAmount <= 0 || !formData.totalPackageHours || formData.totalPackageHours <= 0) {
+        setInputError('Please enter a valid Package Amount and Total Hours for the new package.');
+        setIsSubmitting(false);
+        return;
+      }
+      if (!formData.sold_by.trim()) {
+        setInputError('Please enter the name of the person who sold the package.');
+        setIsSubmitting(false);
+        return;
+      }
+    }
+    if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
+        setInputError('Please enter a valid Amount for the treatment.');
+        setIsSubmitting(false);
+        return;
+    }
+    if (!formData.outlet) {
+      setInputError('Please select an outlet.');
       setIsSubmitting(false);
-      router.replace('/outlet-login');
       return;
     }
 
+    const finalAmountInPaise = getFinalAmountInPaise();
+    const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
+    
+    const outlet = OUTLETS.find(o => o.name === formData.outlet);
+    const outlet_id = outlet ? outlet.id : 'unknown';
+
     try {
-      const finalAmountPaid = (formData.tookPackage || formData.isPackageCustomer) ? 0 : formData.amountPaid;
+      let checkInTime: string | null = null;
+      if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
+        checkInTime = new Date().toISOString();
+      }
+      
+      // --- 2. ADD packageValidity to payload ---
       const payload = {
-        ...formData,
-        mobile,
-        amountPaid: finalAmountPaid
+        name: formData.name.trim(),
+        mobile: mobile,
+        date: formData.date,
+        treatment: formData.treatment,
+        amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
+        sessionHours: sessionHours,
+        isPackageCustomer: formData.isPackageCustomer,
+        tookPackage: formData.tookPackage,
+        packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+        totalPackageHours: formData.tookPackage ? Number(formData.totalPackageHours) || 0 : 0,
+        outlet: formData.outlet,
+        outlet_id: outlet_id,
+        paymentMethod: effectivePaymentMethod,
+        finalAmountInPaise: finalAmountInPaise, 
+        check_in_time: checkInTime,
+        sold_by: formData.tookPackage ? formData.sold_by : null,
+        packageValidity: formData.tookPackage ? formData.packageValidity : null, // <-- ADDED
       };
 
-      const response = await fetch('/api/submit', {
+      const response = await fetch('/api/client-form-submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
-      if (response.ok) {
+      const data = await response.json();
+
+      if (response.ok && data.success) {
         setSuccess(true);
         setTimeout(() => {
-          // redirect based on role
-          const redirectTo = authRole === 'outlet' ? '/outlet' : '/dashboard';
           router.refresh();
-          router.push(redirectTo);
+          router.push('/dashboard/sales');
         }, 900);
 
-        // reset (keep outlet)
+        // --- 3. ADD packageValidity to reset ---
         setMobile('');
         setClientInfo(null);
         setFormData(prev => ({
           ...prev,
-          name: '', mobile: '', date: new Date().toISOString().split('T')[0],
-          treatment: '', amountPaid: 0, sessionHours: 0, tookPackage: false,
-          isPackageCustomer: false, packageAmount: '', totalPackageHours: ''
+          name: '',
+          treatment: '',
+          amountPaid: 0,
+          sessionHours: 0,
+          sessionMinutes: 0,
+          tookPackage: false,
+          isPackageCustomer: false,
+          packageAmount: 0,
+          totalPackageHours: 0,
+          sold_by: '',
+          packageValidity: '3 months', // <-- ADDED
         }));
       } else {
-        const err = await response.json().catch(() => ({ error: 'Unknown error' }));
-        console.error('Submission failed:', err.error);
-        setInputError(err.error || 'Error saving record');
+        const err = data.error || 'Unknown error';
+        console.error('Submission failed:', err);
+        setInputError(err);
         setIsSubmitting(false);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving record:', err);
       setInputError('An unexpected error occurred.');
       setIsSubmitting(false);
     }
   };
-
+  
   const showAmountField = !formData.tookPackage && !formData.isPackageCustomer;
 
   return (
     <div className="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-md mt-8 relative">
       <h1 className="text-2xl font-bold text-gray-800 mb-6">
-        Client Treatment Record
-        { formData.outlet ? ` — ${formData.outlet}` : ' ' }
+        Add New Customer (Admin)
       </h1>
 
       <button
         type="button"
-        onClick={() => {
-          if (authRole === 'outlet') router.push('/outlet');
-          else router.push('/dashboard');
-        }}
+        onClick={() => router.push('/dashboard')}
         className="absolute top-6 right-6 text-gray-500 hover:text-gray-700 text-2xl"
         aria-label="Close"
       >
@@ -303,7 +270,7 @@ export default function ClientForm() {
           onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
           required
           maxLength={10}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
           placeholder="Enter 10-digit mobile to lookup client"
         />
       </div>
@@ -334,7 +301,7 @@ export default function ClientForm() {
               value={formData.name}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
               placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
             />
           </div>
@@ -343,13 +310,12 @@ export default function ClientForm() {
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
             <select
               name="outlet"
-              value={checkedOutlet ? formData.outlet : ''}
+              value={formData.outlet}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
-              disabled={authRole === 'outlet' || resolvingOutlet}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
             >
-              {!checkedOutlet && <option value="">Resolving outlet…</option>}
+              <option value="">-- Select Outlet --</option>
               {outletsList.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
@@ -362,47 +328,51 @@ export default function ClientForm() {
               value={formData.treatment}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
             />
           </div>
 
           {showAmountField && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹) *</label>
               <input
                 name="amountPaid"
                 type="number"
                 min="0"
-                step="0.01"
+                step="1"
                 value={formData.amountPaid || ''}
                 onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+                required={!formData.isPackageCustomer && !formData.tookPackage}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
               />
             </div>
           )}
 
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration {formData.isPackageCustomer ? '*' : ''}</label>
             <div className="flex space-x-3">
               <div className="flex-1">
                 <input
+                  name="sessionHours"
                   type="number"
                   min="0"
                   placeholder="Hrs"
-                  value={formData.sessionHours >= 1 ? Math.floor(formData.sessionHours) : ''}
-                  onChange={(e) => handleTimeChange(e.target.value, ((formData.sessionHours % 1) * 60).toString())}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+                  value={formData.sessionHours || ''}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                 />
               </div>
               <div className="flex-1">
                 <input
+                  name="sessionMinutes"
                   type="number"
                   min="0"
                   max="59"
+                  step="15"
                   placeholder="Mins"
-                  value={formData.sessionHours > 0 ? Math.round((formData.sessionHours % 1) * 60) : ''}
-                  onChange={(e) => handleTimeChange(Math.floor(formData.sessionHours).toString(), e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900"
+                  value={formData.sessionMinutes || ''}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                 />
               </div>
             </div>
@@ -447,12 +417,13 @@ export default function ClientForm() {
           </label>
         </div>
 
+        {/* --- 4. THIS IS THE UPDATED BLOCK --- */}
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
             <h3 className="text-md font-semibold text-purple-800">New Package Details</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Package Amount (₹)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Package Amount (₹) *</label>
                 <input
                   name="packageAmount"
                   type="number"
@@ -460,11 +431,11 @@ export default function ClientForm() {
                   value={formData.packageAmount || ''}
                   onChange={handleChange}
                   required={formData.tookPackage}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Total Hours</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Total Hours *</label>
                 <input
                   name="totalPackageHours"
                   type="number"
@@ -473,8 +444,37 @@ export default function ClientForm() {
                   value={formData.totalPackageHours || ''}
                   onChange={handleChange}
                   required={formData.tookPackage}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-gray-900"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black"
                 />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Sold By (Staff Name) *</label>
+                <input
+                  name="sold_by"
+                  type="text"
+                  value={formData.sold_by}
+                  onChange={handleChange}
+                  required={formData.tookPackage}
+                  placeholder="Enter your name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black"
+                />
+              </div>
+              {/* --- 5. THIS IS THE NEW DROPDOWN --- */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Package Validity *</label>
+                <select
+                  name="packageValidity"
+                  value={formData.packageValidity}
+                  onChange={handleChange}
+                  required={formData.tookPackage}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
+                >
+                  <option value="3 months">3 Months</option>
+                  <option value="6 months">6 Months</option>
+                  <option value="9 months">9 Months</option>
+                </select>
               </div>
             </div>
           </div>
@@ -491,4 +491,3 @@ export default function ClientForm() {
     </div>
   );
 }
-  

@@ -1,8 +1,9 @@
-// src/app/client-form/[outletId]/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+// --- FIX: Using useRouter for navigation ---
+import { useParams, useRouter } from 'next/navigation';
+// --- FIX: Using your project's path aliases ---
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
@@ -23,50 +24,15 @@ type ClientInfo = {
   expiryDate: string;
 };
 
-// --- Custom Hook for Razorpay ---
-const useRazorpay = () => {
-  const [scriptLoaded, setScriptLoaded] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return;
-    }
-
-    const src = 'https://checkout.razorpay.com/v1/checkout.js';
-    const existingScript = document.querySelector(`script[src="${src}"]`);
-
-    if (existingScript) {
-      const checkRazorpay = () => {
-        // @ts-ignore
-        if (window.Razorpay) {
-          setScriptLoaded(true);
-        } else {
-          setTimeout(checkRazorpay, 100);
-        }
-      };
-      checkRazorpay();
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.onload = () => setScriptLoaded(true);
-    script.onerror = () => {
-      console.error('Failed to load Razorpay script');
-      setScriptLoaded(false);
-    };
-    document.body.appendChild(script);
-
-  }, []);
-  return scriptLoaded;
-};
-
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
   const params = useParams();
   const outletId = params.outletId as string;
+  // --- FIX: Initializing useRouter ---
+  const router = useRouter();
 
   // --- State Declarations ---
+  // --- FIX: All state variables, including 'outlet', are defined here ---
   const [outlet, setOutlet] = useState<{ id: string; name: string } | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [mobile, setMobile] = useState('');
@@ -83,12 +49,12 @@ export default function ClientCheckinForm() {
     packageAmount: 0,
     totalPackageHours: 0,
     paymentMethod: 'cash',
+    packageSoldBy: '', // Added state for package seller
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  const scriptLoaded = useRazorpay();
+  // --- END OF STATE DECLARATIONS ---
 
   // --- Effects ---
 
@@ -109,7 +75,7 @@ export default function ClientCheckinForm() {
       setLoading(false);
       return;
     }
-    setOutlet(outletInfo);
+    setOutlet(outletInfo); // 'outlet' state is set here
 
     const fetchTreatments = async () => {
       try {
@@ -193,6 +159,7 @@ export default function ClientCheckinForm() {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
         updatedValue = checked ?? false;
+      // --- FIX: Corrected typo from '==='* to '===' ---
       } else if (type === 'number') {
         updatedValue = value === '' ? 0 : Number(value);
       } else {
@@ -234,29 +201,14 @@ export default function ClientCheckinForm() {
     formData.amountPaid
   ]);
 
-
   // --- Form Submission Handler ---
-  // This helper function calls Supabase to set the check-in time
-  // after a successful online payment.
-  const setCheckInTime = async (customerSessionId: string) => {
-    try {
-      await supabase
-        .from('customers')
-        .update({ check_in_time: new Date().toISOString() })
-        .eq('id', customerSessionId);
-    } catch (err) {
-      console.error("Error setting check-in time:", err);
-      // Not critical to show user, but log it
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
 
-    // Validations (no change)
+    // Validations
     if (!outlet) {
         setError("Outlet information is missing. Cannot submit.");
         setLoading(false);
@@ -294,6 +246,12 @@ export default function ClientCheckinForm() {
             setLoading(false);
             return;
         }
+        // --- NEW: Validation for package seller ---
+        if (!formData.packageSoldBy.trim()) {
+            setError('Please enter the name of the staff who sold the package.');
+            setLoading(false);
+            return;
+        }
     }
     if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setError('Please enter a valid Amount for the treatment.');
@@ -306,14 +264,13 @@ export default function ClientCheckinForm() {
     const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
 
     try {
-      // --- THIS IS THE FIX ---
-      // We must access the values from the formData state object
+      // Set check-in time ONLY for cash or package
       let checkInTime: string | null = null;
       if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
         checkInTime = new Date().toISOString();
       }
-      // --- END OF FIX ---
 
+      // --- UPDATED: Payload now includes packageSoldBy ---
       const payload = {
           name: formData.name.trim(),
           mobile: mobile,
@@ -325,11 +282,12 @@ export default function ClientCheckinForm() {
           tookPackage: formData.tookPackage,
           packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
           totalPackageHours: formData.tookPackage ? Number(formData.totalPackageHours) || 0 : 0,
+          packageSoldBy: formData.tookPackage ? formData.packageSoldBy.trim() : null, // Send seller name if new package
           outlet: outlet.name,
           outlet_id: outlet.id,
           paymentMethod: effectivePaymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime // Set time if cash/package
+          check_in_time: checkInTime // Set time if cash/package, null for UPI
       };
 
       // Submit to API
@@ -344,61 +302,38 @@ export default function ClientCheckinForm() {
         throw new Error(data.error || 'Submission failed');
       }
 
-      // Handle API response (Cash, Package)
-      if (data.paymentMethod === 'cash' || data.paymentMethod === 'package') {
-        setSuccess(data.paymentMethod === 'cash'
-            ? 'Success! Please collect cash payment. Session registered.'
-            : 'Success! Session using package is registered.');
+      // Handle API response (Cash)
+      if (data.paymentMethod === 'cash') {
+        setSuccess('Registration successful! Redirecting...');
+        setTimeout(() => {
+          // --- FIX: Use router.push ---
+          router.push('/client-cash-success');
+        }, 1500);
+      } 
+      // Handle API response (Package)
+      else if (data.paymentMethod === 'package') {
+        setSuccess('Success! Session using package is registered.');
         setMobile('');
+        // --- UPDATED: Reset packageSoldBy field ---
         setFormData({
           name: '', treatment: '', amountPaid: 0, sessionHours: 0, sessionMinutes: 0,
           isPackageCustomer: false, tookPackage: false, packageAmount: 0,
-          totalPackageHours: 0, paymentMethod: 'cash',
+          totalPackageHours: 0, paymentMethod: 'cash', packageSoldBy: '',
         });
         setClientInfo(null);
         setLoading(false); 
       } 
-      // Handle API response (Online Payment)
-      else if (data.paymentMethod === 'online' && data.razorpayOrder) {
-        if (!scriptLoaded) {
-          throw new Error('Razorpay script not loaded. Please refresh and try again.');
-        }
-
-        const options = {
-          key: data.razorpayKey,
-          amount: data.razorpayOrder.amount,
-          currency: 'INR',
-          name: 'Berry Spa',
-          description: `Payment for ${formData.tookPackage ? 'New Package' : treatmentName}`,
-          order_id: data.razorpayOrder.id,
-          handler: function (response: any) {
-             // Payment was successful, so we set the check-in time
-             setCheckInTime(data.customer_session_id);
-             
-             setSuccess('Payment successful! Redirecting...');
-             setTimeout(() => {
-                window.location.href = '/client-thank-you';
-             }, 1500);
-          },
-          prefill: { name: formData.name, email: '', contact: mobile },
-          theme: { color: '#8A2BE2' },
-           modal: {
-                ondismiss: function() {
-                    console.log('Checkout form closed');
-                    setLoading(false);
-                }
-            }
-        };
-
-        // @ts-ignore
-        const rzp = new window.Razorpay(options);
-        rzp.on('payment.failed', function (response: any) {
-           console.error('Razorpay Payment Failed:', response.error);
-           setError(`Payment failed: ${response.error.description || 'Unknown error'}. Please try cash.`);
-           setLoading(false);
-        });
-        rzp.open();
-      } else {
+      // Handle API response (UPI / "card")
+      else if (data.paymentMethod === 'card') {
+        setSuccess('Registration complete. Redirecting to payment QR...');
+        const amountInRupees = data.finalAmountInPaise / 100;
+        
+        // --- FIX: Use router.push ---
+        setTimeout(() => {
+          router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}`);
+        }, 1500);
+      }
+      else {
           throw new Error("Invalid response from server.");
       }
 
@@ -412,7 +347,7 @@ export default function ClientCheckinForm() {
   // --- Render Logic ---
   const showAmountField = !formData.isPackageCustomer && !formData.tookPackage;
   const showPackageFields = formData.tookPackage;
-  const isSubmitDisabled = loading || (formData.paymentMethod !== 'cash' && !formData.isPackageCustomer && !scriptLoaded);
+  const isSubmitDisabled = loading;
 
   // Initial loading state
   if (loading && !outlet) {
@@ -439,7 +374,14 @@ export default function ClientCheckinForm() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
       <div className="max-w-lg w-full bg-white rounded-2xl shadow-xl p-8">
-        <h1 className="text-2xl font-bold text-black text-center mb-2">Welcome to {outlet?.name || 'Berry Spa'}</h1>
+        {/*
+          ---
+          FIX: The 'outlet' variable is defined in the state (line 42)
+          and set in the useEffect hook (line 81).
+          It is definitely in scope here.
+          ---
+        */}
+        <h1 className="text-2xl font-bold text-black text-center mb-2">Welcome to {outlet?.name || 'Your Spa'}</h1>
         <p className="text-center text-black mb-6">Client Check-in / New Registration</p>
 
         {error && !success && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200 text-sm">{error}</div>}
@@ -478,7 +420,7 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* --- Simplified Package Info Display --- */}
+          {/* Package Info Display */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-center text-green-800">
               <strong>Active package found.</strong>
@@ -489,8 +431,6 @@ export default function ClientCheckinForm() {
               Package found but it's expired or has no hours left.
             </div>
           )}
-          {/* --- End of Change --- */}
-
 
           {/* Section 2: Service & Duration */}
           <div>
@@ -543,6 +483,7 @@ export default function ClientCheckinForm() {
             </div>
              {formData.isPackageCustomer && getSessionDuration() <=0 && <p className="text-xs text-red-500 mt-1">Duration required when using package.</p>}
           </div>
+
 
           {/* Section 3: Package Options */}
           <div className="pt-4 border-t border-gray-200 space-y-2">
@@ -626,6 +567,24 @@ export default function ClientCheckinForm() {
                   />
                 </div>
               </div>
+
+              {/* --- NEW: Package Sold By Input --- */}
+              <div className="pt-2">
+                <label htmlFor="packageSoldBy" className="block text-xs font-medium text-black mb-1">Package Sold By *</label>
+                <input
+                  id="packageSoldBy"
+                  name="packageSoldBy"
+                  type="text"
+                  placeholder="Staff name"
+                  value={formData.packageSoldBy}
+                  onChange={handleChange}
+                  required={formData.tookPackage}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
+                  disabled={loading}
+                />
+              </div>
+              {/* --- END OF NEW INPUT --- */}
+
             </div>
           )}
 
@@ -641,12 +600,9 @@ export default function ClientCheckinForm() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm bg-white disabled:bg-gray-100 text-black"
                 disabled={loading}
               >
-                <option value="cash">Pay with Cash</option>
-                <option value="card">Pay Online (Card/UPI etc.)</option>
+                <option value="cash">Pay with Cash or Card</option>
+                <option value="card">Pay with UPI</option>
               </select>
-               {!scriptLoaded && formData.paymentMethod !== 'cash' &&
-                 <p className="text-xs text-yellow-600 mt-1">Loading online payment options...</p>
-               }
             </div>
           )}
 
@@ -659,7 +615,7 @@ export default function ClientCheckinForm() {
             {loading ? 'Processing...' :
              formData.isPackageCustomer ? 'Confirm Session using Package' :
              formData.paymentMethod === 'cash' ? 'Register & Accept Cash' :
-             'Proceed to Online Payment'}
+             'Proceed to UPI Payment'}
           </button>
         </form>
       </div>

@@ -1,10 +1,9 @@
-// src/app/(protected)/outlet/dashboard/sales/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
-import { THERAPISTS_BY_OUTLET } from 'src/lib/therapists'; // <-- 1. IMPORT new map
+// import { THERAPISTS_BY_OUTLET } from 'src/lib/therapists'; // No longer needed
 
 type Sale = {
   id: string;
@@ -19,6 +18,7 @@ type Sale = {
   check_out_time: string | null;
   room: string | null;
   therapist_name: string | null;
+  session_hours: number | null;
 };
 
 const formatCurrency = (amountInPaise: number) =>
@@ -38,6 +38,18 @@ const formatDate = (dateString: string | null) => {
   });
 };
 
+const formatDuration = (hours: number | null) => {
+  if (!hours || hours === 0) return '—';
+  if (hours < 1) return `${Math.round(hours * 60)} mins`;
+  
+  const h = Math.floor(hours);
+  const m = Math.round((hours % 1) * 60);
+  
+  if (m === 0) return `${h} hr${h > 1 ? 's' : ''}`;
+  if (h === 0) return `${m} mins`;
+  return `${h}hr ${m}m`;
+};
+
 export default function OutletSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,8 +59,7 @@ export default function OutletSalesPage() {
   const [roomInputs, setRoomInputs] = useState<{[key: string]: string}>({});
   const [therapistInputs, setTherapistInputs] = useState<{[key: string]: string}>({});
   
-  // --- 2. ADDED state for this outlet's specific therapist list ---
-  const [therapistList, setTherapistList] = useState<string[]>([]);
+  // const [therapistList, setTherapistList] = useState<string[]>([]); // No longer needed
 
   useEffect(() => {
     async function fetchOutletSession() {
@@ -60,8 +71,7 @@ export default function OutletSalesPage() {
         if (data.outletId && data.outletName) {
           setOutletId(data.outletId);
           setOutletName(data.outletName);
-          // --- 3. Set this outlet's therapist list ---
-          setTherapistList(THERAPISTS_BY_OUTLET[data.outletName] || []);
+          // setTherapistList(THERAPISTS_BY_OUTLET[data.outletName] || []); // No longer needed
         } else {
           throw new Error("No outlet data returned from API");
         }
@@ -74,14 +84,16 @@ export default function OutletSalesPage() {
   }, []);
 
   const fetchSales = useCallback(async () => {
-    if (!outletName) return; 
+    // --- FIX 1: Check for outletId, not outletName ---
+    if (!outletId) return; 
     
     setLoading(true);
     try {
       let query = supabase
         .from('customers')
-        .select('id, date, name, mobile, treatment, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name')
-        .eq('outlet', outletName) 
+        .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name')
+        // --- FIX 2: Query by the new 'outlet_id' column instead of 'outlet' ---
+        .eq('outlet_id', outletId) 
         .order('check_in_time', { ascending: false, nullsFirst: false });
 
       if (dateFilter) {
@@ -106,10 +118,12 @@ export default function OutletSalesPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFilter, outletName]);
+  // --- FIX 3: Update dependency to outletId ---
+  }, [dateFilter, outletId]);
 
   useEffect(() => {
-    if (!outletName || !outletId) return;
+    // --- FIX 4: Check for outletId ---
+    if (!outletId) return;
     
     fetchSales();
     
@@ -120,7 +134,8 @@ export default function OutletSalesPage() {
           event: '*', 
           schema: 'public', 
           table: 'customers',
-          filter: `outlet=eq.${outletName}` 
+          // --- FIX 5: Filter the channel subscription by 'outlet_id' ---
+          filter: `outlet_id=eq.${outletId}` 
         },
         (payload) => {
           fetchSales();
@@ -132,7 +147,8 @@ export default function OutletSalesPage() {
       supabase.removeChannel(channel);
     };
     
-  }, [fetchSales, outletId, outletName]);
+  // --- FIX 6: Update dependencies (outletName is no longer needed for query) ---
+  }, [fetchSales, outletId]);
 
   const handleRoomInputChange = (id: string, room: string) => {
     setRoomInputs(prev => ({ ...prev, [id]: room }));
@@ -143,9 +159,12 @@ export default function OutletSalesPage() {
     await supabase.from('customers').update({ room }).eq('id', id);
   };
   
+  const handleTherapistInputChange = (id: string, name: string) => {
+    setTherapistInputs(prev => ({ ...prev, [id]: name }));
+  };
+
   const handleTherapistSave = async (id: string, therapistName: string) => {
-    setTherapistInputs(prev => ({ ...prev, [id]: therapistName }));
-    if (!therapistName) return; // Allow clearing but don't save empty string
+    if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
   };
   
@@ -175,8 +194,8 @@ export default function OutletSalesPage() {
             id="date"
             type="date"
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+            onChange={(e) => setDateFilter(e.targeT_VALUE)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
           />
         </div>
       </div>
@@ -196,6 +215,7 @@ export default function OutletSalesPage() {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check-in</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
@@ -205,9 +225,9 @@ export default function OutletSalesPage() {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan={7} className="p-6 text-center text-gray-500">Loading...</td></tr>
+                <tr><td colSpan={8} className="p-6 text-center text-gray-500">Loading...</td></tr>
               ) : sales.length === 0 ? (
-                <tr><td colSpan={7} className="p-6 text-center text-gray-500">No sales found for these filters.</td></tr>
+                <tr><td colSpan={8} className="p-6 text-center text-gray-500">No sales found for these filters.</td></tr>
               ) : (
                 sales.map(sale => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
@@ -218,6 +238,9 @@ export default function OutletSalesPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatDuration(sale.session_hours)}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
@@ -225,22 +248,25 @@ export default function OutletSalesPage() {
                       {formatDate(sale.check_in_time)}
                     </td>
                     
-                    {/* --- 4. UPDATED Therapist Dropdown --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
                       ) : (
-                        <select
-                          value={therapistInputs[sale.id] || ''}
-                          onChange={(e) => handleTherapistSave(sale.id, e.target.value)}
-                          className="w-28 px-2 py-1 border border-gray-300 rounded-md text-sm bg-white"
-                        >
-                          <option value="">Select...</option>
-                          {/* Map over this outlet's specific list */}
-                          {therapistList.map(name => (
-                            <option key={name} value={name}>{name}</option>
-                          ))}
-                        </select>
+                        <div className="flex">
+                          <input 
+                            type="text"
+                            value={therapistInputs[sale.id] || ''}
+                            onChange={(e) => handleTherapistInputChange(sale.id, e.target.value)}
+                            placeholder="Therapist"
+                            className="w-24 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
+                          />
+                          <button
+                            onClick={() => handleTherapistSave(sale.id, therapistInputs[sale.id])}
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-sm hover:bg-gray-300"
+                          >
+                            Save
+                          </button>
+                        </div>
                       )}
                     </td>
 
@@ -254,7 +280,7 @@ export default function OutletSalesPage() {
                             value={roomInputs[sale.id] || ''}
                             onChange={(e) => handleRoomInputChange(sale.id, e.target.value)}
                             placeholder="Room name"
-                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-sm"
+                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
                           />
                           <button
                             onClick={() => handleRoomSave(sale.id, roomInputs[sale.id])}

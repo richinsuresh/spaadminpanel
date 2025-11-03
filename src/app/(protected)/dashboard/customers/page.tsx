@@ -1,11 +1,12 @@
-// src/app/(protected)/dashboard/customers/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { OUTLETS } from '@/lib/outlet';
 
-type Customer = {
+// --- Types (no change) ---
+type CustomerVisit = {
   id: string;
   name: string;
   mobile: string;
@@ -17,39 +18,82 @@ type Customer = {
   total_package_hours?: number;
   outlet: string;
   amount_paid?: number;
+  therapist_name?: string;
+  check_in_time: string | null;
+  check_out_time: string | null;
 };
 
+type PackageInfo = {
+  id: string;
+  name: string;
+  mobile: string;
+  package_amount: number;
+  total_hours: number;
+  used_hours: number;
+  remaining_hours: number;
+  start_date: string;
+  expiry_date: string;
+  status: 'active' | 'expired';
+  outlet: string;
+};
+
+type CustomerDetails = {
+  name: string;
+  mobile: string;
+  packageInfo: PackageInfo | null;
+  visits: CustomerVisit[];
+};
+
+// --- Helper Functions (no change) ---
+const formatCurrency = (amountInPaise: number) =>
+  new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amountInPaise / 100);
+
+const formatDuration = (hours: number | null) => {
+  if (!hours || hours === 0) return '—';
+  if (hours < 1) return `${Math.round(hours * 60)} mins`;
+  
+  const h = Math.floor(hours);
+  const m = Math.round((hours % 1) * 60);
+  
+  if (m === 0) return `${h} hr${h > 1 ? 's' : ''}`;
+  if (h === 0) return `${m} mins`;
+  return `${h}hr ${m}m`;
+};
+
+const formatDate = (dateString: string | null) => {
+  if (!dateString) return '—';
+  return new Date(dateString).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+
 export default function CustomersPage() {
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customers, setCustomers] = useState<CustomerVisit[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [outletFilter, setOutletFilter] = useState('all');
 
-  const outlets = [
-    'all',
-    'Indiranagar',
-    'Kaggadaspura',
-    'Kalyan Nagar',
-    'Cunningham Road',
-    'HSR Layout',
-    'Malleswaram',
-    'Marathahalli'
-  ];
+  const [modalLoading, setModalLoading] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetails | null>(null);
+  const [modalError, setModalError] = useState('');
 
-  useEffect(() => {
-    fetchCustomers();
-    
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchCustomers, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const outlets = ['all', ...OUTLETS.map(o => o.name)];
 
   const fetchCustomers = async () => {
     try {
       setLoading(true);
+      // The query still selects 'took_package', which is fine. We just won't display it.
       const { data, error } = await supabase
         .from('customers')
-        .select('*')
+        .select('id, name, mobile, date, treatment, session_hours, took_package, outlet, amount_paid, therapist_name, check_in_time, check_out_time')
         .order('date', { ascending: false });
       
       if (error) throw error;
@@ -61,6 +105,54 @@ export default function CustomersPage() {
     }
   };
 
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  // --- handleCustomerClick (no change) ---
+  const handleCustomerClick = async (customer: CustomerVisit) => {
+    setSelectedCustomer({ name: customer.name, mobile: customer.mobile, packageInfo: null, visits: [] });
+    setModalLoading(true);
+    setModalError('');
+
+    try {
+      const [pkgRes, visitsRes] = await Promise.all([
+        supabase
+          .from('packages')
+          .select('*')
+          .eq('mobile', customer.mobile)
+          .maybeSingle(),
+        supabase
+          .from('customers')
+          .select('*')
+          .eq('mobile', customer.mobile)
+          .order('date', { ascending: false })
+          .limit(3)
+      ]);
+
+      if (pkgRes.error && pkgRes.error.code !== 'PGRST116') {
+        throw new Error(`Package Error: ${pkgRes.error.message}`);
+      }
+      if (visitsRes.error) {
+        throw new Error(`Visits Error: ${visitsRes.error.message}`);
+      }
+
+      setSelectedCustomer({
+        name: customer.name,
+        mobile: customer.mobile,
+        packageInfo: pkgRes.data || null,
+        visits: visitsRes.data || []
+      });
+
+    } catch (err: any) {
+      console.error('Error fetching customer details:', err);
+      setModalError(err.message);
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  // --- filteredCustomers & uniqueCustomers (no change) ---
   const filteredCustomers = customers.filter(customer => {
     const matchesSearch = !searchTerm || 
       customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -70,17 +162,13 @@ export default function CustomersPage() {
     
     return matchesSearch && matchesOutlet;
   });
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      minimumFractionDigits: 0
-    }).format(amount);
-  };
+  
+  const uniqueCustomers = Array.from(new Map(filteredCustomers.map(c => [c.mobile, c])).values())
+    .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   return (
     <div>
+      {/* --- Page Header (no change) --- */}
       <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start mb-8 gap-4">
         <h1 className="text-2xl font-bold text-gray-800">All Customers</h1>
         
@@ -101,7 +189,7 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* --- Filters (no change) --- */}
       <div className="bg-white p-6 rounded-xl shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
@@ -139,14 +227,14 @@ export default function CustomersPage() {
       </div>
 
       <div className="mb-4 text-sm text-gray-600">
-        Showing {filteredCustomers.length} customers
+        Showing {uniqueCustomers.length} unique customers. Click a row for details.
       </div>
 
       {loading ? (
         <div className="bg-white shadow rounded-lg p-8 text-center">
           Loading customers...
         </div>
-      ) : filteredCustomers.length === 0 ? (
+      ) : uniqueCustomers.length === 0 ? (
         <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">
           No customers match your filters.
         </div>
@@ -158,15 +246,18 @@ export default function CustomersPage() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Treatment</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outlet</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Outlet</th>
+                  {/* --- FIX: Removed the "Had Package" header --- */}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredCustomers.map((customer) => (
-                  <tr key={customer.id} className="hover:bg-gray-50">
+                {uniqueCustomers.map((customer) => (
+                  <tr 
+                    key={customer.id} 
+                    onClick={() => handleCustomerClick(customer)}
+                    className="hover:bg-gray-50 cursor-pointer"
+                  >
                     <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
                       {customer.name}
                     </td>
@@ -174,29 +265,117 @@ export default function CustomersPage() {
                       {customer.mobile}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(customer.date).toLocaleDateString()}
+                      {formatDate(customer.date)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {customer.treatment}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {customer.took_package ? (
-                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                          Yes
-                        </span>
-                      ) : (
-                        <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                          No
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-rowrap text-sm text-gray-500">
                       {customer.outlet}
                     </td>
+                    {/* --- FIX: Removed the "Had Package" table cell --- */}
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* --- RENDER THE MODAL (no change) --- */}
+      {selectedCustomer && (
+        <div 
+          className="fixed inset-0 z-40 flex items-center justify-center p-4"
+          onClick={() => setSelectedCustomer(null)} // Close on overlay click
+        >
+          <div 
+            className="bg-white rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()} // Prevent modal from closing on inner click
+          >
+            {/* Modal Header */}
+            <div className="p-4 border-b sticky top-0 bg-white z-10">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">{selectedCustomer.name}</h2>
+                  <p className="text-sm text-gray-600">{selectedCustomer.mobile}</p>
+                </div>
+                <button 
+                  onClick={() => setSelectedCustomer(null)} 
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            {modalLoading ? (
+              <div className="p-6 text-center text-gray-500">Loading details...</div>
+            ) : modalError ? (
+              <div className="p-6 text-center text-red-600">{modalError}</div>
+            ) : (
+              <div className="p-6 space-y-6">
+                
+                {/* Package Details Section */}
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Package Details</h3>
+                  {selectedCustomer.packageInfo ? (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
+                      <dt className="text-sm font-medium text-gray-500">Package Price</dt>
+                      <dd className="text-sm text-gray-900 font-medium">{formatCurrency(selectedCustomer.packageInfo.package_amount)}</dd>
+                      
+                      <dt className="text-sm font-medium text-gray-500">Status</dt>
+                      <dd className="text-sm text-gray-900">
+                        <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                          selectedCustomer.packageInfo.status === 'active' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {selectedCustomer.packageInfo.status}
+                        </span>
+                      </dd>
+
+                      <dt className="text-sm font-medium text-gray-500">Total Hours</dt>
+                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.total_hours} hrs</dd>
+
+                      <dt className="text-sm font-medium text-gray-500">Used Hours</dt>
+                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.used_hours.toFixed(1)} hrs</dd>
+
+                      <dt className="text-sm font-medium text-gray-500">Remaining</dt>
+                      <dd className="text-sm font-bold text-blue-600">{selectedCustomer.packageInfo.remaining_hours.toFixed(1)} hrs</dd>
+
+                      <dt className="text-sm font-medium text-gray-500">Expires On</dt>
+                      <dd className="text-sm text-gray-900">{formatDate(selectedCustomer.packageInfo.expiry_date)}</dd>
+                    </dl>
+                  ) : (
+                    <p className="text-sm text-gray-500">No active package found for this mobile number.</p>
+                  )}
+                </div>
+
+                {/* Visit History Section */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Last 3 Visits</h3>
+                  {selectedCustomer.visits.length === 0 ? (
+                    <p className="text-sm text-gray-500">No visit history found.</p>
+                  ) : (
+                    <ul className="divide-y divide-gray-200">
+                      {selectedCustomer.visits.map(visit => (
+                        <li key={visit.id} className="py-3">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-sm font-medium text-gray-900">{visit.treatment}</span>
+                            <span className="text-sm text-gray-500">{formatDate(visit.date)}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-sm text-gray-600">
+                            <span>{visit.outlet}</span>
+                            <span className="flex gap-4">
+                              <span>Therapist: {visit.therapist_name || 'N/A'}</span>
+                              <span>Duration: {formatDuration(visit.session_hours)}</span>
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
