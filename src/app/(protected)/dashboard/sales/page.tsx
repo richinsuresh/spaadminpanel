@@ -88,8 +88,7 @@ export default function AdminSalesPage() {
       let query = supabase
         .from('customers')
         .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by')
-        // --- REMOVED: .not('check_out_time', 'is', null) ---
-        // Now it fetches ALL sales, including live ones
+        // Fetches ALL sales, including live ones
         .gte('date', startDate)
         .lte('date', endDate)
         .order('check_in_time', { ascending: false, nullsFirst: false }); // Show live check-ins first
@@ -128,16 +127,12 @@ export default function AdminSalesPage() {
   
   // --- ADDED: Real-time Supabase subscription ---
   useEffect(() => {
-    // This function will be called by the channel
     const handleUpdate = (payload: any) => {
       console.log('Change detected!', payload);
-      // Re-fetch all sales to get the new/updated row
-      fetchSales();
+      fetchSales(); // Re-fetch all sales to get the new/updated row
     };
 
-    // Base filter: only listen for changes within the selected date range
     let channelFilter = `date=gte.${startDate}&date=lte.${endDate}`;
-    // If a specific outlet is chosen, add it to the filter
     if (selectedOutletId !== 'all') {
       channelFilter += `&outlet_id=eq.${selectedOutletId}`;
     }
@@ -155,7 +150,6 @@ export default function AdminSalesPage() {
       )
       .subscribe();
       
-    // Cleanup function
     return () => {
       supabase.removeChannel(channel);
     };
@@ -180,12 +174,9 @@ export default function AdminSalesPage() {
   const handleExport = async () => {
     setIsExporting(true);
     try {
-      // 1. Build the query based on filters
       let query = supabase
         .from('customers')
         .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room') // Added room
-        // --- MODIFIED: Export *all* data, not just completed
-        // .not('check_out_time', 'is', null) 
         .gte('date', startDate)
         .lte('date', endDate)
         .order('date', { ascending: false });
@@ -194,7 +185,6 @@ export default function AdminSalesPage() {
         query = query.eq('outlet_id', selectedOutletId);
       }
 
-      // 2. Fetch ALL data for the export
       const { data, error } = await query;
       if (error) throw error;
       if (!data || data.length === 0) {
@@ -203,7 +193,6 @@ export default function AdminSalesPage() {
         return;
       }
 
-      // 3. Format data for Excel
       const dataToExport = data.map(sale => ({
         'Date': new Date(sale.date).toLocaleDateString('en-IN'),
         'Outlet': sale.outlet_name,
@@ -219,11 +208,9 @@ export default function AdminSalesPage() {
         'Check-out Time': formatTime(sale.check_out_time),
       }));
 
-      // 4. Generate dynamic file name
       const outletName = selectedOutletId === 'all' ? 'AllOutlets' : OUTLETS.find(o => o.id === selectedOutletId)?.name || 'Outlet';
       const fileName = `Sales_${outletName}_${startDate}_to_${endDate}.xlsx`;
 
-      // 5. Call the export function
       exportToExcel(dataToExport, fileName);
 
     } catch (err: any) {
@@ -234,14 +221,14 @@ export default function AdminSalesPage() {
     }
   };
 
-  // --- ADDED: Handlers for live updates ---
+  // --- Handlers for live updates ---
   const handleRoomInputChange = (id: string, room: string) => {
     setRoomInputs(prev => ({ ...prev, [id]: room }));
   };
   const handleRoomSave = async (id: string, room: string) => {
     if (!room) return;
     await supabase.from('customers').update({ room }).eq('id', id);
-    // No need to call fetchSales() here, the channel will catch the update
+    fetchSales(); // Refresh data
   };
   const handleTherapistInputChange = (id: string, name: string) => {
     setTherapistInputs(prev => ({ ...prev, [id]: name }));
@@ -249,6 +236,7 @@ export default function AdminSalesPage() {
   const handleTherapistSave = async (id: string, therapistName: string) => {
     if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
+    fetchSales(); // Refresh data
   };
   const handleCheckOut = async (id: string) => {
     if (!confirm('Are you sure you want to check out this client?')) return;
@@ -256,13 +244,14 @@ export default function AdminSalesPage() {
       .from('customers')
       .update({ check_out_time: new Date().toISOString() })
       .eq('id', id);
+    fetchSales(); // Refresh data
   };
   
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
-      {/* --- Filter Bar (no change) --- */}
+      {/* Filter Bar */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">Outlet</label>
@@ -314,6 +303,7 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
+      {/* Total Sales Card */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales (Filtered)</h3>
         <p className="text-3xl font-bold mt-2 text-green-600">
@@ -322,7 +312,7 @@ export default function AdminSalesPage() {
         <p className="text-gray-500 text-sm">{completedSalesCount} completed transaction(s)</p>
       </div>
 
-      {/* --- MODIFIED: Table with live check-out columns --- */}
+      {/* Sales Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -364,7 +354,6 @@ export default function AdminSalesPage() {
                       {formatTime(sale.check_in_time)}
                     </td>
                     
-                    {/* --- ADDED: Live Therapist Column --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
@@ -387,7 +376,6 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* --- ADDED: Live Room Column --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
@@ -410,7 +398,6 @@ export default function AdminSalesPage() {
                       )}
                     </td>
                     
-                    {/* --- ADDED: Live Check-out Column --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{formatTime(sale.check_out_time)}</span>

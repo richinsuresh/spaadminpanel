@@ -1,9 +1,10 @@
-// src/app/(protected)/dashboard/packages/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS } from '@/lib/outlet'; // <-- 1. IMPORT new outlet list
+import { OUTLETS } from '@/lib/outlet';
+// --- NEW: Import the export function ---
+import { exportToExcel } from '@/lib/exportToExcel';
 
 type PackageCustomer = {
   id: string;
@@ -13,16 +14,13 @@ type PackageCustomer = {
   total_hours: number;
   used_hours: number;
   remaining_hours: number;
-  // --- FIX: Removed '?' to make these required (null is still allowed) ---
   start_date: string | null;
   expiry_date: string | null; 
-  // --- END OF FIX ---
   status: 'active' | 'expired' | string;
   outlet: string;
   created_at?: string | null;
 };
 
-// --- 2. ADDED formatDate HELPER ---
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
   // Formats the date as DD/MM/YYYY
@@ -39,19 +37,18 @@ export default function PackagesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
   const [loading, setLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false); // For export button
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // --- 3. USE new outlet list for filter ---
   const outlets = ['all', ...OUTLETS.map(o => o.name)];
-  
   const [outletFilter, setOutletFilter] = useState('all');
 
+  // This function ensures data from DB is clean
   const normalizeRow = (row: any): PackageCustomer => {
     const safeNumber = (v: any) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
     };
-
     return {
       id: String(row.id ?? row.mobile ?? Math.random().toString(36).slice(2, 9)),
       name: row.name ?? '—',
@@ -78,6 +75,7 @@ export default function PackagesPage() {
         .order('created_at', { ascending: false });
 
       if (error) {
+        // Fallback query if ordering fails (e.g., on an empty table)
         console.warn('Fetch packages ordering error (retrying without order):', error.message);
         const { data: fallbackData, error: fallbackErr } = await supabase
           .from('packages')
@@ -104,7 +102,7 @@ export default function PackagesPage() {
     fetchPackages();
   }, [fetchPackages]);
 
-  // --- 4. ADDED Real-time listener ---
+  // Real-time listener
   useEffect(() => {
     const channel = supabase
       .channel('packages-admin')
@@ -112,7 +110,7 @@ export default function PackagesPage() {
         { event: '*', schema: 'public', table: 'packages' },
         (payload) => {
           console.log('Package change detected, refreshing...', payload);
-          fetchPackages();
+          fetchPackages(); // Re-fetch data on any change
         }
       )
       .subscribe();
@@ -143,9 +141,33 @@ export default function PackagesPage() {
     setFilteredPackages(result);
   }, [searchTerm, statusFilter, outletFilter, packages]);
 
-  // --- 5. FIXED formatCurrency (divides by 100) ---
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount / 100);
+
+  // --- NEW: Export Handler ---
+  const handleExport = () => {
+    setIsExporting(true);
+    const dataToExport = filteredPackages.map(p => ({
+      'Name': p.name,
+      'Mobile': p.mobile,
+      'Outlet': p.outlet,
+      'Status': p.status,
+      'Remaining Hours': p.remaining_hours.toFixed(1),
+      'Total Hours': p.total_hours,
+      'Used Hours': p.used_hours.toFixed(1),
+      'Package Amount': p.package_amount / 100, // Convert from paise
+      'Expiry Date': formatDate(p.expiry_date),
+    }));
+
+    if (dataToExport.length === 0) {
+      alert('No data to export for the current filters.');
+      setIsExporting(false);
+      return;
+    }
+
+    exportToExcel(dataToExport, 'Package_Clients_Report.xlsx');
+    setIsExporting(false);
+  };
 
   return (
     <div>
@@ -159,6 +181,16 @@ export default function PackagesPage() {
           >
             {loading ? 'Refreshing...' : '🔄 Refresh Data'}
           </button>
+          
+          {/* --- NEW: Export Button Added --- */}
+          <button
+            onClick={handleExport}
+            disabled={loading || isExporting || filteredPackages.length === 0}
+            className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
+          >
+            {isExporting ? 'Exporting...' : 'Export to Excel'}
+          </button>
+
           <div className="relative">
             <input
               type="text"
@@ -242,7 +274,6 @@ export default function PackagesPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Hours</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Used Hours</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Remaining</th>
-                  {/* --- 6. Expiry Date Column --- */}
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiry Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                 </tr>
@@ -267,9 +298,7 @@ export default function PackagesPage() {
                         {customer.remaining_hours.toFixed(1)} hrs
                       </span>
                     </td>
-                    {/* --- 7. Expiry Date Data --- */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {/* The call is now type-safe */}
                       {formatDate(customer.expiry_date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
-// --- Types (no change) ---
+// --- Types ---
 type CustomerVisit = {
   id: string;
   name: string;
@@ -13,38 +13,32 @@ type CustomerVisit = {
   date: string;
   treatment: string;
   session_hours: number;
-  took_package: boolean;
-  package_amount?: number;
-  total_package_hours?: number;
-  outlet: string;
-  amount_paid?: number;
+  outlet_name: string; // <-- FIX: Use new column
   therapist_name?: string;
-  check_in_time: string | null;
-  check_out_time: string | null;
 };
 
+// --- FIX: This type now matches the API response ---
 type PackageInfo = {
-  id: string;
+  id?: string;
   name: string;
   mobile: string;
-  package_amount: number;
-  total_hours: number;
-  used_hours: number;
-  remaining_hours: number;
-  start_date: string;
-  expiry_date: string;
+  packageAmount: number;
+  totalPackageHours: number;
+  usedPackageHours: number;
+  remainingHours: number;
+  expiryDate: string;
   status: 'active' | 'expired';
-  outlet: string;
+  outlet?: string;
 };
 
 type CustomerDetails = {
   name: string;
   mobile: string;
   packageInfo: PackageInfo | null;
-  visits: CustomerVisit[];
+  visits: CustomerVisit[]; // This will be the type from the 'customers' table
 };
 
-// --- Helper Functions (no change) ---
+// --- Helper Functions ---
 const formatCurrency = (amountInPaise: number) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -90,14 +84,14 @@ export default function CustomersPage() {
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      // The query still selects 'took_package', which is fine. We just won't display it.
+      // --- FIX: Select 'outlet_name' and removed 'took_package' ---
       const { data, error } = await supabase
         .from('customers')
-        .select('id, name, mobile, date, treatment, session_hours, took_package, outlet, amount_paid, therapist_name, check_in_time, check_out_time')
+        .select('id, name, mobile, date, treatment, session_hours, outlet_name, therapist_name, check_in_time, check_out_time')
         .order('date', { ascending: false });
       
       if (error) throw error;
-      setCustomers(data || []);
+      setCustomers(data as CustomerVisit[] || []);
     } catch (err) {
       console.error('Error fetching customers:', err);
     } finally {
@@ -109,7 +103,7 @@ export default function CustomersPage() {
     fetchCustomers();
   }, []);
 
-  // --- handleCustomerClick (no change) ---
+  // --- FIX: handleCustomerClick now uses the API for package info ---
   const handleCustomerClick = async (customer: CustomerVisit) => {
     setSelectedCustomer({ name: customer.name, mobile: customer.mobile, packageInfo: null, visits: [] });
     setModalLoading(true);
@@ -117,22 +111,19 @@ export default function CustomersPage() {
 
     try {
       const [pkgRes, visitsRes] = await Promise.all([
-        supabase
-          .from('packages')
-          .select('*')
-          .eq('mobile', customer.mobile)
-          .maybeSingle(),
+        // Use the API to get the correct *active* package
+        fetch(`/api/client-lookup?mobile=${encodeURIComponent(customer.mobile)}`),
+        // Get last 3 visits
         supabase
           .from('customers')
-          .select('*')
+          .select('id, date, treatment, outlet_name, therapist_name, session_hours')
           .eq('mobile', customer.mobile)
           .order('date', { ascending: false })
           .limit(3)
       ]);
 
-      if (pkgRes.error && pkgRes.error.code !== 'PGRST116') {
-        throw new Error(`Package Error: ${pkgRes.error.message}`);
-      }
+      const packageInfo: PackageInfo | null = await pkgRes.json();
+      
       if (visitsRes.error) {
         throw new Error(`Visits Error: ${visitsRes.error.message}`);
       }
@@ -140,8 +131,8 @@ export default function CustomersPage() {
       setSelectedCustomer({
         name: customer.name,
         mobile: customer.mobile,
-        packageInfo: pkgRes.data || null,
-        visits: visitsRes.data || []
+        packageInfo: packageInfo, // This is now the correct, active package
+        visits: visitsRes.data as CustomerVisit[] || []
       });
 
     } catch (err: any) {
@@ -152,13 +143,13 @@ export default function CustomersPage() {
     }
   };
 
-  // --- filteredCustomers & uniqueCustomers (no change) ---
   const filteredCustomers = customers.filter(customer => {
     const matchesSearch = !searchTerm || 
       customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.mobile.includes(searchTerm);
     
-    const matchesOutlet = outletFilter === 'all' || customer.outlet === outletFilter;
+    // --- FIX: Filter by 'outlet_name' ---
+    const matchesOutlet = outletFilter === 'all' || customer.outlet_name === outletFilter;
     
     return matchesSearch && matchesOutlet;
   });
@@ -168,7 +159,7 @@ export default function CustomersPage() {
 
   return (
     <div>
-      {/* --- Page Header (no change) --- */}
+      {/* Page Header */}
       <div className="flex flex-col lg:flex-row lg:justify-between lg:items-start mb-8 gap-4">
         <h1 className="text-2xl font-bold text-gray-800">All Customers</h1>
         
@@ -189,7 +180,7 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {/* --- Filters (no change) --- */}
+      {/* Filters */}
       <div className="bg-white p-6 rounded-xl shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
@@ -248,7 +239,7 @@ export default function CustomersPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Outlet</th>
-                  {/* --- FIX: Removed the "Had Package" header --- */}
+                  {/* --- FIX: Removed "Had Package" header --- */}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -267,10 +258,11 @@ export default function CustomersPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(customer.date)}
                     </td>
-                    <td className="px-6 py-4 whitespace-rowrap text-sm text-gray-500">
-                      {customer.outlet}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {/* --- FIX: Display 'outlet_name' --- */}
+                      {customer.outlet_name}
                     </td>
-                    {/* --- FIX: Removed the "Had Package" table cell --- */}
+                    {/* --- FIX: Removed "Had Package" cell --- */}
                   </tr>
                 ))}
               </tbody>
@@ -279,10 +271,10 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {/* --- RENDER THE MODAL (no change) --- */}
+      {/* --- RENDER THE MODAL --- */}
       {selectedCustomer && (
         <div 
-          className="fixed inset-0 z-40 flex items-center justify-center p-4"
+          className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/30" // Added background
           onClick={() => setSelectedCustomer(null)} // Close on overlay click
         >
           <div 
@@ -313,13 +305,13 @@ export default function CustomersPage() {
             ) : (
               <div className="p-6 space-y-6">
                 
-                {/* Package Details Section */}
+                {/* --- FIX: Package Details Section now uses camelCase --- */}
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <h3 className="text-lg font-semibold text-gray-800 mb-3">Package Details</h3>
                   {selectedCustomer.packageInfo ? (
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
                       <dt className="text-sm font-medium text-gray-500">Package Price</dt>
-                      <dd className="text-sm text-gray-900 font-medium">{formatCurrency(selectedCustomer.packageInfo.package_amount)}</dd>
+                      <dd className="text-sm text-gray-900 font-medium">{formatCurrency(selectedCustomer.packageInfo.packageAmount)}</dd>
                       
                       <dt className="text-sm font-medium text-gray-500">Status</dt>
                       <dd className="text-sm text-gray-900">
@@ -333,16 +325,16 @@ export default function CustomersPage() {
                       </dd>
 
                       <dt className="text-sm font-medium text-gray-500">Total Hours</dt>
-                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.total_hours} hrs</dd>
+                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.totalPackageHours} hrs</dd>
 
                       <dt className="text-sm font-medium text-gray-500">Used Hours</dt>
-                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.used_hours.toFixed(1)} hrs</dd>
+                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.usedPackageHours.toFixed(1)} hrs</dd>
 
                       <dt className="text-sm font-medium text-gray-500">Remaining</dt>
-                      <dd className="text-sm font-bold text-blue-600">{selectedCustomer.packageInfo.remaining_hours.toFixed(1)} hrs</dd>
+                      <dd className="text-sm font-bold text-blue-600">{selectedCustomer.packageInfo.remainingHours.toFixed(1)} hrs</dd>
 
                       <dt className="text-sm font-medium text-gray-500">Expires On</dt>
-                      <dd className="text-sm text-gray-900">{formatDate(selectedCustomer.packageInfo.expiry_date)}</dd>
+                      <dd className="text-sm text-gray-900">{formatDate(selectedCustomer.packageInfo.expiryDate)}</dd>
                     </dl>
                   ) : (
                     <p className="text-sm text-gray-500">No active package found for this mobile number.</p>
@@ -363,7 +355,8 @@ export default function CustomersPage() {
                             <span className="text-sm text-gray-500">{formatDate(visit.date)}</span>
                           </div>
                           <div className="flex justify-between items-center text-sm text-gray-600">
-                            <span>{visit.outlet}</span>
+                            {/* --- FIX: Use 'outlet_name' --- */}
+                            <span>{visit.outlet_name}</span>
                             <span className="flex gap-4">
                               <span>Therapist: {visit.therapist_name || 'N/A'}</span>
                               <span>Duration: {formatDuration(visit.session_hours)}</span>
