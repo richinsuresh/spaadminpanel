@@ -25,16 +25,15 @@ export default function DashboardLayout({
   const getLinkClass = (href: string) => {
     const isActive = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
     
-    // --- UPDATED THEME ---
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
         isActive
-          ? 'bg-red-900/50 text-white border-r-4 border-red-500' // Active link
-          : 'text-gray-400 hover:bg-gray-800 hover:text-white' // Inactive link
+          ? 'bg-red-900/50 text-white border-r-4 border-red-500'
+          : 'text-gray-400 hover:bg-gray-800 hover:text-white'
       }`;
   };
 
   return (
-    // --- UPDATED THEME: Changed background to light gray ---
+    // Main background is light gray
     <div className="flex min-h-screen bg-gray-100">
       
       {isSidebarOpen && (
@@ -44,17 +43,16 @@ export default function DashboardLayout({
         ></div>
       )}
 
-      {/* --- UPDATED THEME: Sidebar is now dark --- */}
+      {/* Dark Sidebar */}
       <div 
-        className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl transform ${
+        className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl flex flex-col transform ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
         } transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:inset-0`}
       >
         <div className="p-6 border-b border-gray-700">
-          {/* --- UPDATED THEME: Title is now red --- */}
           <h1 className="text-xl font-bold text-red-600">Admin Panel</h1>
         </div>
-        <nav className="mt-6">
+        <nav className="flex-1 mt-6">
           {navItems.map((item) => (
             <Link
               key={item.href}
@@ -69,10 +67,10 @@ export default function DashboardLayout({
         </nav>
       </div>
 
-      {/* Main Content */}
+      {/* Main Content Wrapper */}
       <div className="flex-1 flex flex-col md:ml-64">
         
-        {/* --- UPDATED THEME: Mobile header is dark --- */}
+        {/* Mobile Header */}
         <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-gray-900 p-4 shadow-sm">
           <button 
             onClick={() => setIsSidebarOpen(true)}
@@ -87,12 +85,16 @@ export default function DashboardLayout({
           <div></div> {/* Spacer */}
         </div>
         
-        {/* --- UPDATED THEME: Padding increased --- */}
-        <main className="flex-1 p-6 md:p-10">
-          <div className="max-w-7xl mx-auto">
+        {/* --- THIS IS THE FIX --- */}
+        {/* <main> is now white and sits flush against the sidebar (no gap) */}
+        <main className="flex-1 bg-white">
+          {/* Padding is moved to this inner <div> */}
+          <div className="max-w-7xl mx-auto p-6 md:p-10">
             {children}
           </div>
         </main>
+        {/* --- END OF FIX --- */}
+
       </div>
     </div>
   );
