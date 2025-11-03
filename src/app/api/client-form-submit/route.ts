@@ -1,4 +1,3 @@
-// --- FIX: Import the 'supabaseServer' (service role) client ---
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -40,9 +39,12 @@ export async function POST(req: NextRequest) {
 
     // --- CASE A: CLIENT BOUGHT A NEW PACKAGE (via Admin Form) ---
     if (payload.tookPackage) {
-      const expiryDate = new Date();
+      
+      // --- FIX: Calculate expiry date based on 'packageValidity' from form ---
       const validityMonths = parseInt(payload.packageValidity || '3', 10);
+      const expiryDate = new Date(payload.date); // Start from the date of purchase
       expiryDate.setMonth(expiryDate.getMonth() + validityMonths);
+      // --- END OF EXPIRY FIX ---
 
       const { error: newPackageError } = await supabase
         .from('packages')
@@ -51,9 +53,13 @@ export async function POST(req: NextRequest) {
           mobile: payload.mobile,
           total_hours: payload.totalPackageHours,
           remaining_hours: payload.totalPackageHours,
+          
+          // --- FIX: Add missing 'start_date' ---
+          start_date: payload.date, 
+          
           expiry_date: expiryDate.toISOString(),
           status: 'active',
-          outlet: payload.outlet, // Correct column
+          outlet: payload.outlet, 
           sold_by: payload.packageSoldBy,
           package_amount: payload.packageAmount 
         });
