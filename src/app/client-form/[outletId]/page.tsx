@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-// --- FIX: Using useRouter for navigation ---
 import { useParams, useRouter } from 'next/navigation';
-// --- FIX: Using your project's path aliases ---
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
@@ -28,16 +26,15 @@ type ClientInfo = {
 export default function ClientCheckinForm() {
   const params = useParams();
   const outletId = params.outletId as string;
-  // --- FIX: Initializing useRouter ---
   const router = useRouter();
 
-  // --- State Declarations ---
-  // --- FIX: All state variables, including 'outlet', are defined here ---
   const [outlet, setOutlet] = useState<{ id: string; name: string } | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
+  
+  // --- STATE UPDATED: Removed package-selling fields ---
   const [formData, setFormData] = useState({
     name: '',
     treatment: '',
@@ -45,45 +42,38 @@ export default function ClientCheckinForm() {
     sessionHours: 0,
     sessionMinutes: 0,
     isPackageCustomer: false,
-    tookPackage: false,
-    packageAmount: 0,
-    totalPackageHours: 0,
+    // tookPackage: false, // REMOVED
+    // packageAmount: 0, // REMOVED
+    // totalPackageHours: 0, // REMOVED
     paymentMethod: 'cash',
-    packageSoldBy: '', // Added state for package seller
+    // packageSoldBy: '', // REMOVED
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  // --- END OF STATE DECLARATIONS ---
 
-  // --- Effects ---
-
-  // Effect 1: Load Outlet Info and Treatments
+  // --- Effects (no change) ---
   useEffect(() => {
     if (!outletId) {
       setError('Outlet ID missing in URL.');
       setLoading(false);
       return;
     }
-
     setLoading(true);
     setError('');
-
     const outletInfo = OUTLETS.find(o => o.id === outletId);
     if (!outletInfo) {
       setError('Invalid Outlet ID.');
       setLoading(false);
       return;
     }
-    setOutlet(outletInfo); // 'outlet' state is set here
-
+    setOutlet(outletInfo);
     const fetchTreatments = async () => {
       try {
         const { data, error: dbError } = await supabase
           .from('treatments')
           .select('id, name')
           .eq('outlet_id', outletId);
-
         if (dbError) throw dbError;
         setTreatments(data || []);
       } catch (err) {
@@ -95,19 +85,14 @@ export default function ClientCheckinForm() {
       }
     };
     fetchTreatments();
-
   }, [outletId]);
 
-  // Effect 2 & 3: Debounced Client Lookup
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
-
     try {
       setError('');
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
-
       if (!res.ok) {
-        console.warn(`Client lookup for ${mobile} failed or not found.`);
         setClientInfo(null);
         setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
         return;
@@ -147,40 +132,26 @@ export default function ClientCheckinForm() {
     };
   }, [mobile, performClientLookup]);
 
-  // --- Event Handlers ---
-
+  // --- handleChange Simplified ---
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
-
     setError('');
-
     setFormData(prev => {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
         updatedValue = checked ?? false;
-      // --- FIX: Corrected typo from '==='* to '===' ---
       } else if (type === 'number') {
         updatedValue = value === '' ? 0 : Number(value);
       } else {
         updatedValue = value;
       }
-
       const updated = { ...prev, [name]: updatedValue };
-
-      if (name === 'isPackageCustomer' && checked) {
-        updated.tookPackage = false;
-      }
-      if (name === 'tookPackage' && checked) {
-        updated.isPackageCustomer = false;
-      }
-
       return updated;
     });
   };
 
-  // --- Helper Functions ---
-
+  // --- Helper Functions (Simplified) ---
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
@@ -190,18 +161,14 @@ export default function ClientCheckinForm() {
 
   const getFinalAmountInPaise = useCallback(() => {
     if (formData.isPackageCustomer) return 0;
-    if (formData.tookPackage) {
-      return (Number(formData.packageAmount) || 0) * 100;
-    }
+    // Removed tookPackage check
     return (Number(formData.amountPaid) || 0) * 100;
   }, [
     formData.isPackageCustomer, 
-    formData.tookPackage, 
-    formData.packageAmount, 
     formData.amountPaid
   ]);
 
-  // --- Form Submission Handler ---
+  // --- handleSubmit Simplified ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -235,25 +202,10 @@ export default function ClientCheckinForm() {
       setLoading(false);
       return;
     }
-    if (formData.tookPackage) {
-        if (!formData.packageAmount || formData.packageAmount <= 0) {
-           setError('Please enter a valid Package Amount for the new package.');
-           setLoading(false);
-           return;
-        }
-        if (!formData.totalPackageHours || formData.totalPackageHours <= 0) {
-            setError('Please enter valid Total Hours for the new package.');
-            setLoading(false);
-            return;
-        }
-        // --- NEW: Validation for package seller ---
-        if (!formData.packageSoldBy.trim()) {
-            setError('Please enter the name of the staff who sold the package.');
-            setLoading(false);
-            return;
-        }
-    }
-    if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
+
+    // --- REMOVED tookPackage validation block ---
+
+    if (!formData.isPackageCustomer && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setError('Please enter a valid Amount for the treatment.');
         setLoading(false);
         return;
@@ -264,30 +216,32 @@ export default function ClientCheckinForm() {
     const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
 
     try {
-      // Set check-in time ONLY for cash or package
       let checkInTime: string | null = null;
       if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
         checkInTime = new Date().toISOString();
       }
 
-      // --- UPDATED: Payload now includes packageSoldBy ---
+      // --- PAYLOAD Simplified ---
       const payload = {
           name: formData.name.trim(),
           mobile: mobile,
           date: new Date().toISOString().split('T')[0],
           treatment: treatmentName,
-          amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
+          amountPaid: formData.isPackageCustomer ? 0 : finalAmountInPaise,
           sessionHours: sessionHours,
           isPackageCustomer: formData.isPackageCustomer,
-          tookPackage: formData.tookPackage,
-          packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
-          totalPackageHours: formData.tookPackage ? Number(formData.totalPackageHours) || 0 : 0,
-          packageSoldBy: formData.tookPackage ? formData.packageSoldBy.trim() : null, // Send seller name if new package
+          
+          // --- REMOVED Fields ---
+          tookPackage: false,
+          packageAmount: 0,
+          totalPackageHours: 0,
+          packageSoldBy: null, 
+
           outlet: outlet.name,
           outlet_id: outlet.id,
           paymentMethod: effectivePaymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime // Set time if cash/package, null for UPI
+          check_in_time: checkInTime 
       };
 
       // Submit to API
@@ -306,19 +260,16 @@ export default function ClientCheckinForm() {
       if (data.paymentMethod === 'cash') {
         setSuccess('Registration successful! Redirecting...');
         setTimeout(() => {
-          // --- FIX: Use router.push ---
-          router.push('/client-cash-success');
+          router.push(`/client-cash-success?outletId=${outletId}`);
         }, 1500);
       } 
       // Handle API response (Package)
       else if (data.paymentMethod === 'package') {
         setSuccess('Success! Session using package is registered.');
         setMobile('');
-        // --- UPDATED: Reset packageSoldBy field ---
         setFormData({
           name: '', treatment: '', amountPaid: 0, sessionHours: 0, sessionMinutes: 0,
-          isPackageCustomer: false, tookPackage: false, packageAmount: 0,
-          totalPackageHours: 0, paymentMethod: 'cash', packageSoldBy: '',
+          isPackageCustomer: false, paymentMethod: 'cash',
         });
         setClientInfo(null);
         setLoading(false); 
@@ -328,7 +279,6 @@ export default function ClientCheckinForm() {
         setSuccess('Registration complete. Redirecting to payment QR...');
         const amountInRupees = data.finalAmountInPaise / 100;
         
-        // --- FIX: Use router.push ---
         setTimeout(() => {
           router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}`);
         }, 1500);
@@ -345,11 +295,11 @@ export default function ClientCheckinForm() {
   };
 
   // --- Render Logic ---
-  const showAmountField = !formData.isPackageCustomer && !formData.tookPackage;
-  const showPackageFields = formData.tookPackage;
+  const showAmountField = !formData.isPackageCustomer;
+  // --- REMOVED showPackageFields ---
   const isSubmitDisabled = loading;
 
-  // Initial loading state
+  // --- Initial loading/error states (no change) ---
   if (loading && !outlet) {
       return (
         <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -357,8 +307,6 @@ export default function ClientCheckinForm() {
         </div>
       );
   }
-
-  // Initial error state
   if (error && !outlet && !success) {
       return (
           <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -374,21 +322,14 @@ export default function ClientCheckinForm() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
       <div className="max-w-lg w-full bg-white rounded-2xl shadow-xl p-8">
-        {/*
-          ---
-          FIX: The 'outlet' variable is defined in the state (line 42)
-          and set in the useEffect hook (line 81).
-          It is definitely in scope here.
-          ---
-        */}
         <h1 className="text-2xl font-bold text-black text-center mb-2">Welcome to {outlet?.name || 'Your Spa'}</h1>
-        <p className="text-center text-black mb-6">Client Check-in / New Registration</p>
+        <p className="text-center text-black mb-6">Client Check-in</p>
 
         {error && !success && <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200 text-sm">{error}</div>}
         {success && <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg border border-green-200 text-sm">{success}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Section 1: Client Info */}
+          {/* Section 1: Client Info (no change) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="mobile" className="block text-sm font-medium text-black mb-1">Phone Number *</label>
@@ -420,7 +361,7 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* Package Info Display */}
+          {/* Package Info Display (no change) */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-center text-green-800">
               <strong>Active package found.</strong>
@@ -428,11 +369,11 @@ export default function ClientCheckinForm() {
           )}
            {clientInfo && clientInfo.status !== 'active' && (
             <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-center text-yellow-800">
-              Package found but it's expired or has no hours left.
+              No active package found.
             </div>
           )}
 
-          {/* Section 2: Service & Duration */}
+          {/* Section 2: Service & Duration (no change) */}
           <div>
             <label htmlFor="treatment" className="block text-sm font-medium text-black mb-1">Select Treatment *</label>
             <select
@@ -484,8 +425,7 @@ export default function ClientCheckinForm() {
              {formData.isPackageCustomer && getSessionDuration() <=0 && <p className="text-xs text-red-500 mt-1">Duration required when using package.</p>}
           </div>
 
-
-          {/* Section 3: Package Options */}
+          {/* --- Section 3: Package Options (Simplified) --- */}
           <div className="pt-4 border-t border-gray-200 space-y-2">
              <span className="block text-sm font-medium text-black mb-1">Package Status:</span>
             <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-50">
@@ -501,19 +441,7 @@ export default function ClientCheckinForm() {
                 Use existing package credits
               </span>
             </label>
-            <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-50">
-              <input
-                type="checkbox"
-                name="tookPackage"
-                checked={formData.tookPackage}
-                onChange={handleChange}
-                className="h-4 w-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500 focus:ring-offset-0 disabled:opacity-50"
-                disabled={loading || (!!clientInfo && clientInfo.status === 'active')}
-              />
-              <span className={`ml-2 text-sm ${(!!clientInfo && clientInfo.status === 'active') ? 'text-gray-500 cursor-not-allowed' : 'text-black'}`}>
-                Purchase a new package today
-              </span>
-            </label>
+            {/* --- REMOVED "Purchase a new package" checkbox --- */}
           </div>
 
           {/* Section 4: Conditional Price Fields */}
@@ -531,62 +459,12 @@ export default function ClientCheckinForm() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 text-sm disabled:bg-gray-100 placeholder:text-gray-500 text-black"
                 placeholder="Enter amount (e.g., 500)"
                 disabled={loading}
-                required={!formData.isPackageCustomer && !formData.tookPackage}
+                required={!formData.isPackageCustomer} // Simplified logic
               />
             </div>
           )}
 
-          {showPackageFields && (
-            <div className="p-4 bg-purple-50 rounded-lg border border-purple-100 space-y-3">
-              <h3 className="text-sm font-semibold text-purple-800">New Package Details</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="packageAmount" className="block text-xs font-medium text-black mb-1">Amount (₹) *</label>
-                  <input
-                    id="packageAmount"
-                    name="packageAmount"
-                    type="number" min="0" step="100"
-                    value={formData.packageAmount || ''}
-                    onChange={handleChange}
-                    required={formData.tookPackage}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
-                    disabled={loading}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="totalPackageHours" className="block text-xs font-medium text-black mb-1">Total Hours *</label>
-                  <input
-                    id="totalPackageHours"
-                    name="totalPackageHours"
-                    type="number" min="0.5" step="0.5"
-                    value={formData.totalPackageHours || ''}
-                    onChange={handleChange}
-                    required={formData.tookPackage}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
-                    disabled={loading}
-                  />
-                </div>
-              </div>
-
-              {/* --- NEW: Package Sold By Input --- */}
-              <div className="pt-2">
-                <label htmlFor="packageSoldBy" className="block text-xs font-medium text-black mb-1">Package Sold By *</label>
-                <input
-                  id="packageSoldBy"
-                  name="packageSoldBy"
-                  type="text"
-                  placeholder="Staff name"
-                  value={formData.packageSoldBy}
-                  onChange={handleChange}
-                  required={formData.tookPackage}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 text-black"
-                  disabled={loading}
-                />
-              </div>
-              {/* --- END OF NEW INPUT --- */}
-
-            </div>
-          )}
+          {/* --- REMOVED showPackageFields block --- */}
 
           {/* Section 5: Payment Method */}
           {!formData.isPackageCustomer && (

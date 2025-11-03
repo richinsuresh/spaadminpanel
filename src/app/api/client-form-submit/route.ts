@@ -5,8 +5,8 @@ export async function POST(req: NextRequest) {
   try {
     const payload = await req.json();
 
-    // --- 1. INSERT THE CLIENT SESSION (this happens for all types) ---
-    // This logs the individual visit/session to the 'customers' table
+    // --- 1. INSERT THE CLIENT SESSION (to 'customers' table) ---
+    // This part is simplified, no new package fields
     const { data: sessionData, error: sessionError } = await supabase
       .from('customers')
       .insert({
@@ -14,21 +14,21 @@ export async function POST(req: NextRequest) {
         mobile: payload.mobile,
         date: payload.date,
         treatment: payload.treatment,
-        amount_paid: payload.amountPaid, // This is 0 for package customers
+        amount_paid: payload.amountPaid,
         session_hours: payload.sessionHours,
         
         // Package tracking fields
         is_package_customer: payload.isPackageCustomer,
-        took_package: payload.tookPackage,
-        package_amount: payload.packageAmount,
-        total_package_hours: payload.totalPackageHours,
-        package_sold_by: payload.packageSoldBy,
+        took_package: false, // Hardcoded to false
+        package_amount: 0,
+        total_package_hours: 0,
+        package_sold_by: null,
         
         // Outlet and payment fields
         outlet_id: payload.outlet_id,
         outlet_name: payload.outlet, 
         payment_method: payload.paymentMethod,
-        check_in_time: payload.check_in_time, // null for UPI, set for cash/package
+        check_in_time: payload.check_in_time,
       })
       .select('id')
       .single();
@@ -42,42 +42,10 @@ export async function POST(req: NextRequest) {
 
     // --- 2. HANDLE PACKAGE LOGIC ---
 
-    // --- CASE A: CLIENT BOUGHT A NEW PACKAGE ---
-    if (payload.tookPackage) {
-      // Set expiry date (e.g., 1 year from now)
-      const expiryDate = new Date();
-      expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-
-      const { error: newPackageError } = await supabase
-        .from('packages')
-        .insert({
-          // --- FIX 1: Use 'name' instead of 'client_name' ---
-          name: payload.name,
-          
-          mobile: payload.mobile,
-          total_hours: payload.totalPackageHours,
-          remaining_hours: payload.totalPackageHours, // Starts full
-          expiry_date: expiryDate.toISOString(),
-          status: 'active',
-          
-          // --- FIX 2: Use 'outlet' (for the name) and also add 'outlet_id' ---
-          // This ensures we match the existing 'outlet' column your pages use
-          // and also store the ID for future use.
-          outlet: payload.outlet, 
-          outlet_id: payload.outlet_id, 
-          
-          sold_by: payload.packageSoldBy,
-        });
-      
-      if (newPackageError) {
-        console.error('Supabase new package error:', newPackageError);
-        // This will now throw the specific error (e.g., if 'outlet' column is missing)
-        throw new Error(`Error creating new package: ${newPackageError.message}`);
-      }
-    }
+    // --- CASE A: REMOVED (No longer creating packages here) ---
     
     // --- CASE B: CLIENT USED AN EXISTING PACKAGE ---
-    else if (payload.isPackageCustomer) {
+    if (payload.isPackageCustomer) {
       const hoursToDeduct = payload.sessionHours;
 
       if (!hoursToDeduct || hoursToDeduct <= 0) {
@@ -90,19 +58,17 @@ export async function POST(req: NextRequest) {
         .select('id, remaining_hours')
         .eq('mobile', payload.mobile)
         .eq('status', 'active')
-        .gt('remaining_hours', 0) // Find one with hours left
-        .order('created_at', { ascending: true }) // Use the oldest package first
+        .gt('remaining_hours', 0) 
+        .order('created_at', { ascending: true }) 
         .limit(1)
         .single();
 
       if (findError || !activePackage) {
-        // This error is shown to the user in the form
-        throw new Error('No active package found for this client. Please sell them a new package.');
+        throw new Error('No active package found for this client.');
       }
 
       // Calculate new hours and status
-      // Supabase returns numeric as string, so we must cast
-      const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
+      const currentRemaining = parseFloat(activePackage.remaining_hours as any || '0');
       const newRemainingHours = currentRemaining - hoursToDeduct;
       const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
@@ -110,7 +76,7 @@ export async function POST(req: NextRequest) {
       const { error: updateError } = await supabase
         .from('packages')
         .update({
-          remaining_hours: newRemainingHours < 0 ? 0 : newRemainingHours, // Don't go below 0
+          remaining_hours: newRemainingHours < 0 ? 0 : newRemainingHours,
           status: newStatus,
         })
         .eq('id', activePackage.id);
@@ -121,7 +87,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // --- 3. RETURN SUCCESS RESPONSE (as expected by client form) ---
+    // --- 3. RETURN SUCCESS RESPONSE ---
     
     if (payload.paymentMethod === 'card') {
       // UPI payment
