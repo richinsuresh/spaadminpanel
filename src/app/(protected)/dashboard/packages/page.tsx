@@ -13,8 +13,10 @@ type PackageCustomer = {
   total_hours: number;
   used_hours: number;
   remaining_hours: number;
-  start_date?: string | null;
-  expiry_date?: string | null; // <-- This holds the date
+  // --- FIX: Removed '?' to make these required (null is still allowed) ---
+  start_date: string | null;
+  expiry_date: string | null; 
+  // --- END OF FIX ---
   status: 'active' | 'expired' | string;
   outlet: string;
   created_at?: string | null;
@@ -267,6 +269,7 @@ export default function PackagesPage() {
                     </td>
                     {/* --- 7. Expiry Date Data --- */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {/* The call is now type-safe */}
                       {formatDate(customer.expiry_date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
