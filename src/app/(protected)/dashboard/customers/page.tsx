@@ -35,7 +35,7 @@ type CustomerDetails = {
   name: string;
   mobile: string;
   packageInfo: PackageInfo | null;
-  visits: CustomerVisit[]; // This will be the type from the 'customers' table
+  visits: any[]; // Using 'any' for visits from customers table
 };
 
 // --- Helper Functions ---
@@ -84,7 +84,7 @@ export default function CustomersPage() {
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      // --- FIX: Select 'outlet_name' and removed 'took_package' ---
+      // --- FIX: Select 'outlet_name' instead of 'outlet' ---
       const { data, error } = await supabase
         .from('customers')
         .select('id, name, mobile, date, treatment, session_hours, outlet_name, therapist_name, check_in_time, check_out_time')
@@ -239,7 +239,6 @@ export default function CustomersPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Visit Date</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Outlet</th>
-                  {/* --- FIX: Removed "Had Package" header --- */}
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -262,7 +261,6 @@ export default function CustomersPage() {
                       {/* --- FIX: Display 'outlet_name' --- */}
                       {customer.outlet_name}
                     </td>
-                    {/* --- FIX: Removed "Had Package" cell --- */}
                   </tr>
                 ))}
               </tbody>
@@ -348,14 +346,13 @@ export default function CustomersPage() {
                     <p className="text-sm text-gray-500">No visit history found.</p>
                   ) : (
                     <ul className="divide-y divide-gray-200">
-                      {selectedCustomer.visits.map(visit => (
+                      {selectedCustomer.visits.map((visit: any) => (
                         <li key={visit.id} className="py-3">
                           <div className="flex justify-between items-center mb-1">
                             <span className="text-sm font-medium text-gray-900">{visit.treatment}</span>
                             <span className="text-sm text-gray-500">{formatDate(visit.date)}</span>
                           </div>
                           <div className="flex justify-between items-center text-sm text-gray-600">
-                            {/* --- FIX: Use 'outlet_name' --- */}
                             <span>{visit.outlet_name}</span>
                             <span className="flex gap-4">
                               <span>Therapist: {visit.therapist_name || 'N/A'}</span>
