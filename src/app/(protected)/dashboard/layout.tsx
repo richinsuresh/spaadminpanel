@@ -3,7 +3,6 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-// --- FIX: Import useState for mobile menu ---
 import { useState } from 'react';
 
 export default function DashboardLayout({
@@ -12,7 +11,6 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  // --- FIX: Add state to manage sidebar visibility on mobile ---
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
   const navItems = [
@@ -27,33 +25,34 @@ export default function DashboardLayout({
   const getLinkClass = (href: string) => {
     const isActive = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
     
+    // --- UPDATED THEME ---
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
         isActive
-          ? 'bg-purple-50 text-purple-700 border-r-4 border-purple-600'
-          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+          ? 'bg-red-900/50 text-white border-r-4 border-red-500' // Active link
+          : 'text-gray-400 hover:bg-gray-800 hover:text-white' // Inactive link
       }`;
   };
 
   return (
-    // --- FIX: Main wrapper ---
-    <div className="flex min-h-screen bg-gray-50">
+    // --- UPDATED THEME: Changed background to light gray ---
+    <div className="flex min-h-screen bg-gray-100">
       
-      {/* --- NEW: Mobile Sidebar Overlay --- */}
       {isSidebarOpen && (
         <div 
-          className="fixed inset-0 z-20 bg-black/30 md:hidden"
+          className="fixed inset-0 z-20 bg-black/50 md:hidden"
           onClick={() => setIsSidebarOpen(false)}
         ></div>
       )}
 
-      {/* --- FIX: Admin Sidebar (Made responsive) --- */}
+      {/* --- UPDATED THEME: Sidebar is now dark --- */}
       <div 
-        className={`fixed inset-y-0 left-0 z-30 w-64 bg-white shadow-md transform ${
+        className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl transform ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
         } transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:inset-0`}
       >
-        <div className="p-6 border-b border-gray-200">
-          <h1 className="text-xl font-bold text-purple-700">Admin Panel</h1>
+        <div className="p-6 border-b border-gray-700">
+          {/* --- UPDATED THEME: Title is now red --- */}
+          <h1 className="text-xl font-bold text-red-600">Admin Panel</h1>
         </div>
         <nav className="mt-6">
           {navItems.map((item) => (
@@ -61,7 +60,7 @@ export default function DashboardLayout({
               key={item.href}
               href={item.href}
               className={getLinkClass(item.href)}
-              onClick={() => setIsSidebarOpen(false)} // Close on link click
+              onClick={() => setIsSidebarOpen(false)} 
             >
               <span className="mr-3 text-lg w-6 text-center">{item.icon}</span>
               {item.name}
@@ -70,27 +69,26 @@ export default function DashboardLayout({
         </nav>
       </div>
 
-      {/* --- FIX: Main Content (Made responsive) --- */}
+      {/* Main Content */}
       <div className="flex-1 flex flex-col md:ml-64">
         
-        {/* --- NEW: Mobile Header --- */}
-        <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-white p-4 shadow-sm">
+        {/* --- UPDATED THEME: Mobile header is dark --- */}
+        <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-gray-900 p-4 shadow-sm">
           <button 
             onClick={() => setIsSidebarOpen(true)}
-            className="text-gray-500 hover:text-gray-700"
+            className="text-gray-400 hover:text-white"
             aria-label="Open navigation"
           >
-            {/* Hamburger Icon */}
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <h1 className="text-lg font-bold text-purple-700">Admin Panel</h1>
+          <h1 className="text-lg font-bold text-red-600">Admin Panel</h1>
           <div></div> {/* Spacer */}
         </div>
         
-        {/* --- Main Content --- */}
-        <main className="flex-1 p-4 md:p-8">
+        {/* --- UPDATED THEME: Padding increased --- */}
+        <main className="flex-1 p-6 md:p-10">
           <div className="max-w-7xl mx-auto">
             {children}
           </div>
