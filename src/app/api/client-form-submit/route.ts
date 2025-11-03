@@ -6,7 +6,7 @@ export async function POST(req: NextRequest) {
     const payload = await req.json();
 
     // --- 1. INSERT THE CLIENT SESSION (this happens for all types) ---
-    // This logs the individual visit/session
+    // This logs the individual visit/session to the 'customers' table
     const { data: sessionData, error: sessionError } = await supabase
       .from('customers')
       .insert({
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
         
         // Outlet and payment fields
         outlet_id: payload.outlet_id,
-        outlet_name: payload.outlet, // Use 'outlet_name' in DB
+        outlet_name: payload.outlet, 
         payment_method: payload.paymentMethod,
         check_in_time: payload.check_in_time, // null for UPI, set for cash/package
       })
@@ -51,20 +51,27 @@ export async function POST(req: NextRequest) {
       const { error: newPackageError } = await supabase
         .from('packages')
         .insert({
-          // --- THIS IS THE FIX ---
-          name: payload.name, // Changed from 'client_name'
-          // --- END OF FIX ---
+          // --- FIX 1: Use 'name' instead of 'client_name' ---
+          name: payload.name,
+          
           mobile: payload.mobile,
           total_hours: payload.totalPackageHours,
           remaining_hours: payload.totalPackageHours, // Starts full
           expiry_date: expiryDate.toISOString(),
           status: 'active',
-          outlet_id: payload.outlet_id,
+          
+          // --- FIX 2: Use 'outlet' (for the name) and also add 'outlet_id' ---
+          // This ensures we match the existing 'outlet' column your pages use
+          // and also store the ID for future use.
+          outlet: payload.outlet, 
+          outlet_id: payload.outlet_id, 
+          
           sold_by: payload.packageSoldBy,
         });
       
       if (newPackageError) {
         console.error('Supabase new package error:', newPackageError);
+        // This will now throw the specific error (e.g., if 'outlet' column is missing)
         throw new Error(`Error creating new package: ${newPackageError.message}`);
       }
     }
@@ -89,11 +96,14 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (findError || !activePackage) {
+        // This error is shown to the user in the form
         throw new Error('No active package found for this client. Please sell them a new package.');
       }
 
       // Calculate new hours and status
-      const newRemainingHours = activePackage.remaining_hours - hoursToDeduct;
+      // Supabase returns numeric as string, so we must cast
+      const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
+      const newRemainingHours = currentRemaining - hoursToDeduct;
       const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
       // Update the package
@@ -112,7 +122,6 @@ export async function POST(req: NextRequest) {
     }
 
     // --- 3. RETURN SUCCESS RESPONSE (as expected by client form) ---
-    // The client form is already set up to handle these responses
     
     if (payload.paymentMethod === 'card') {
       // UPI payment
