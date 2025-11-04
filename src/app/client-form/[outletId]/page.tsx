@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 
-// --- Type Definitions ---
+// --- Type Definitions (from Snippet 2) ---
 type Treatment = {
   id: string;
   name: string;
@@ -43,11 +43,16 @@ export default function ClientCheckinForm() {
     isPackageCustomer: false,
     paymentMethod: 'cash',
   });
+
+  // --- NEW: State for OTP flow (from Snippet 1) ---
+  const [otpState, setOtpState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [otpCode, setOtpCode] = useState(''); // State to hold the OTP code
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // --- Effects (no change) ---
+  // --- Effect 1: Load Outlet Info & Treatments (from Snippet 2) ---
   useEffect(() => {
     if (!outletId) {
       setError('Outlet ID missing in URL.');
@@ -82,33 +87,52 @@ export default function ClientCheckinForm() {
     fetchTreatments();
   }, [outletId]);
 
+  // --- Effect 2 & 3: Client Lookup (Merged) ---
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
       setError('');
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
+      
       if (!res.ok) {
         setClientInfo(null);
         setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
+        setOtpState('idle'); // <-- Reset OTP
         return;
       }
+
       const data: ClientInfo | null = await res.json();
       setClientInfo(data);
-      setFormData(prev => ({
-        ...prev,
-        name: data?.name || '',
-        isPackageCustomer: data?.status === 'active'
-      }));
+
+      // --- Use Snippet 1's more explicit logic ---
+      if (data && data.status === 'active') {
+        setFormData(prev => ({
+          ...prev,
+          name: data.name || '',
+          isPackageCustomer: true // Auto-select "Use Package"
+        }));
+        setOtpState('idle'); // Show "Send OTP" button
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          name: data?.name || '',
+          isPackageCustomer: false
+        }));
+        setOtpState('idle'); // Hide OTP section
+      }
     } catch (e) {
       console.error('Client lookup error:', e);
       setError('Error looking up client details.');
       setClientInfo(null);
       setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
+      setOtpState('idle'); // <-- Reset OTP
     }
   }, [mobile]);
 
   useEffect(() => {
     setClientInfo(null);
+    setOtpState('idle'); // <-- Reset OTP state on mobile change (from Snippet 1)
+    
     if (mobile.length < 10) {
         setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
     }
@@ -127,11 +151,21 @@ export default function ClientCheckinForm() {
     };
   }, [mobile, performClientLookup]);
 
-  // --- handleChange Simplified (no change) ---
+  // --- Event Handlers ---
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
+    
     setError('');
+    
+    // --- Logic from Snippet 1 ---
+    // If user unchecks "isPackageCustomer", reset OTP flow
+    if (name === 'isPackageCustomer' && !checked) {
+      setOtpState('idle');
+      setOtpCode('');
+    }
+    // --- End ---
+
     setFormData(prev => {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
@@ -146,7 +180,26 @@ export default function ClientCheckinForm() {
     });
   };
 
-  // --- Helper Functions (no change) ---
+  // --- NEW: Handler to Send OTP (from Snippet 1) ---
+  const handleSendOtp = async () => {
+    setOtpState('sending');
+    setError('');
+    try {
+      const res = await fetch('/api/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mobile }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to send OTP.');
+      setOtpState('sent'); // Show OTP input
+    } catch (err: any) {
+      setError(err.message);
+      setOtpState('idle'); // Go back to idle on error
+    }
+  };
+
+  // --- Helper Functions (from Snippet 2) ---
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
@@ -162,14 +215,14 @@ export default function ClientCheckinForm() {
     formData.amountPaid
   ]);
 
-  // --- handleSubmit Simplified (no change) ---
+  // --- handleSubmit (Merged) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
 
-    // Validations
+    // --- Validations (from Snippet 2) ---
     if (!outlet) {
         setError("Outlet information is missing. Cannot submit.");
         setLoading(false);
@@ -190,18 +243,28 @@ export default function ClientCheckinForm() {
       setLoading(false);
       return;
     }
+
     const sessionHours = getSessionDuration();
-    if (formData.isPackageCustomer && sessionHours <= 0) {
-      setError('Please enter a session duration (hours/mins) when using package credits.');
-      setLoading(false);
-      return;
+    if (formData.isPackageCustomer) {
+      if (sessionHours <= 0) {
+        setError('Please enter a session duration (hours/mins) when using package credits.');
+        setLoading(false);
+        return;
+      }
+      // --- NEW: OTP Validation (from Snippet 1) ---
+      if (!otpCode || otpCode.length !== 6) {
+        setError('A valid 6-digit OTP is required to use a package.');
+        setLoading(false);
+        return;
+      }
+      // --- End ---
     }
     if (!formData.isPackageCustomer && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setError('Please enter a valid Amount for the treatment.');
         setLoading(false);
         return;
     }
-
+    
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
     const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
@@ -212,6 +275,7 @@ export default function ClientCheckinForm() {
         checkInTime = new Date().toISOString();
       }
 
+      // --- PAYLOAD (Merged) ---
       const payload = {
           name: formData.name.trim(),
           mobile: mobile,
@@ -228,9 +292,12 @@ export default function ClientCheckinForm() {
           outlet_id: outlet.id,
           paymentMethod: effectivePaymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime 
+          check_in_time: checkInTime,
+          // --- NEW: Send OTP code (from Snippet 1) ---
+          otpCode: formData.isPackageCustomer ? otpCode : null,
       };
 
+      // API call
       const res = await fetch('/api/client-form-submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -238,10 +305,16 @@ export default function ClientCheckinForm() {
       });
 
       const data = await res.json();
-      if (!res.ok || !data.success) {
+      
+      // --- Updated Error Handling (from Snippet 1) ---
+      if (!res.ok) {
+        // If API fails (e.g., invalid OTP), keep OTP state
+        setOtpState('sent'); 
         throw new Error(data.error || 'Submission failed');
       }
+      // --- End ---
 
+      // --- Success (from Snippet 2, with Snippet 1 additions) ---
       if (data.paymentMethod === 'cash') {
         setSuccess('Registration successful! Redirecting...');
         setTimeout(() => {
@@ -257,6 +330,8 @@ export default function ClientCheckinForm() {
         });
         setClientInfo(null);
         setLoading(false); 
+        setOtpState('idle'); // <-- Reset OTP (from Snippet 1)
+        setOtpCode(''); // <-- Reset OTP (from Snippet 1)
       } 
       else if (data.paymentMethod === 'card') {
         setSuccess('Registration complete. Redirecting to payment QR...');
@@ -276,11 +351,12 @@ export default function ClientCheckinForm() {
     }
   };
 
-  // --- Render Logic (no change) ---
+  // --- Render Logic (Merged) ---
   const showAmountField = !formData.isPackageCustomer;
-  const isSubmitDisabled = loading;
+  // Submit is disabled if loading, or if it's a package customer and no OTP is entered
+  const isSubmitDisabled = loading || (formData.isPackageCustomer && otpCode.length !== 6);
 
-  // --- Initial loading/error states (no change) ---
+  // --- Initial loading/error states (from Snippet 2) ---
   if (loading && !outlet) {
       return (
         <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
@@ -299,21 +375,18 @@ export default function ClientCheckinForm() {
       );
   }
 
-  // --- Main Form Render ---
+  // --- Main Form Render (from Snippet 2, with Snippet 1 additions) ---
   return (
-    // --- UPDATED THEME: Dark background ---
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
-      {/* --- UPDATED THEME: Dark form card --- */}
       <div className="max-w-lg w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
         <h1 className="text-2xl font-bold text-white text-center mb-2">Welcome to {outlet?.name || 'Your Spa'}</h1>
         <p className="text-center text-gray-400 mb-6">Client Check-in</p>
 
-        {/* --- UPDATED THEME: Dark error/success messages --- */}
         {error && !success && <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700 text-sm">{error}</div>}
         {success && <div className="mb-4 p-3 bg-green-900/50 text-green-300 rounded-lg border border-green-700 text-sm">{success}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Section 1: Client Info */}
+          {/* Section 1: Client Info (from Snippet 2) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="mobile" className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
@@ -324,7 +397,6 @@ export default function ClientCheckinForm() {
                 onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
                 required
                 maxLength={10}
-                // --- UPDATED THEME: Dark input ---
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                 placeholder="10-digit mobile"
                 disabled={loading}
@@ -339,7 +411,6 @@ export default function ClientCheckinForm() {
                 value={formData.name}
                 onChange={handleChange}
                 required
-                // --- UPDATED THEME: Dark input ---
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                 placeholder="Client's full name"
                 disabled={loading}
@@ -347,7 +418,7 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* --- UPDATED THEME: Dark package info boxes --- */}
+          {/* Package Info Display (from Snippet 2) */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg text-sm text-center text-green-300">
               <strong>Active package found.</strong>
@@ -359,7 +430,7 @@ export default function ClientCheckinForm() {
             </div>
           )}
 
-          {/* Section 2: Service & Duration */}
+          {/* Section 2: Service & Duration (from Snippet 2) */}
           <div>
             <label htmlFor="treatment" className="block text-sm font-medium text-gray-300 mb-1">Select Treatment *</label>
             <select
@@ -368,7 +439,6 @@ export default function ClientCheckinForm() {
               value={formData.treatment}
               onChange={handleChange}
               required
-              // --- UPDATED THEME: Dark select ---
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
               disabled={loading || treatments.length === 0}
             >
@@ -392,7 +462,6 @@ export default function ClientCheckinForm() {
                   placeholder="Hours"
                   value={formData.sessionHours || ''}
                   onChange={handleChange}
-                  // --- UPDATED THEME: Dark input ---
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                   disabled={loading}
                   required={formData.isPackageCustomer}
@@ -405,7 +474,6 @@ export default function ClientCheckinForm() {
                   placeholder="Mins"
                   value={formData.sessionMinutes || ''}
                   onChange={handleChange}
-                  // --- UPDATED THEME: Dark input ---
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                   disabled={loading}
                 />
@@ -414,8 +482,8 @@ export default function ClientCheckinForm() {
              {formData.isPackageCustomer && getSessionDuration() <=0 && <p className="text-xs text-red-500 mt-1">Duration required when using package.</p>}
           </div>
 
-          {/* Section 3: Package Options */}
-          <div className="pt-4 border-t border-gray-700 space-y-2">
+          {/* --- Section 3: Package Options (Merged) --- */}
+          <div className="pt-4 border-t border-gray-700 space-y-3">
              <span className="block text-sm font-medium text-gray-300 mb-1">Package Status:</span>
             <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-800">
               <input
@@ -423,17 +491,51 @@ export default function ClientCheckinForm() {
                 name="isPackageCustomer"
                 checked={formData.isPackageCustomer}
                 onChange={handleChange}
-                // --- UPDATED THEME: Red checkbox ---
-                className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500 focus:ring-offset-0 disabled:opacity-50"
+                className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500 focus:ring-offset-gray-900"
                 disabled={loading || !clientInfo || clientInfo.status !== 'active'}
               />
               <span className={`ml-2 text-sm ${(!clientInfo || clientInfo.status !== 'active') ? 'text-gray-500 cursor-not-allowed' : 'text-gray-300'}`}>
                 Use existing package credits
               </span>
             </label>
+            
+            {/* --- NEW: OTP Verification Section (from Snippet 1) --- */}
+            {formData.isPackageCustomer && (
+              <div className="p-4 bg-gray-800 rounded-lg border border-gray-700 space-y-3">
+                <h3 className="text-sm font-medium text-white">Customer Verification (Required)</h3>
+                <p className="text-xs text-gray-400">To use package hours, an OTP will be sent to the client's number: {mobile}.</p>
+                
+                {otpState !== 'sent' && (
+                  <button
+                    type="button"
+                    onClick={handleSendOtp}
+                    disabled={otpState === 'sending'}
+                    className="w-full px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {otpState === 'sending' ? 'Sending...' : 'Send OTP to Client'}
+                  </button>
+                )}
+
+                {otpState === 'sent' && (
+                  <div className="space-y-2">
+                    <label htmlFor="otpCode" className="block text-sm font-medium text-green-400">✓ OTP Sent! Enter 6-Digit Code</label>
+                    <input
+                      id="otpCode"
+                      type="tel"
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                      maxLength={6}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                      placeholder="123456"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+            {/* --- END: OTP Section --- */}
           </div>
 
-          {/* Section 4: Conditional Price Fields */}
+          {/* Section 4: Conditional Price Fields (from Snippet 2) */}
           {showAmountField && (
             <div>
               <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Amount for Treatment (₹) *</label>
@@ -445,7 +547,6 @@ export default function ClientCheckinForm() {
                 step="1"
                 value={formData.amountPaid || ''}
                 onChange={handleChange}
-                // --- UPDATED THEME: Dark input ---
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                 placeholder="Enter amount (e.g., 500)"
                 disabled={loading}
@@ -454,7 +555,7 @@ export default function ClientCheckinForm() {
             </div>
           )}
 
-          {/* Section 5: Payment Method */}
+          {/* Section 5: Payment Method (from Snippet 2) */}
           {!formData.isPackageCustomer && (
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
@@ -463,7 +564,6 @@ export default function ClientCheckinForm() {
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}
-                // --- UPDATED THEME: Dark select ---
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
                 disabled={loading}
               >
@@ -473,15 +573,14 @@ export default function ClientCheckinForm() {
             </div>
           )}
 
-          {/* Submit Button */}
+          {/* Submit Button (Updated disabled logic & text from Snippet 1) */}
           <button
             type="submit"
             disabled={isSubmitDisabled}
-            // --- UPDATED THEME: Red button ---
             className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {loading ? 'Processing...' :
-             formData.isPackageCustomer ? 'Confirm Session using Package' :
+             formData.isPackageCustomer ? 'Verify OTP & Confirm Session' :
              formData.paymentMethod === 'cash' ? 'Register & Accept Cash' :
              'Proceed to UPI Payment'}
           </button>
