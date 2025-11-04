@@ -1,4 +1,3 @@
-// src/app/(protected)/form/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -6,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
 
+// --- Type Definitions ---
 type ClientInfo = {
   status: 'active' | 'expired';
   name: string;
@@ -15,6 +15,7 @@ type ClientInfo = {
   usedPackageHours: number;
   remainingHours: number;
   expiryDate: string;
+  email?: string; // <-- Added email
 };
 
 const outletsList = OUTLETS.map((o: any) => o.name);
@@ -25,9 +26,9 @@ export default function ClientForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   
-  // --- 1. ADD packageValidity to state ---
   const [formData, setFormData] = useState({
     name: '',
+    email: '', // <-- NEW: Added email to state
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
@@ -40,7 +41,7 @@ export default function ClientForm() {
     outlet: '',
     paymentMethod: 'cash',
     sold_by: '',
-    packageValidity: '3 months', // <-- ADDED (default value)
+    packageValidity: '3 months', 
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -58,6 +59,7 @@ export default function ClientForm() {
     };
   }, []);
 
+  // --- UPDATED: To handle email pre-fill ---
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -70,25 +72,30 @@ export default function ClientForm() {
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           if (!res.ok) {
             setClientInfo(null);
-            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
+            setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
             return;
           }
           const data: ClientInfo | null = await res.json();
           setClientInfo(data);
           if (data) {
-            setFormData(prev => ({ ...prev, name: data.name, isPackageCustomer: data.status === 'active' }));
+            setFormData(prev => ({ 
+              ...prev, 
+              name: data.name, 
+              email: data.email || '', // Pre-fill email
+              isPackageCustomer: data.status === 'active' 
+            }));
           } else {
-            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
+            setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
           }
         } catch (e) {
           console.error('Lookup error', e);
           setClientInfo(null);
-          setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
+          setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
         }
       };
       lookupTimeout.current = setTimeout(lookup, 500);
     } else if (mobile.length < 10) {
-      setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
+      setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
     }
   }, [mobile]);
 
@@ -143,6 +150,12 @@ export default function ClientForm() {
         setIsSubmitting(false);
         return;
       }
+      // --- NEW: Validate email ---
+      if (!formData.email.trim() || !formData.email.includes('@')) {
+        setInputError('Please enter a valid client email address.');
+        setIsSubmitting(false);
+        return;
+      }
     }
     if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setInputError('Please enter a valid Amount for the treatment.');
@@ -167,10 +180,10 @@ export default function ClientForm() {
         checkInTime = new Date().toISOString();
       }
       
-      // --- 2. ADD packageValidity to payload ---
       const payload = {
         name: formData.name.trim(),
         mobile: mobile,
+        email: formData.email.trim(), // <-- NEW: Send email
         date: formData.date,
         treatment: formData.treatment,
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
@@ -185,7 +198,7 @@ export default function ClientForm() {
         finalAmountInPaise: finalAmountInPaise, 
         check_in_time: checkInTime,
         sold_by: formData.tookPackage ? formData.sold_by : null,
-        packageValidity: formData.tookPackage ? formData.packageValidity : null, // <-- ADDED
+        packageValidity: formData.tookPackage ? formData.packageValidity : null, 
       };
 
       const response = await fetch('/api/client-form-submit', {
@@ -203,12 +216,12 @@ export default function ClientForm() {
           router.push('/dashboard/sales');
         }, 900);
 
-        // --- 3. ADD packageValidity to reset ---
         setMobile('');
         setClientInfo(null);
         setFormData(prev => ({
           ...prev,
           name: '',
+          email: '', // <-- NEW: Reset email
           treatment: '',
           amountPaid: 0,
           sessionHours: 0,
@@ -218,7 +231,7 @@ export default function ClientForm() {
           packageAmount: 0,
           totalPackageHours: 0,
           sold_by: '',
-          packageValidity: '3 months', // <-- ADDED
+          packageValidity: '3 months', 
         }));
       } else {
         const err = data.error || 'Unknown error';
@@ -238,9 +251,8 @@ export default function ClientForm() {
   return (
     <div className="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-md mt-8 relative">
       <h1 className="text-2xl font-bold text-gray-800 mb-6">
-        Add New Customer (Admin)
+        Add New Customer / Package (Admin)
       </h1>
-
       <button
         type="button"
         onClick={() => router.push('/dashboard')}
@@ -305,6 +317,21 @@ export default function ClientForm() {
               placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
             />
           </div>
+
+          {/* --- NEW: Email Field --- */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Client Email * (for OTP)</label>
+            <input
+              name="email"
+              type="email"
+              value={formData.email}
+              onChange={handleChange}
+              required
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+              placeholder="client@example.com"
+            />
+          </div>
+          {/* --- END NEW FIELD --- */}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
@@ -417,7 +444,6 @@ export default function ClientForm() {
           </label>
         </div>
 
-        {/* --- 4. THIS IS THE UPDATED BLOCK --- */}
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
             <h3 className="text-md font-semibold text-purple-800">New Package Details</h3>
@@ -461,7 +487,6 @@ export default function ClientForm() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black"
                 />
               </div>
-              {/* --- 5. THIS IS THE NEW DROPDOWN --- */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Package Validity *</label>
                 <select
