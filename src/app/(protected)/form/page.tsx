@@ -497,6 +497,8 @@ export default function ClientForm() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
                 >
                   <option value="3 months">3 Months</option>
+                  <option value="3 months">4 Months</option>
+                  <option value="3 months">5 Months</option>
                   <option value="6 months">6 Months</option>
                   <option value="9 months">9 Months</option>
                 </select>
