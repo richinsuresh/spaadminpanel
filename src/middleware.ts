@@ -5,11 +5,11 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api (ALL API routes)
+     * - api/auth (The login API route)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico
-     * - /login and /outlet-login (the auth pages)
+     * - /login, /outlet-login, /admin-login (the auth pages)
      * - /superuser-login (the new superuser auth page)
      */
     '/((?!api|_next/static|_next/image|favicon.ico|login|outlet-login|admin-login|superuser-login).*)',
@@ -21,4 +21,4 @@ export const config = {
 // ensuring that /api/auth and public login pages are excluded from protected checks.
 export function middleware(request: NextRequest) {
   return NextResponse.next();
-}
+} 

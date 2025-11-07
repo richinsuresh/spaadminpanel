@@ -1,5 +1,6 @@
 'use client';
 
+// NEW: Import 'useRef' for the auto-checkout timer
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
@@ -40,6 +41,16 @@ const formatTime = (dateString: string | null) => {
   });
 };
 
+// NEW: Helper function to calculate expected checkout time
+const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
+  if (!checkIn || !hours || hours <= 0) {
+    return null;
+  }
+  const checkInDate = new Date(checkIn);
+  const durationInMs = hours * 60 * 60 * 1000;
+  return new Date(checkInDate.getTime() + durationInMs);
+};
+
 const formatDuration = (hours: number | null) => {
   if (!hours || hours === 0) return '—';
   if (hours < 1) return `${Math.round(hours * 60)} mins`;
@@ -65,9 +76,12 @@ export default function AdminSalesPage() {
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // NEW: Ref for the auto-checkout timer
+  const autoCheckoutTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchSales = useCallback(async () => {
-    setLoading(true);
+    // Set loading only if not triggered by auto-checkout in background
+    // setLoading(true); // You might want to remove this line to make refreshes less obtrusive
     try {
       let query = supabase
         .from('customers')
@@ -111,7 +125,7 @@ export default function AdminSalesPage() {
   // AUTO-REFRESH: every 5 minutes (300,000 ms). No realtime, no on-focus refresh.
   useEffect(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    const FIVE_MIN_MS = 200000; // 5 minutes
+    const FIVE_MIN_MS = 300000; // 5 minutes
     pollTimerRef.current = setInterval(() => {
       fetchSales();
     }, FIVE_MIN_MS);
@@ -119,6 +133,52 @@ export default function AdminSalesPage() {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, [fetchSales]);
+
+  // NEW: Automatic Check-out Effect
+  useEffect(() => {
+    const checkAndProcessAutoCheckouts = async () => {
+      const now = new Date();
+      const salesToAutoCheckout: Sale[] = [];
+
+      for (const sale of sales) {
+        // Find sales that are not checked out, but have a check-in time and session duration
+        if (!sale.check_out_time && sale.check_in_time && sale.session_hours) {
+          const expectedCheckout = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+          // If the expected checkout time exists and is in the past
+          if (expectedCheckout && now >= expectedCheckout) {
+            salesToAutoCheckout.push(sale);
+          }
+        }
+      }
+
+      if (salesToAutoCheckout.length > 0) {
+        console.log(`Auto-checking out ${salesToAutoCheckout.length} sales...`);
+        
+        // Update all matched sales in Supabase
+        const updates = salesToAutoCheckout.map(sale => 
+          supabase
+            .from('customers')
+            .update({ check_out_time: new Date().toISOString() }) // Use current time for checkout
+            .eq('id', sale.id)
+        );
+        
+        await Promise.all(updates);
+        
+        // Refetch data to show the changes in the UI
+        fetchSales(); 
+      }
+    };
+
+    // Run this check every 30 seconds
+    const AUTO_CHECKOUT_MS = 30000; 
+    if (autoCheckoutTimerRef.current) clearInterval(autoCheckoutTimerRef.current);
+    autoCheckoutTimerRef.current = setInterval(checkAndProcessAutoCheckouts, AUTO_CHECKOUT_MS);
+
+    return () => {
+      if (autoCheckoutTimerRef.current) clearInterval(autoCheckoutTimerRef.current);
+    };
+  }, [sales, fetchSales]); // This effect depends on the current list of `sales`
+
 
   const totalSales = useMemo(() => {
     return sales
@@ -132,6 +192,7 @@ export default function AdminSalesPage() {
   const completedSalesCount = useMemo(() => sales.filter((s) => !!s.check_out_time).length, [sales]);
 
   const handleExport = async () => {
+    // ... (rest of handleExport function is unchanged)
     setIsExporting(true);
     try {
       let query = supabase
@@ -210,6 +271,7 @@ export default function AdminSalesPage() {
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
       {/* Filter Bar */}
+      {/* ... (filter bar is unchanged) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
@@ -268,6 +330,7 @@ export default function AdminSalesPage() {
       </div>
 
       {/* Total Sales Card */}
+      {/* ... (total sales card is unchanged) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales (Filtered)</h3>
         <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
@@ -284,10 +347,12 @@ export default function AdminSalesPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check-in</th>
+                {/* NEW: Renamed header */}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check-out</th>
+                {/* NEW: Renamed header */}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -314,9 +379,36 @@ export default function AdminSalesPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatTime(sale.check_in_time)}</td>
+                    
+                    {/* NEW: Updated Session Time Column */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div>
+                        <span className="font-medium">In: </span>
+                        {formatTime(sale.check_in_time)}
+                      </div>
+                      {sale.check_out_time ? (
+                        <div>
+                          <span className="font-medium">Out: </span>
+                          {formatTime(sale.check_out_time)}
+                        </div>
+                      ) : (
+                        (() => {
+                          const expectedTime = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+                          if (expectedTime) {
+                            return (
+                              <div className="text-gray-400">
+                                <span className="font-medium">Est. Out: </span>
+                                {formatTime(expectedTime.toISOString())}
+                              </div>
+                            );
+                          }
+                          return <div><span className="font-medium">Out: </span>—</div>;
+                        })()
+                      )}
+                    </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
+                      {/* ... (therapist input/display is unchanged) */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
                       ) : (
@@ -339,6 +431,7 @@ export default function AdminSalesPage() {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
+                      {/* ... (room input/display is unchanged) */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
@@ -360,9 +453,12 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
+                    {/* NEW: Updated Action Column */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{formatTime(sale.check_out_time)}</span>
+                        <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                          Completed
+                        </span>
                       ) : (
                         <button
                           onClick={() => handleCheckOut(sale.id)}

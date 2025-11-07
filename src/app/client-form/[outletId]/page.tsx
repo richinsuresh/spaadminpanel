@@ -212,7 +212,7 @@ export default function ClientCheckinForm() {
   }, [formData.isPackageCustomer, formData.amountPaid]);
 
 
-  // --- handleSubmit (Updated) ---
+  // --- handleSubmit (Updated with < 1800 check) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -220,6 +220,8 @@ export default function ClientCheckinForm() {
     setLoading(true);
 
     const sessionHours = getSessionDuration();
+
+    // --- Package Customer Checks ---
     if (formData.isPackageCustomer) {
       if (sessionHours <= 0) {
         setError('Please enter Session Duration when using package credits.');
@@ -231,12 +233,33 @@ export default function ClientCheckinForm() {
         setLoading(false);
         return;
       }
+    } 
+    // --- MODIFIED: Non-Package Customer Checks ---
+    else {
+      const amountInRupees = Number(formData.amountPaid) || 0;
+
+      // Check 1: Is amount valid?
+      if (amountInRupees <= 0) {
+          setError('Please enter a valid Amount for the treatment.');
+          setLoading(false);
+          return;
+      }
+      
+      // --- NEW: Check if amount is less than 1800 ---
+      if (amountInRupees < 1800) {
+          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹1800. Redirecting...`);
+          setLoading(true); // Keep loading spinner on
+          
+          // Redirect to a new "declined" page
+          setTimeout(() => {
+              router.push(`/payment-declined?outletId=${outletId}&amount=${amountInRupees}`);
+          }, 1500);
+          
+          // Stop the function here. Do not proceed to submit.
+          return; 
+      }
     }
-    if (!formData.isPackageCustomer && (formData.amountPaid <= 0 || !formData.amountPaid)) {
-        setError('Please enter a valid Amount for the treatment.');
-        setLoading(false);
-        return;
-    }
+    // --- END OF MODIFICATION ---
     
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
