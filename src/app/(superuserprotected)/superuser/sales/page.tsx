@@ -65,6 +65,7 @@ export default function AdminSalesPage() {
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchSales = useCallback(async () => {
     setLoading(true);
@@ -103,21 +104,74 @@ export default function AdminSalesPage() {
     }
   }, [startDate, endDate, selectedOutletId]);
 
-  // Initial fetch + whenever filters change
+  // initial + whenever filters change
   useEffect(() => {
     fetchSales();
   }, [fetchSales]);
 
-  // AUTO-REFRESH: every 5 minutes (300,000 ms). No realtime, no on-focus refresh.
+  // REALTIME: subscribe to any change in public.customers and refetch (no in-handler filtering)
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime-customers')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, (payload) => {
+        // Batch bursts of events
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+          // Optional: guard—only refetch if change touches relevant date/outlet
+          const row: any = payload.new ?? payload.old ?? {};
+          let shouldRefetch = true;
+
+          // If we have outlet filter and event has outlet_id, check it
+          if (selectedOutletId !== 'all' && row?.outlet_id && row.outlet_id !== selectedOutletId) {
+            shouldRefetch = false;
+          }
+
+          // If row has date, verify it's within range (normalize to YYYY-MM-DD)
+          if (row?.date) {
+            const d = new Date(row.date);
+            if (!isNaN(d.valueOf())) {
+              const ymd = d.toISOString().slice(0, 10);
+              if (ymd < startDate || ymd > endDate) {
+                shouldRefetch = false;
+              }
+            }
+          }
+
+          if (shouldRefetch) {
+            fetchSales();
+          }
+        }, 250);
+      })
+      .subscribe((status) => {
+        // Helpful logs to verify connection
+        console.log('[Realtime] channel status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('[Realtime] subscribed to public.customers');
+        }
+      });
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchSales, startDate, endDate, selectedOutletId]);
+
+  // POLLING FALLBACK: refresh every 10s in case Realtime is disabled/firewalled
   useEffect(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    const FIVE_MIN_MS = 200000; // 5 minutes
     pollTimerRef.current = setInterval(() => {
       fetchSales();
-    }, FIVE_MIN_MS);
+    }, 10000); // 10 seconds
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
+  }, [fetchSales]);
+
+  // Refetch when tab regains focus
+  useEffect(() => {
+    const onFocus = () => fetchSales();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   }, [fetchSales]);
 
   const totalSales = useMemo(() => {

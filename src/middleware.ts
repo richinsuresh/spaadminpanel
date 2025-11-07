@@ -5,13 +5,14 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api/auth (The login API route)
+     * - api (ALL API routes)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico
      * - /login and /outlet-login (the auth pages)
+     * - /superuser-login (the new superuser auth page)
      */
-    '/((?!api/auth|_next/static|_next/image|favicon.ico|login|outlet-login|admin-login).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|login|outlet-login|admin-login|superuser-login).*)',
   ],
 };
 
