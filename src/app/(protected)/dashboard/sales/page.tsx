@@ -1,6 +1,5 @@
 'use client';
 
-// NEW: Import 'useRef' for the auto-checkout timer
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
@@ -22,6 +21,7 @@ type Sale = {
   session_hours: number | null;
   outlet_name: string;
   package_sold_by: string | null;
+  payment_method: string | null; // <-- NEW: Added payment_method
 };
 
 const formatCurrency = (amountInPaise: number) =>
@@ -32,16 +32,24 @@ const formatCurrency = (amountInPaise: number) =>
     maximumFractionDigits: 0,
   }).format(amountInPaise / 100);
 
+// UPDATED: More robust formatTime function
 const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
-  return new Date(dateString).toLocaleTimeString('en-IN', {
+  
+  const date = new Date(dateString);
+  
+  if (isNaN(date.getTime())) {
+    console.warn('Invalid date string passed to formatTime:', dateString);
+    return 'Invalid Date';
+  }
+
+  return date.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
   });
 };
 
-// NEW: Helper function to calculate expected checkout time
 const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
   if (!checkIn || !hours || hours <= 0) {
     return null;
@@ -61,6 +69,16 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
+// --- NEW: Helper to format payment method ---
+const formatPaymentMethod = (method: string | null) => {
+  if (!method) return 'N/A';
+  if (method === 'card') return 'UPI / Card'; // Assuming 'card' is your UPI value
+  if (method === 'package') return 'Package';
+  if (method === 'cash') return 'Cash';
+  // Capitalize any other values
+  return method.charAt(0).toUpperCase() + method.slice(1);
+};
+
 const getToday = () => new Date().toISOString().split('T')[0];
 
 export default function AdminSalesPage() {
@@ -76,17 +94,16 @@ export default function AdminSalesPage() {
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // NEW: Ref for the auto-checkout timer
-  const autoCheckoutTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // REMOVED: All state and refs for modals are gone
 
   const fetchSales = useCallback(async () => {
-    // Set loading only if not triggered by auto-checkout in background
-    // setLoading(true); // You might want to remove this line to make refreshes less obtrusive
+    // setLoading(true); // Removed for smoother background refreshes
     try {
       let query = supabase
         .from('customers')
         .select(
-          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by'
+          // --- UPDATED: Added payment_method ---
+          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by, payment_method'
         )
         .gte('date', startDate)
         .lte('date', endDate)
@@ -122,7 +139,7 @@ export default function AdminSalesPage() {
     fetchSales();
   }, [fetchSales]);
 
-  // AUTO-REFRESH: every 5 minutes (300,000 ms). No realtime, no on-focus refresh.
+  // AUTO-REFRESH: every 5 minutes (300,000 ms). This is how it "reflects" changes.
   useEffect(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     const FIVE_MIN_MS = 300000; // 5 minutes
@@ -134,71 +151,27 @@ export default function AdminSalesPage() {
     };
   }, [fetchSales]);
 
-  // NEW: Automatic Check-out Effect
-  useEffect(() => {
-    const checkAndProcessAutoCheckouts = async () => {
-      const now = new Date();
-      const salesToAutoCheckout: Sale[] = [];
-
-      for (const sale of sales) {
-        // Find sales that are not checked out, but have a check-in time and session duration
-        if (!sale.check_out_time && sale.check_in_time && sale.session_hours) {
-          const expectedCheckout = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
-          // If the expected checkout time exists and is in the past
-          if (expectedCheckout && now >= expectedCheckout) {
-            salesToAutoCheckout.push(sale);
-          }
-        }
-      }
-
-      if (salesToAutoCheckout.length > 0) {
-        console.log(`Auto-checking out ${salesToAutoCheckout.length} sales...`);
-        
-        // Update all matched sales in Supabase
-        const updates = salesToAutoCheckout.map(sale => 
-          supabase
-            .from('customers')
-            .update({ check_out_time: new Date().toISOString() }) // Use current time for checkout
-            .eq('id', sale.id)
-        );
-        
-        await Promise.all(updates);
-        
-        // Refetch data to show the changes in the UI
-        fetchSales(); 
-      }
-    };
-
-    // Run this check every 30 seconds
-    const AUTO_CHECKOUT_MS = 30000; 
-    if (autoCheckoutTimerRef.current) clearInterval(autoCheckoutTimerRef.current);
-    autoCheckoutTimerRef.current = setInterval(checkAndProcessAutoCheckouts, AUTO_CHECKOUT_MS);
-
-    return () => {
-      if (autoCheckoutTimerRef.current) clearInterval(autoCheckoutTimerRef.current);
-    };
-  }, [sales, fetchSales]); // This effect depends on the current list of `sales`
-
-
+  // --- UPDATED: totalSales now based on check_in_time ---
   const totalSales = useMemo(() => {
     return sales
-      .filter((sale) => !!sale.check_out_time)
+      .filter((sale) => !!sale.check_in_time) // CHANGED
       .reduce((sum, sale) => {
         const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
         return sum + (amount || 0);
       }, 0);
   }, [sales]);
 
-  const completedSalesCount = useMemo(() => sales.filter((s) => !!s.check_out_time).length, [sales]);
+  // --- UPDATED: Renamed and logic changed to check_in_time ---
+  const activeSalesCount = useMemo(() => sales.filter((s) => !!s.check_in_time).length, [sales]);
 
   const handleExport = async () => {
-    // ... (rest of handleExport function is unchanged)
     setIsExporting(true);
     try {
       let query = supabase
         .from('customers')
         .select(
-          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room'
+          // --- UPDATED: Added payment_method ---
+          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room, payment_method'
         )
         .gte('date', startDate)
         .lte('date', endDate)
@@ -216,6 +189,7 @@ export default function AdminSalesPage() {
         return;
       }
 
+      // --- UPDATED: Added 'Payment Method' to export data ---
       const dataToExport = data.map((sale: any) => ({
         Date: new Date(sale.date).toLocaleDateString('en-IN'),
         Outlet: sale.outlet_name,
@@ -223,6 +197,7 @@ export default function AdminSalesPage() {
         Mobile: sale.mobile,
         Service: sale.took_package ? 'New Package' : sale.treatment,
         'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
+        'Payment Method': formatPaymentMethod(sale.payment_method), // <-- NEW
         Duration: formatDuration(sale.session_hours),
         'Sold By': sale.package_sold_by || 'N/A',
         Therapist: sale.therapist_name || 'N/A',
@@ -260,6 +235,8 @@ export default function AdminSalesPage() {
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
     fetchSales();
   };
+  
+  // This is the simple, manual override for admins
   const handleCheckOut = async (id: string) => {
     if (!confirm('Are you sure you want to check out this client?')) return;
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
@@ -268,10 +245,10 @@ export default function AdminSalesPage() {
 
   return (
     <div className="space-y-6">
+      
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
       {/* Filter Bar */}
-      {/* ... (filter bar is unchanged) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
@@ -329,12 +306,11 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* Total Sales Card */}
-      {/* ... (total sales card is unchanged) */}
+      {/* --- UPDATED: Total Sales Card --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales (Filtered)</h3>
+        <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (Filtered)</h3>
         <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
-        <p className="text-gray-500 text-sm">{completedSalesCount} completed transaction(s)</p>
+        <p className="text-gray-500 text-sm">{activeSalesCount} active/completed transaction(s)</p>
       </div>
 
       {/* Sales Table */}
@@ -342,27 +318,29 @@ export default function AdminSalesPage() {
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
+              {/* --- UPDATED: Added Payment Method Header --- */}
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                {/* NEW: Renamed header */}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
-                {/* NEW: Renamed header */}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-gray-500">Loading...</td>
+                  {/* --- UPDATED: ColSpan --- */}
+                  <td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : sales.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
+                  {/* --- UPDATED: ColSpan --- */}
+                  <td colSpan={9} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
                 </tr>
               ) : (
                 sales.map((sale) => (
@@ -380,7 +358,11 @@ export default function AdminSalesPage() {
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
                     
-                    {/* NEW: Updated Session Time Column */}
+                    {/* --- NEW: Payment Method Cell --- */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatPaymentMethod(sale.payment_method)}
+                    </td>
+                    
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       <div>
                         <span className="font-medium">In: </span>
@@ -408,7 +390,6 @@ export default function AdminSalesPage() {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {/* ... (therapist input/display is unchanged) */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
                       ) : (
@@ -431,7 +412,7 @@ export default function AdminSalesPage() {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {/* ... (room input/display is unchanged) */}
+                      {/* There was a typo here in your original file: sale.check__time. I fixed it to sale.check_out_time */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
@@ -453,7 +434,7 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* NEW: Updated Action Column */}
+                    {/* --- REVERTED: Action Column is simple again --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">

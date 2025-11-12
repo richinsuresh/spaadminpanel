@@ -21,7 +21,7 @@ type Sale = {
   session_hours: number | null;
 };
 
-// --- (Helper functions are unchanged) ---
+// --- (Helper functions) ---
 const formatCurrency = (amountInPaise: number) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -30,9 +30,19 @@ const formatCurrency = (amountInPaise: number) =>
     maximumFractionDigits: 0,
   }).format(amountInPaise / 100);
 
+// UPDATED: More robust formatTime function
 const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
-  return new Date(dateString).toLocaleTimeString('en-IN', {
+
+  const date = new Date(dateString);
+
+  // Check if the date is valid
+  if (isNaN(date.getTime())) {
+    console.warn('Invalid date string passed to formatTime:', dateString);
+    return 'Invalid Date';
+  }
+  
+  return date.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
@@ -126,6 +136,57 @@ function AddonModal({
   );
 }
 
+// --- NEW: Checkout Confirmation Modal Component ---
+function CheckoutConfirmModal({
+  sale,
+  expectedTime,
+  onClose,
+  onCheckout,
+  onAddon,
+}: {
+  sale: Sale | null;
+  expectedTime: string | null;
+  onClose: () => void; // This will be used for "snoozing"
+  onCheckout: (saleId: string) => void;
+  onAddon: (sale: Sale) => void;
+}) {
+  if (!sale) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
+        <h2 className="text-xl font-bold text-gray-800">Session Ended for {sale.name}</h2>
+        <p className="text-gray-600">
+          {sale.name}'s session was scheduled to end at {expectedTime || '...'}
+          .
+        </p>
+        <p className="text-gray-800 font-medium">Has the client checked out?</p>
+
+        <div className="flex justify-end gap-3 pt-4">
+          <button
+            onClick={onClose} // "No" or "Snooze" is just closing the modal
+            className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+          >
+            No (Snooze 5m)
+          </button>
+          <button
+            onClick={() => onAddon(sale)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            Add-on
+          </button>
+          <button
+            onClick={() => onCheckout(sale.id)}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            Yes, Check Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export default function OutletSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -142,6 +203,11 @@ export default function OutletSalesPage() {
   
   const [addonModalOpen, setAddonModalOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  
+  // --- NEW: State for Checkout Warning Modal ---
+  const [warningModalOpen, setWarningModalOpen] = useState(false);
+  const [warningSale, setWarningSale] = useState<Sale | null>(null);
+  const [warningExpectedTime, setWarningExpectedTime] = useState<string | null>(null);
   // --- End of new state ---
 
   useEffect(() => {
@@ -235,32 +301,30 @@ export default function OutletSalesPage() {
     // Realtime listener will call fetchSales
   };
 
+  // --- UPDATED: This useEffect now opens the custom modal ---
   useEffect(() => {
     const checkClientWarnings = () => {
       const now = new Date();
       
-      sales.forEach((sale) => {
+      // Don't run if a warning is already open
+      if (warningModalOpen) return; 
+
+      for (const sale of sales) {
         // Find active, un-snoozed clients
         if (!sale.check_out_time && sale.check_in_time && sale.session_hours && !snoozedClients.current.has(sale.id)) {
           const expectedCheckout = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
           
           if (expectedCheckout && now >= expectedCheckout) {
-            // --- Trigger Warning Pop-up ---
-            if (window.confirm(`Has "${sale.name}" checked out? (Est. checkout was ${formatTime(expectedCheckout.toISOString())})`)) {
-              // User clicked "Yes"
-              handleCheckOut(sale.id);
-            } else {
-              // User clicked "No" - Snooze for 5 minutes
-              snoozedClients.current.add(sale.id);
-              console.log(`Snoozing client ${sale.id} for 5 minutes.`);
-              setTimeout(() => {
-                snoozedClients.current.delete(sale.id);
-                console.log(`Snooze ended for ${sale.id}.`);
-              }, 300000); // 5 minutes
-            }
+            // --- Trigger Warning Modal ---
+            // NEW: Set state to open the modal
+            setWarningExpectedTime(formatTime(expectedCheckout.toISOString()));
+            setWarningSale(sale);
+            setWarningModalOpen(true);
+            // Stop after finding the first one to warn about
+            break; 
           }
         }
-      });
+      }
     };
 
     // Run this check every 30 seconds
@@ -271,7 +335,7 @@ export default function OutletSalesPage() {
     return () => {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
     };
-  }, [sales, fetchSales]); // Depends on `sales` array
+  }, [sales, fetchSales, warningModalOpen]); // Added warningModalOpen
 
 
   // --- (Input save handlers are unchanged) ---
@@ -289,6 +353,42 @@ export default function OutletSalesPage() {
     if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
   };
+  
+  
+  // --- NEW: Handlers for Checkout Warning Modal ---
+  const handleWarningModalClose = () => {
+    if (warningSale) {
+      // User clicked "No" - Snooze for 5 minutes
+      snoozedClients.current.add(warningSale.id);
+      console.log(`Snoozing client ${warningSale.id} for 5 minutes.`);
+      setTimeout(() => {
+        if (snoozedClients.current.has(warningSale.id)) {
+          snoozedClients.current.delete(warningSale.id);
+          console.log(`Snooze ended for ${warningSale.id}.`);
+        }
+      }, 300000); // 5 minutes
+    }
+    setWarningModalOpen(false);
+    setWarningSale(null);
+    setWarningExpectedTime(null);
+  };
+
+  const handleWarningModalCheckout = (saleId: string) => {
+    handleCheckOut(saleId); // Re-uses the existing checkout function
+    setWarningModalOpen(false);
+    setWarningSale(null);
+    setWarningExpectedTime(null);
+  };
+
+  const handleWarningModalAddon = (sale: Sale) => {
+    setWarningModalOpen(false);
+    setWarningSale(null);
+    setWarningExpectedTime(null);
+    
+    // Open the *other* modal (AddonModal)
+    handleOpenAddonModal(sale);
+  };
+  // --- End of new handlers ---
   
   
   // --- NEW: Add-on Modal Handlers ---
@@ -344,21 +444,32 @@ export default function OutletSalesPage() {
   };
 
 
-  // --- (totalSales calculation is unchanged) ---
+  // --- UPDATED: totalSales calculation based on check_in_time ---
   const totalSales = sales
-    .filter(sale => !!sale.check_out_time) 
+    .filter(sale => !!sale.check_in_time) // CHANGED
     .reduce((sum, sale) => {
       const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
       return sum + (amount || 0);
     }, 0);
 
+  const activeSalesCount = sales.filter(s => !!s.check_in_time).length; // NEW
+
   return (
     <div className="space-y-6">
-      {/* --- NEW: Render the Add-on Modal --- */}
+      {/* --- Render the Add-on Modal --- */}
       <AddonModal
         sale={selectedSale}
         onClose={handleCloseAddonModal}
         onConfirm={handleConfirmAddon}
+      />
+
+      {/* --- NEW: Render the Checkout Warning Modal --- */}
+      <CheckoutConfirmModal
+        sale={warningSale}
+        expectedTime={warningExpectedTime}
+        onClose={handleWarningModalClose}
+        onCheckout={handleWarningModalCheckout}
+        onAddon={handleWarningModalAddon}
       />
 
       <h1 className="text-2xl font-bold text-gray-800">{outletName} Sales & Check-out</h1>
@@ -377,13 +488,13 @@ export default function OutletSalesPage() {
         </div>
       </div>
 
-      {/* Total Sales Card (unchanged) */}
+      {/* --- UPDATED: Total Sales Card --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales (Filtered)</h3>
+        <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (Filtered)</h3>
         <p className="text-3xl font-bold mt-2 text-green-600">
           {formatCurrency(totalSales)}
         </p>
-        <p className="text-gray-500 text-sm">{sales.filter(s => !!s.check_out_time).length} completed transaction(s)</p>
+        <p className="text-gray-500 text-sm">{activeSalesCount} active/completed transaction(s)</p>
       </div>
 
       {/* Sales Table (UI Updated) */}

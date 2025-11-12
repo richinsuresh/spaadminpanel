@@ -212,7 +212,7 @@ export default function ClientCheckinForm() {
   }, [formData.isPackageCustomer, formData.amountPaid]);
 
 
-  // --- handleSubmit (Updated with < 1800 check) ---
+  // --- handleSubmit (UPDATED) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -221,13 +221,18 @@ export default function ClientCheckinForm() {
 
     const sessionHours = getSessionDuration();
 
+    // --- ★★★ FIX: UNIVERSAL DURATION CHECK ★★★ ---
+    // This check now applies to ALL customers.
+    if (sessionHours <= 0) {
+      setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins).');
+      setLoading(false);
+      return;
+    }
+    // --- END OF FIX ---
+
     // --- Package Customer Checks ---
     if (formData.isPackageCustomer) {
-      if (sessionHours <= 0) {
-        setError('Please enter Session Duration when using package credits.');
-        setLoading(false);
-        return;
-      }
+      // The sessionHours check was here, but is now above.
       if (!otpCode || otpCode.length !== 6) {
         setError('A valid 6-digit OTP is required to use a package.');
         setLoading(false);
@@ -266,10 +271,10 @@ export default function ClientCheckinForm() {
     const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
 
     try {
-      let checkInTime: string | null = null;
-      if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
-        checkInTime = new Date().toISOString();
-      }
+      // --- ★★★ FIX: SET check_in_time FOR ALL CUSTOMERS ★★★ ---
+      // This ensures they appear on the dashboard immediately, even before UPI payment.
+      let checkInTime: string | null = new Date().toISOString();
+      // --- The old conditional logic was removed ---
 
       const payload = {
           name: formData.name.trim(),
@@ -287,7 +292,7 @@ export default function ClientCheckinForm() {
           outlet_id: outlet!.id,
           paymentMethod: effectivePaymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime,
+          check_in_time: checkInTime, // <-- This is now always set
           // --- NEW: Send OTP code AND Email ---
           otpCode: formData.isPackageCustomer ? otpCode : null,
           clientEmail: formData.isPackageCustomer ? clientEmail : null,
@@ -408,7 +413,7 @@ export default function ClientCheckinForm() {
             </div>
           )}
            {clientInfo && clientInfo.status !== 'active' && (
-            <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
+            <div className="p-3 bg-yellow-900/5A0 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
               No active package found.
             </div>
           )}
@@ -436,7 +441,7 @@ export default function ClientCheckinForm() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration {formData.isPackageCustomer ? '*' : ''}</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration *</label>
             <div className="flex space-x-2">
               <div className="flex-1">
                 <input
@@ -447,7 +452,6 @@ export default function ClientCheckinForm() {
                   onChange={handleChange}
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                   disabled={loading}
-                  required={formData.isPackageCustomer}
                 />
               </div>
               <div className="flex-1">
@@ -462,7 +466,6 @@ export default function ClientCheckinForm() {
                 />
               </div>
             </div>
-             {formData.isPackageCustomer && getSessionDuration() <=0 && <p className="text-xs text-red-500 mt-1">Duration required when using package.</p>}
           </div>
 
           {/* --- Section 3: Package Options (Updated) --- */}
