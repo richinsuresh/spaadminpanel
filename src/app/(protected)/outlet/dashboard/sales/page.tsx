@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+// NEW: Import 'useRef'
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
-// import { THERAPISTS_BY_OUTLET } from 'src/lib/therapists'; // No longer needed
 
 type Sale = {
   id: string;
@@ -21,6 +21,7 @@ type Sale = {
   session_hours: number | null;
 };
 
+// --- (Helper functions are unchanged) ---
 const formatCurrency = (amountInPaise: number) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -29,7 +30,7 @@ const formatCurrency = (amountInPaise: number) =>
     maximumFractionDigits: 0,
   }).format(amountInPaise / 100);
 
-const formatDate = (dateString: string | null) => {
+const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
   return new Date(dateString).toLocaleTimeString('en-IN', {
     hour: '2-digit',
@@ -38,17 +39,93 @@ const formatDate = (dateString: string | null) => {
   });
 };
 
+const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
+  if (!checkIn || !hours || hours <= 0) {
+    return null;
+  }
+  const checkInDate = new Date(checkIn);
+  const durationInMs = hours * 60 * 60 * 1000;
+  return new Date(checkInDate.getTime() + durationInMs);
+};
+
 const formatDuration = (hours: number | null) => {
   if (!hours || hours === 0) return '—';
   if (hours < 1) return `${Math.round(hours * 60)} mins`;
-  
   const h = Math.floor(hours);
   const m = Math.round((hours % 1) * 60);
-  
   if (m === 0) return `${h} hr${h > 1 ? 's' : ''}`;
   if (h === 0) return `${m} mins`;
   return `${h}hr ${m}m`;
 };
+
+
+// --- NEW: Add-on Modal Component ---
+function AddonModal({
+  sale,
+  onClose,
+  onConfirm,
+}: {
+  sale: Sale | null;
+  onClose: () => void;
+  onConfirm: (saleId: string, extraMinutes: number, extraAmount: number, currentSale: Sale) => void;
+}) {
+  const [minutes, setMinutes] = useState(30);
+  const [amount, setAmount] = useState(0);
+
+  if (!sale) return null;
+
+  const handleSubmit = () => {
+    onConfirm(sale.id, minutes, amount, sale);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
+        <h2 className="text-xl font-bold text-gray-800">Add Add-on for {sale.name}</h2>
+        
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Extra Time (in minutes)</label>
+          <input
+            type="number"
+            value={minutes}
+            onChange={(e) => setMinutes(Number(e.target.value))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+            step="15"
+            min="0"
+          />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Extra Amount (in ₹)</label>
+          <input
+            type="number"
+            value={amount}
+            onChange={(e) => setAmount(Number(e.target.value))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+            step="100"
+            min="0"
+          />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            Confirm Add-on
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export default function OutletSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -59,7 +136,13 @@ export default function OutletSalesPage() {
   const [roomInputs, setRoomInputs] = useState<{[key: string]: string}>({});
   const [therapistInputs, setTherapistInputs] = useState<{[key: string]: string}>({});
   
-  // const [therapistList, setTherapistList] = useState<string[]>([]); // No longer needed
+  // --- NEW: Refs and State for new features ---
+  const warningTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const snoozedClients = useRef<Set<string>>(new Set());
+  
+  const [addonModalOpen, setAddonModalOpen] = useState(false);
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  // --- End of new state ---
 
   useEffect(() => {
     async function fetchOutletSession() {
@@ -71,7 +154,6 @@ export default function OutletSalesPage() {
         if (data.outletId && data.outletName) {
           setOutletId(data.outletId);
           setOutletName(data.outletName);
-          // setTherapistList(THERAPISTS_BY_OUTLET[data.outletName] || []); // No longer needed
         } else {
           throw new Error("No outlet data returned from API");
         }
@@ -84,15 +166,13 @@ export default function OutletSalesPage() {
   }, []);
 
   const fetchSales = useCallback(async () => {
-    // --- FIX 1: Check for outletId, not outletName ---
     if (!outletId) return; 
     
-    setLoading(true);
+    // setLoading(true); // Removed for smoother refreshes
     try {
       let query = supabase
         .from('customers')
         .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name')
-        // --- FIX 2: Query by the new 'outlet_id' column instead of 'outlet' ---
         .eq('outlet_id', outletId) 
         .order('check_in_time', { ascending: false, nullsFirst: false });
 
@@ -118,11 +198,10 @@ export default function OutletSalesPage() {
     } finally {
       setLoading(false);
     }
-  // --- FIX 3: Update dependency to outletId ---
   }, [dateFilter, outletId]);
 
+  // This useEffect handles Supabase Realtime
   useEffect(() => {
-    // --- FIX 4: Check for outletId ---
     if (!outletId) return;
     
     fetchSales();
@@ -134,11 +213,10 @@ export default function OutletSalesPage() {
           event: '*', 
           schema: 'public', 
           table: 'customers',
-          // --- FIX 5: Filter the channel subscription by 'outlet_id' ---
           filter: `outlet_id=eq.${outletId}` 
         },
         (payload) => {
-          fetchSales();
+          fetchSales(); // Refetch on any change
         }
       )
       .subscribe();
@@ -147,35 +225,126 @@ export default function OutletSalesPage() {
       supabase.removeChannel(channel);
     };
     
-  // --- FIX 6: Update dependencies (outletName is no longer needed for query) ---
   }, [fetchSales, outletId]);
 
+  
+  // --- NEW: Checkout Warning Pop-up System ---
+  const handleCheckOut = async (id: string) => {
+    // This can be called by the button or the new pop-up
+    await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
+    // Realtime listener will call fetchSales
+  };
+
+  useEffect(() => {
+    const checkClientWarnings = () => {
+      const now = new Date();
+      
+      sales.forEach((sale) => {
+        // Find active, un-snoozed clients
+        if (!sale.check_out_time && sale.check_in_time && sale.session_hours && !snoozedClients.current.has(sale.id)) {
+          const expectedCheckout = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+          
+          if (expectedCheckout && now >= expectedCheckout) {
+            // --- Trigger Warning Pop-up ---
+            if (window.confirm(`Has "${sale.name}" checked out? (Est. checkout was ${formatTime(expectedCheckout.toISOString())})`)) {
+              // User clicked "Yes"
+              handleCheckOut(sale.id);
+            } else {
+              // User clicked "No" - Snooze for 5 minutes
+              snoozedClients.current.add(sale.id);
+              console.log(`Snoozing client ${sale.id} for 5 minutes.`);
+              setTimeout(() => {
+                snoozedClients.current.delete(sale.id);
+                console.log(`Snooze ended for ${sale.id}.`);
+              }, 300000); // 5 minutes
+            }
+          }
+        }
+      });
+    };
+
+    // Run this check every 30 seconds
+    const WARNING_CHECK_MS = 30000;
+    if (warningTimerRef.current) clearInterval(warningTimerRef.current);
+    warningTimerRef.current = setInterval(checkClientWarnings, WARNING_CHECK_MS);
+
+    return () => {
+      if (warningTimerRef.current) clearInterval(warningTimerRef.current);
+    };
+  }, [sales, fetchSales]); // Depends on `sales` array
+
+
+  // --- (Input save handlers are unchanged) ---
   const handleRoomInputChange = (id: string, room: string) => {
     setRoomInputs(prev => ({ ...prev, [id]: room }));
   };
-
   const handleRoomSave = async (id: string, room: string) => {
     if (!room) return;
     await supabase.from('customers').update({ room }).eq('id', id);
   };
-  
   const handleTherapistInputChange = (id: string, name: string) => {
     setTherapistInputs(prev => ({ ...prev, [id]: name }));
   };
-
   const handleTherapistSave = async (id: string, therapistName: string) => {
     if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
   };
   
-  const handleCheckOut = async (id: string) => {
-    if (!confirm('Are you sure you want to check out this client?')) return;
-    await supabase
-      .from('customers')
-      .update({ check_out_time: new Date().toISOString() })
-      .eq('id', id);
-  };
   
+  // --- NEW: Add-on Modal Handlers ---
+  const handleOpenAddonModal = (sale: Sale) => {
+    setSelectedSale(sale);
+    setAddonModalOpen(true);
+  };
+
+  const handleCloseAddonModal = () => {
+    setAddonModalOpen(false);
+    setSelectedSale(null);
+  };
+
+  const handleConfirmAddon = async (
+    saleId: string,
+    extraMinutes: number,
+    extraAmount: number,
+    currentSale: Sale
+  ) => {
+    if (extraMinutes <= 0 && extraAmount <= 0) {
+      handleCloseAddonModal();
+      return;
+    }
+
+    try {
+      const extraHours = extraMinutes / 60;
+      const newSessionHours = (currentSale.session_hours || 0) + extraHours;
+      
+      const extraAmountInPaise = extraAmount * 100;
+      // Note: Outlet sales page doesn't show package_amount, assumes it's amount_paid
+      const newAmountPaid = (currentSale.amount_paid || 0) + extraAmountInPaise;
+      
+      const newTreatment = `${currentSale.treatment} (+${extraMinutes}m addon)`;
+
+      const { error } = await supabase
+        .from('customers')
+        .update({
+          session_hours: newSessionHours,
+          amount_paid: newAmountPaid, // This updates amount_paid for non-package
+          treatment: newTreatment,
+        })
+        .eq('id', saleId);
+      
+      if (error) throw error;
+
+      alert('Add-on saved successfully!');
+      // fetchSales(); // Realtime listener will handle this
+      handleCloseAddonModal();
+    } catch (err: any) {
+      console.error('Error saving add-on:', err);
+      alert(`Error saving add-on: ${err.message}`);
+    }
+  };
+
+
+  // --- (totalSales calculation is unchanged) ---
   const totalSales = sales
     .filter(sale => !!sale.check_out_time) 
     .reduce((sum, sale) => {
@@ -185,8 +354,16 @@ export default function OutletSalesPage() {
 
   return (
     <div className="space-y-6">
+      {/* --- NEW: Render the Add-on Modal --- */}
+      <AddonModal
+        sale={selectedSale}
+        onClose={handleCloseAddonModal}
+        onConfirm={handleConfirmAddon}
+      />
+
       <h1 className="text-2xl font-bold text-gray-800">{outletName} Sales & Check-out</h1>
 
+      {/* Filter Bar (unchanged) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-1">Date</label>
@@ -194,14 +371,13 @@ export default function OutletSalesPage() {
             id="date"
             type="date"
             value={dateFilter}
-            // --- THIS IS THE FIX ---
             onChange={(e) => setDateFilter(e.target.value)}
-            // --- END OF FIX ---
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
           />
         </div>
       </div>
 
+      {/* Total Sales Card (unchanged) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales (Filtered)</h3>
         <p className="text-3xl font-bold mt-2 text-green-600">
@@ -210,6 +386,7 @@ export default function OutletSalesPage() {
         <p className="text-gray-500 text-sm">{sales.filter(s => !!s.check_out_time).length} completed transaction(s)</p>
       </div>
 
+      {/* Sales Table (UI Updated) */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -219,10 +396,10 @@ export default function OutletSalesPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check-in</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check-out</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -237,8 +414,14 @@ export default function OutletSalesPage() {
                       <div className="text-sm font-medium text-gray-900">{sale.name}</div>
                       <div className="text-sm text-gray-500">{sale.mobile}</div>
                     </td>
+                    
+                    {/* NEW: Updated Service column to show treatment changes */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
+                      {sale.took_package ? (
+                        <span className="font-medium text-purple-700">New Package</span>
+                      ) : (
+                        <div className="max-w-xs truncate" title={sale.treatment}>{sale.treatment}</div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDuration(sale.session_hours)}
@@ -246,10 +429,35 @@ export default function OutletSalesPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
+                    
+                    {/* Session Time Column (unchanged) */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDate(sale.check_in_time)}
+                      <div>
+                        <span className="font-medium">In: </span>
+                        {formatTime(sale.check_in_time)}
+                      </div>
+                      {sale.check_out_time ? (
+                        <div>
+                          <span className="font-medium">Out: </span>
+                          {formatTime(sale.check_out_time)}
+                        </div>
+                      ) : (
+                        (() => {
+                          const expectedTime = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+                          if (expectedTime) {
+                            return (
+                              <div className="text-gray-400">
+                                <span className="font-medium">Est. Out: </span>
+                                {formatTime(expectedTime.toISOString())}
+                              </div>
+                            );
+                          }
+                          return <div><span className="font-medium">Out: </span>—</div>;
+                        })()
+                      )}
                     </td>
                     
+                    {/* Therapist Column (unchanged) */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
@@ -272,6 +480,7 @@ export default function OutletSalesPage() {
                       )}
                     </td>
 
+                    {/* Room Column (unchanged) */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
@@ -293,16 +502,28 @@ export default function OutletSalesPage() {
                         </div>
                       )}
                     </td>
+                    
+                    {/* NEW: Updated Action Column with Add-on button */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{formatDate(sale.check_out_time)}</span>
+                         <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                          Completed
+                        </span>
                       ) : (
-                        <button
-                          onClick={() => handleCheckOut(sale.id)}
-                          className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
-                        >
-                          Check Out
-                        </button>
+                        <div className="flex flex-col gap-2">
+                          <button
+                            onClick={() => handleCheckOut(sale.id)}
+                            className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
+                          >
+                            Check Out
+                          </button>
+                          <button
+                            onClick={() => handleOpenAddonModal(sale)}
+                            className="px-3 py-1 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600"
+                          >
+                            Add-on
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
