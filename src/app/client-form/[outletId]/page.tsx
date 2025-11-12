@@ -457,7 +457,8 @@ export default function ClientCheckinForm() {
               <div className="flex-1">
                 <input
                   name="sessionMinutes"
-                  type="number" min="0" max="59" step="15"
+                  type="number" min="0" max="59" 
+                  step="1" // <-- This is the fix for 1-minute duration
                   placeholder="Mins"
                   value={formData.sessionMinutes || ''}
                   onChange={handleChange}

@@ -19,6 +19,7 @@ type Sale = {
   room: string | null;
   therapist_name: string | null;
   session_hours: number | null;
+  payment_method: string | null; // <-- NEW
 };
 
 // --- (Helper functions) ---
@@ -66,6 +67,17 @@ const formatDuration = (hours: number | null) => {
   if (m === 0) return `${h} hr${h > 1 ? 's' : ''}`;
   if (h === 0) return `${m} mins`;
   return `${h}hr ${m}m`;
+};
+
+// --- NEW: Helper to format payment method ---
+const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
+  if (tookPackage) return 'Package'; // This rule comes first
+  if (method === 'card') return 'UPI / Card';
+  if (method === 'cash') return 'Cash';
+  if (method === 'package') return 'Package'; // Fallback
+  if (!method) return 'N/A';
+  // Capitalize any other values
+  return method.charAt(0).toUpperCase() + method.slice(1);
 };
 
 
@@ -238,7 +250,8 @@ export default function OutletSalesPage() {
     try {
       let query = supabase
         .from('customers')
-        .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name')
+        // --- UPDATED: Added payment_method ---
+        .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, payment_method')
         .eq('outlet_id', outletId) 
         .order('check_in_time', { ascending: false, nullsFirst: false });
 
@@ -502,11 +515,13 @@ export default function OutletSalesPage() {
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
+              {/* --- UPDATED: Added Payment Method Header --- */}
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
@@ -515,9 +530,11 @@ export default function OutletSalesPage() {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan={8} className="p-6 text-center text-gray-500">Loading...</td></tr>
+                // --- UPDATED: ColSpan ---
+                <tr><td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td></tr>
               ) : sales.length === 0 ? (
-                <tr><td colSpan={8} className="p-6 text-center text-gray-500">No sales found for these filters.</td></tr>
+                // --- UPDATED: ColSpan ---
+                <tr><td colSpan={9} className="p-6 text-center text-gray-500">No sales found for these filters.</td></tr>
               ) : (
                 sales.map(sale => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
@@ -539,6 +556,11 @@ export default function OutletSalesPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
+                    </td>
+                    
+                    {/* --- NEW: Payment Method Cell --- */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatPaymentMethod(sale.payment_method, sale.took_package)}
                     </td>
                     
                     {/* Session Time Column (unchanged) */}
