@@ -151,18 +151,41 @@ export default function AdminSalesPage() {
     };
   }, [fetchSales]);
 
-  // --- UPDATED: totalSales now based on check_in_time ---
+  // --- UPDATED: All sales calculations are now based on check_in_time ---
+  const activeSales = useMemo(() => {
+    return sales.filter((sale) => !!sale.check_in_time);
+  }, [sales]);
+  
   const totalSales = useMemo(() => {
-    return sales
-      .filter((sale) => !!sale.check_in_time) // CHANGED
-      .reduce((sum, sale) => {
+    return activeSales.reduce((sum, sale) => {
         const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
         return sum + (amount || 0);
       }, 0);
-  }, [sales]);
+  }, [activeSales]);
 
-  // --- UPDATED: Renamed and logic changed to check_in_time ---
-  const activeSalesCount = useMemo(() => sales.filter((s) => !!s.check_in_time).length, [sales]);
+  // --- NEW: Total Cash Sales ---
+  const totalCashSales = useMemo(() => {
+    return activeSales
+      .filter((sale) => sale.payment_method === 'cash')
+      .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
+  }, [activeSales]);
+
+  // --- NEW: Total UPI/Card Sales ---
+  const totalUpiSales = useMemo(() => {
+    return activeSales
+      .filter((sale) => sale.payment_method === 'card')
+      .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
+  }, [activeSales]);
+
+  // --- NEW: Total Package Sales (by value) ---
+  const totalPackageSales = useMemo(() => {
+    return activeSales
+      .filter((sale) => sale.payment_method === 'package' || sale.took_package)
+      .reduce((sum, sale) => sum + (sale.package_amount || 0), 0);
+  }, [activeSales]);
+
+  const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
+
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -306,12 +329,39 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* --- UPDATED: Total Sales Card --- */}
+      {/* --- UPDATED: Total Sales Card Grid --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (Filtered)</h3>
-        <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
-        <p className="text-gray-500 text-sm">{activeSalesCount} active/completed transaction(s)</p>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 divide-y md:divide-y-0 md:divide-x">
+          {/* Total Sales */}
+          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+            <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (All)</h3>
+            <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
+            <p className="text-gray-500 text-sm">{activeSalesCount} active/completed session(s)</p>
+          </div>
+          
+          {/* Cash Sales */}
+          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+            <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
+            <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
+            <p className="text-gray-500 text-sm">&nbsp;</p> 
+          </div>
+
+          {/* UPI/Card Sales */}
+          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+            <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
+            <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
+            <p className="text-gray-500 text-sm">&nbsp;</p>
+          </div>
+
+          {/* Package Sales */}
+          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+            <h3 className="text-gray-500 text-sm font-medium">Total Package Value</h3>
+            <p className="text-3xl font-bold mt-2 text-gray-600">{formatCurrency(totalPackageSales)}</p>
+            <p className="text-gray-500 text-sm">&nbsp;</p>
+          </div>
+        </div>
       </div>
+
 
       {/* Sales Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
@@ -412,7 +462,7 @@ export default function AdminSalesPage() {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {/* There was a typo here in your original file: sale.check__time. I fixed it to sale.check_out_time */}
+                      {/* Fixed typo: sale.check__time -> sale.check_out_time */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
