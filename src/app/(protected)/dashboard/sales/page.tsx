@@ -69,12 +69,14 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- NEW: Helper to format payment method ---
+// --- ★★★ FIX: Corrected Payment Method Logic ★★★ ---
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  if (method === 'card') return 'UPI / Card'; // Assuming 'card' is your UPI value
+  // The API stores 'card' for UPI payments
+  if (method === 'card') return 'UPI';
+  // The API stores 'cash' for both Cash and Card payments
+  if (method === 'cash') return 'Cash / Card';
   if (method === 'package') return 'Package';
-  if (method === 'cash') return 'Cash';
   // Capitalize any other values
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
@@ -139,13 +141,13 @@ export default function AdminSalesPage() {
     fetchSales();
   }, [fetchSales]);
 
-  // AUTO-REFRESH: every 5 minutes (300,000 ms). This is how it "reflects" changes.
+  // --- ★★★ UPDATED: AUTO-REFRESH every 3 minutes (180,000 ms) ★★★ ---
   useEffect(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    const FIVE_MIN_MS = 300000; // 5 minutes
+    const THREE_MIN_MS = 180000; // 3 minutes
     pollTimerRef.current = setInterval(() => {
       fetchSales();
-    }, FIVE_MIN_MS);
+    }, THREE_MIN_MS);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
@@ -163,21 +165,21 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
-  // --- NEW: Total Cash Sales ---
+  // --- Total Cash/Card Sales ---
   const totalCashSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'cash')
       .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
   }, [activeSales]);
 
-  // --- NEW: Total UPI/Card Sales ---
+  // --- Total UPI Sales ---
   const totalUpiSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'card')
       .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
   }, [activeSales]);
 
-  // --- NEW: Total Package Sales (by value) ---
+  // --- Total Package Sales (by value) ---
   const totalPackageSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'package' || sale.took_package)
@@ -220,7 +222,7 @@ export default function AdminSalesPage() {
         Mobile: sale.mobile,
         Service: sale.took_package ? 'New Package' : sale.treatment,
         'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-        'Payment Method': formatPaymentMethod(sale.payment_method), // <-- NEW
+        'Payment Method': formatPaymentMethod(sale.payment_method), // <-- Uses new logic
         Duration: formatDuration(sale.session_hours),
         'Sold By': sale.package_sold_by || 'N/A',
         Therapist: sale.therapist_name || 'N/A',
@@ -339,16 +341,16 @@ export default function AdminSalesPage() {
             <p className="text-gray-500 text-sm">{activeSalesCount} active/completed session(s)</p>
           </div>
           
-          {/* Cash Sales */}
+          {/* ★★★ FIX: Cash/Card Sales ★★★ */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total Cash/Card Sales</h3>
             <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p> 
           </div>
 
-          {/* UPI/Card Sales */}
+          {/* ★★★ FIX: UPI Sales ★★★ */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total UPI Sales</h3>
             <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
           </div>
