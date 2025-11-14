@@ -3,17 +3,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS } from '@/lib/outlet';
+// --- 1. IMPORT Outlet TYPE ---
+import { OUTLETS, Outlet } from '@/lib/outlet';
 
 // --- Type Definitions ---
 type Treatment = { id: string; name: string; };
-// --- FIX: Add email to ClientInfo ---
 type ClientInfo = {
   status: 'active' | 'expired';
   name: string;
   mobile: string;
   remainingHours: number;
-  email?: string; // <-- NEW (optional)
 };
 
 // --- Main Form Component ---
@@ -22,7 +21,8 @@ export default function ClientCheckinForm() {
   const outletId = params.outletId as string;
   const router = useRouter();
 
-  const [outlet, setOutlet] = useState<{ id: string; name: string } | null>(null);
+  // --- 2. UPDATE STATE TO USE Outlet TYPE ---
+  const [outlet, setOutlet] = useState<Outlet | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
@@ -34,23 +34,23 @@ export default function ClientCheckinForm() {
     amountPaid: 0,
     sessionHours: 0,
     sessionMinutes: 0,
-    isPackageCustomer: false,
     paymentMethod: 'cash',
+    // --- NEW PACKAGE STATE ---
+    tookPackage: false,
+    packageAmount: 0,
+    totalPackageHours: 0,
+    packageValidity: '3 months',
+    sold_by: '', // <-- Added 'Sold By'
   });
 
-  // --- OTP State ---
-  const [otpState, setOtpState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
-  const [otpCode, setOtpCode] = useState('');
-  // --- NEW: State to hold the client's email ---
-  const [clientEmail, setClientEmail] = useState('');
-
+  // --- OTP State REMOVED ---
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   // Effect 1: Load Outlet Info & Treatments
   useEffect(() => {
-    // ... (no change, this is fine)
     if (!outletId) {
       setError('Outlet ID missing in URL.');
       setLoading(false);
@@ -64,7 +64,7 @@ export default function ClientCheckinForm() {
       setLoading(false);
       return;
     }
-    setOutlet(outletInfo);
+    setOutlet(outletInfo); // This now stores the full outlet object
     const fetchTreatments = async () => {
       try {
         const { data, error: dbError } = await supabase
@@ -84,7 +84,7 @@ export default function ClientCheckinForm() {
     fetchTreatments();
   }, [outletId]);
 
-  // Effect 2 & 3: Client Lookup
+  // Effect 2 & 3: Client Lookup (Simplified)
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
@@ -92,48 +92,34 @@ export default function ClientCheckinForm() {
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
       if (!res.ok) {
         setClientInfo(null);
-        setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
-        setOtpState('idle'); 
-        setClientEmail('');
+        setFormData(prev => ({ ...prev, name: '' }));
         return;
       }
       const data: ClientInfo | null = await res.json();
       setClientInfo(data);
       
-      if (data && data.status === 'active') {
+      if (data) {
         setFormData(prev => ({
           ...prev,
           name: data.name || '',
-          isPackageCustomer: true 
         }));
-        // --- NEW: Store the client's email ---
-        setClientEmail(data.email || '');
-        setOtpState('idle'); 
       } else {
         setFormData(prev => ({
           ...prev,
-          name: data?.name || '',
-          isPackageCustomer: false
+          name: '',
         }));
-        setOtpState('idle');
-        setClientEmail('');
       }
     } catch (e) {
       console.error('Client lookup error:', e);
       setClientInfo(null);
-      setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
-      setOtpState('idle');
-      setClientEmail('');
+      setFormData(prev => ({ ...prev, name: '' }));
     }
   }, [mobile]);
 
   useEffect(() => {
     setClientInfo(null);
-    setOtpState('idle'); 
-    setOtpCode('');
-    setClientEmail('');
     if (mobile.length < 10) {
-        setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false }));
+        setFormData(prev => ({ ...prev, name: '' }));
     }
     if (lookupTimeout.current) {
       clearTimeout(lookupTimeout.current);
@@ -157,11 +143,6 @@ export default function ClientCheckinForm() {
     
     setError('');
     
-    if (name === 'isPackageCustomer' && !checked) {
-      setOtpState('idle');
-      setOtpCode('');
-    }
-
     setFormData(prev => {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
@@ -172,34 +153,19 @@ export default function ClientCheckinForm() {
         updatedValue = value;
       }
       const updated = { ...prev, [name]: updatedValue };
+
+      // If taking package, clear single-session amount
+      if (name === 'tookPackage' && checked) {
+        updated.amountPaid = 0;
+      }
+
       return updated;
     });
   };
 
-  // --- NEW: Handler to Send OTP (sends email) ---
-  const handleSendOtp = async () => {
-    if (!clientEmail) {
-      setError('No email found for this package client. Cannot send OTP. Please update client at admin panel.');
-      return;
-    }
-    setOtpState('sending');
-    setError('');
-    try {
-      const res = await fetch('/api/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: clientEmail }), // <-- Send email
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send OTP.');
-      setOtpState('sent'); // Show OTP input
-    } catch (err: any) {
-      setError(err.message);
-      setOtpState('idle'); 
-    }
-  };
+  // --- OTP Handler REMOVED ---
 
-  // --- Helper Functions (no change) ---
+  // --- Helper Functions (UPDATED) ---
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
@@ -207,9 +173,12 @@ export default function ClientCheckinForm() {
   }, [formData.sessionHours, formData.sessionMinutes]);
 
   const getFinalAmountInPaise = useCallback(() => {
-    if (formData.isPackageCustomer) return 0;
+    // --- UPDATED: Logic now checks tookPackage ---
+    if (formData.tookPackage) {
+      return (Number(formData.packageAmount) || 0) * 100;
+    }
     return (Number(formData.amountPaid) || 0) * 100;
-  }, [formData.isPackageCustomer, formData.amountPaid]);
+  }, [formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
 
   // --- handleSubmit (UPDATED) ---
@@ -219,83 +188,100 @@ export default function ClientCheckinForm() {
     setSuccess('');
     setLoading(true);
 
-    const sessionHours = getSessionDuration();
-
-    // --- ★★★ FIX: UNIVERSAL DURATION CHECK ★★★ ---
-    // This check now applies to ALL customers.
-    if (sessionHours <= 0) {
-      setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins).');
+    // --- 3. ADDED SAFETY CHECK FOR OUTLET ---
+    if (!outlet) {
+      setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
       return;
     }
-    // --- END OF FIX ---
 
-    // --- Package Customer Checks ---
-    if (formData.isPackageCustomer) {
-      // The sessionHours check was here, but is now above.
-      if (!otpCode || otpCode.length !== 6) {
-        setError('A valid 6-digit OTP is required to use a package.');
+    const sessionHours = getSessionDuration();
+    const totalPackageHours = Number(formData.totalPackageHours) || 0;
+
+    // --- UPDATED VALIDATION LOGIC ---
+    if (formData.tookPackage) {
+      // Package purchase checks
+      if (!formData.packageAmount || formData.packageAmount <= 0 || !totalPackageHours || totalPackageHours <= 0) {
+        setError('Please enter a valid Package Amount and Total Hours.');
         setLoading(false);
         return;
       }
-    } 
-    // --- MODIFIED: Non-Package Customer Checks ---
-    else {
+      if (!formData.sold_by.trim()) {
+        setError('Please enter the name of the staff who sold the package.');
+        setLoading(false);
+        return;
+      }
+      // Check if first session is longer than the package itself
+      if (sessionHours > totalPackageHours) {
+        setError('First session duration cannot be longer than the total package hours.');
+        setLoading(false);
+        return;
+      }
+    } else {
+      // Normal session checks
+      if (sessionHours <= 0) {
+        setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins).');
+        setLoading(false);
+        return;
+      }
       const amountInRupees = Number(formData.amountPaid) || 0;
-
-      // Check 1: Is amount valid?
       if (amountInRupees <= 0) {
           setError('Please enter a valid Amount for the treatment.');
           setLoading(false);
           return;
       }
       
-      // --- NEW: Check if amount is less than 1800 ---
-      if (amountInRupees < 1800) {
-          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹1800. Redirecting...`);
-          setLoading(true); // Keep loading spinner on
-          
-          // Redirect to a new "declined" page
+      // --- 4. USE DYNAMIC MINIMUM AMOUNT ---
+      const minAmount = outlet.minTreatmentAmount;
+      if (amountInRupees < minAmount) {
+          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${minAmount}. Redirecting...`);
+          setLoading(true);
           setTimeout(() => {
               router.push(`/payment-declined?outletId=${outletId}&amount=${amountInRupees}`);
           }, 1500);
-          
-          // Stop the function here. Do not proceed to submit.
           return; 
       }
     }
-    // --- END OF MODIFICATION ---
+    // --- END OF VALIDATION ---
     
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
-    const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
+    
+    // Transform payment method for the API
+    let apiPaymentMethod: string;
+    if (formData.paymentMethod === 'upi') {
+      apiPaymentMethod = 'card'; // 'card' is the trigger for the API's UPI logic
+    } else {
+      apiPaymentMethod = 'cash'; // Both 'cash' and 'card' selections go to the API as 'cash'
+    }
 
     try {
-      // --- ★★★ FIX: SET check_in_time FOR ALL CUSTOMERS ★★★ ---
-      // This ensures they appear on the dashboard immediately, even before UPI payment.
       let checkInTime: string | null = new Date().toISOString();
-      // --- The old conditional logic was removed ---
 
       const payload = {
           name: formData.name.trim(),
           mobile: mobile,
           date: new Date().toISOString().split('T')[0],
           treatment: treatmentName,
-          amountPaid: formData.isPackageCustomer ? 0 : finalAmountInPaise,
-          sessionHours: sessionHours,
-          isPackageCustomer: formData.isPackageCustomer,
-          tookPackage: false,
-          packageAmount: 0,
-          totalPackageHours: 0,
-          packageSoldBy: null, 
+          
+          // --- NEW PACKAGE LOGIC ---
+          tookPackage: formData.tookPackage,
+          packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+          totalPackageHours: totalPackageHours, // Send the total
+          packageSoldBy: formData.tookPackage ? formData.sold_by.trim() : null,
+          packageValidity: formData.tookPackage ? formData.packageValidity : null,
+          
+          // --- OLD LOGIC (modified) ---
+          amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
+          sessionHours: sessionHours, // Send the first session hours
+          isPackageCustomer: false, // Always false now
+
+          // --- UNCHANGED ---
           outlet: outlet!.name,
           outlet_id: outlet!.id,
-          paymentMethod: effectivePaymentMethod,
+          paymentMethod: apiPaymentMethod, // Send the transformed 'apiPaymentMethod'
           finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime, // <-- This is now always set
-          // --- NEW: Send OTP code AND Email ---
-          otpCode: formData.isPackageCustomer ? otpCode : null,
-          clientEmail: formData.isPackageCustomer ? clientEmail : null,
+          check_in_time: checkInTime,
       };
 
       // API call
@@ -307,25 +293,11 @@ export default function ClientCheckinForm() {
 
       const data = await res.json();
       if (!res.ok) {
-        setOtpState('sent'); // Reset to 'sent' to allow re-try
         throw new Error(data.error || 'Submission failed');
       }
 
-      // --- Success (reset OTP state) ---
-      if (data.paymentMethod === 'package') {
-        setSuccess('Success! Session using package is registered.');
-        setMobile('');
-        setFormData({
-          name: '', treatment: '', amountPaid: 0, sessionHours: 0, sessionMinutes: 0,
-          isPackageCustomer: false, paymentMethod: 'cash',
-        });
-        setClientInfo(null);
-        setLoading(false); 
-        setOtpState('idle'); // Reset OTP
-        setOtpCode('');
-        setClientEmail('');
-      } 
-      else if (data.paymentMethod === 'cash') {
+      // --- Success (API returns 'cash' or 'card') ---
+      if (data.paymentMethod === 'cash') {
         setSuccess('Registration successful! Redirecting...');
         setTimeout(() => {
           router.push(`/client-cash-success?outletId=${outletId}`);
@@ -350,18 +322,10 @@ export default function ClientCheckinForm() {
   };
 
   // --- Render Logic (Updated) ---
-  const showAmountField = !formData.isPackageCustomer;
-  const isSubmitDisabled = loading || (formData.isPackageCustomer && otpCode.length !== 6);
+  const showAmountField = !formData.tookPackage;
+  const isSubmitDisabled = loading;
   
-  // --- NEW: Helper to mask email ---
-  const maskEmail = (email: string) => {
-    if (!email || !email.includes('@')) return '...';
-    const parts = email.split('@');
-    const user = parts[0];
-    const domain = parts[1];
-    return `${user.substring(0, 1)}******${user.substring(user.length - 1)}@${domain}`;
-  };
-
+  // --- maskEmail helper REMOVED ---
 
   // --- Main Form Render ---
   return (
@@ -409,11 +373,11 @@ export default function ClientCheckinForm() {
           {/* Package Info Display */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg text-sm text-center text-green-300">
-              <strong>Active package found.</strong>
+              <strong>Active package found.</strong> (Can buy another)
             </div>
           )}
            {clientInfo && clientInfo.status !== 'active' && (
-            <div className="p-3 bg-yellow-900/5A0 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
+            <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
               No active package found.
             </div>
           )}
@@ -440,8 +404,11 @@ export default function ClientCheckinForm() {
             {treatments.length === 0 && !loading && <p className="text-xs text-red-500 mt-1">No treatments loaded for this outlet.</p>}
           </div>
 
+          {/* --- SESSION DURATION (NOW ALWAYS VISIBLE) --- */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration *</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              {formData.tookPackage ? 'First Session Duration (Optional)' : 'Session Duration *'}
+            </label>
             <div className="flex space-x-2">
               <div className="flex-1">
                 <input
@@ -458,7 +425,7 @@ export default function ClientCheckinForm() {
                 <input
                   name="sessionMinutes"
                   type="number" min="0" max="59" 
-                  step="1" // <-- This is the fix for 1-minute duration
+                  step="1"
                   placeholder="Mins"
                   value={formData.sessionMinutes || ''}
                   onChange={handleChange}
@@ -469,69 +436,83 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* --- Section 3: Package Options (Updated) --- */}
+          {/* --- Section 3: Package Options (UPDATED) --- */}
           <div className="pt-4 border-t border-gray-700 space-y-3">
-             <span className="block text-sm font-medium text-gray-300 mb-1">Package Status:</span>
             <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-800">
               <input
                 type="checkbox"
-                name="isPackageCustomer"
-                checked={formData.isPackageCustomer}
+                name="tookPackage"
+                checked={formData.tookPackage}
                 onChange={handleChange}
                 className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500 focus:ring-offset-gray-900"
-                disabled={loading || !clientInfo || clientInfo.status !== 'active'}
+                disabled={loading}
               />
-              <span className={`ml-2 text-sm ${(!clientInfo || clientInfo.status !== 'active') ? 'text-gray-500 cursor-not-allowed' : 'text-gray-300'}`}>
-                Use existing package credits
+              <span className="ml-2 text-sm text-gray-300">
+                Add new package
               </span>
             </label>
             
-            {/* --- NEW: OTP Verification Section (Updated for Email) --- */}
-            {formData.isPackageCustomer && (
-              <div className="p-4 bg-gray-800 rounded-lg border border-gray-700 space-y-3">
-                <h3 className="text-sm font-medium text-white">Customer Verification (Required)</h3>
-                
-                {clientEmail ? (
-                  <>
-                    <p className="text-xs text-gray-400">
-                      To use package hours, an OTP will be sent to the client's registered email: 
-                      <strong className="text-amber-400 ml-1">{maskEmail(clientEmail)}</strong>
-                    </p>
-                    
-                    {otpState !== 'sent' && (
-                      <button
-                        type="button"
-                        onClick={handleSendOtp}
-                        disabled={otpState === 'sending'}
-                        className="w-full px-4 py-2 bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        {otpState === 'sending' ? 'Sending...' : 'Send OTP to Client Email'}
-                      </button>
-                    )}
-
-                    {otpState === 'sent' && (
-                      <div className="space-y-2">
-                        <label htmlFor="otpCode" className="block text-sm font-medium text-green-400">✓ OTP Sent! Enter 6-Digit Code</label>
-                        <input
-                          id="otpCode"
-                          type="tel"
-                          value={otpCode}
-                          onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                          maxLength={6}
-                          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                          placeholder="123456"
-                        />
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-sm text-yellow-400">
-                    No email found for this package. Cannot send OTP. Please update client at admin panel.
-                  </p>
-                )}
+            {/* --- NEW: Add Package Fields --- */}
+            {formData.tookPackage && (
+              <div className="p-4 bg-gray-800 rounded-lg border border-gray-700 space-y-4">
+                <h3 className="text-md font-medium text-white">New Package Details</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Package Amount (₹) *</label>
+                    <input
+                      name="packageAmount"
+                      type="number"
+                      min="0"
+                      value={formData.packageAmount || ''}
+                      onChange={handleChange}
+                      required={formData.tookPackage}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Total Hours *</label>
+                    <input
+                      name="totalPackageHours"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={formData.totalPackageHours || ''}
+                      onChange={handleChange}
+                      required={formData.tookPackage}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">Package Validity *</label>
+                  <select
+                    name="packageValidity"
+                    value={formData.packageValidity}
+                    onChange={handleChange}
+                    required={formData.tookPackage}
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                  >
+                    <option value="3 months">3 Months</option>
+                    <option value="6 months">6 Months</option>
+                    <option value="9 months">9 Months</option>
+                  </select>
+                </div>
+                {/* --- 'SOLD BY' INPUT FIELD (FIXED) --- */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">Sold By (Staff Name) *</label>
+                  <input
+                    name="sold_by" 
+                    type="text"
+                    value={formData.sold_by}
+                    onChange={handleChange}
+                    required={formData.tookPackage}
+                    placeholder="Enter your name"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                  />
+                </div>
               </div>
             )}
-            {/* --- END: OTP Section --- */}
+            {/* --- END: Add Package Fields --- */}
           </div>
 
           {/* Section 4: Conditional Price Fields */}
@@ -549,13 +530,13 @@ export default function ClientCheckinForm() {
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                 placeholder="Enter amount (e.g., 500)"
                 disabled={loading}
-                required={!formData.isPackageCustomer}
+                required={!formData.tookPackage}
               />
             </div>
           )}
 
-          {/* Section 5: Payment Method */}
-          {!formData.isPackageCustomer && (
+          {/* --- Payment Method Select (MODIFIED) --- */}
+          {!formData.tookPackage && (
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
               <select
@@ -566,23 +547,50 @@ export default function ClientCheckinForm() {
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
                 disabled={loading}
               >
-                <option value="cash">Pay with Cash or Card</option>
-                <option value="card">Pay with UPI</option>
+                <option value="cash">Pay with Cash</option>
+                <option value="card">Pay with Card</option>
+                {/* --- THIS IS THE FIX --- */}
+                <option value="upi">Pay with UPI</option>
               </select>
             </div>
           )}
+          {/* If a package is being taken, show all payment options */}
+          {formData.tookPackage && (
+            <div>
+              <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
+              <select
+                id="paymentMethod"
+                name="paymentMethod"
+                value={formData.paymentMethod}
+                onChange={handleChange}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                disabled={loading}
+              >
+                <option value="cash">Pay with Cash</option>
+                <option value="card">Pay with Card</option>
+                {/* --- THIS IS THE FIX --- */}
+                <option value="upi">Pay with UPI</option>
+              </select>
+            </div>
+          )}
+          {/* --- End of modification --- */}
 
-          {/* Submit Button (Updated) */}
+
+          {/* --- Submit Button Text (MODIFIED) --- */}
           <button
             type="submit"
             disabled={isSubmitDisabled}
             className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {loading ? 'Processing...' :
-             formData.isPackageCustomer ? (otpCode.length !== 6 ? 'Enter OTP to Submit' : 'Verify & Confirm Session') :
-             formData.paymentMethod === 'cash' ? 'Register & Accept Cash' :
-             'Proceed to UPI Payment'}
+             formData.tookPackage ? 
+               (formData.paymentMethod === 'upi' ? 'Register Package & Pay UPI' : 
+                formData.paymentMethod === 'cash' ? 'Register Package & Accept Cash' : 'Register Package & Accept Card') :
+             formData.paymentMethod === 'upi' ? 'Proceed to UPI Payment' :
+              formData.paymentMethod === 'cash' ? 'Register & Accept Cash' : 'Register & Accept Card'
+            }
           </button>
+          {/* --- End of modification --- */}
         </form>
       </div>
     </div>

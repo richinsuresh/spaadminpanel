@@ -35,7 +35,8 @@ export default function PackagesPage() {
   const [packages, setPackages] = useState<PackageCustomer[]>([]);
   const [filteredPackages, setFilteredPackages] = useState<PackageCustomer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
+  // --- 1. UPDATED STATE TYPE ---
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false); // For export button
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -120,6 +121,7 @@ export default function PackagesPage() {
     };
   }, [fetchPackages]);
 
+  // --- 2. UPDATED FILTER LOGIC ---
   // Apply filters + search
   useEffect(() => {
     let result = [...packages];
@@ -131,9 +133,32 @@ export default function PackagesPage() {
         (p.mobile ?? '').includes(term)
       );
     }
-    if (statusFilter !== 'all') {
+
+    // --- Handle all status filters ---
+    if (statusFilter === 'expiring_soon') {
+      const today = new Date();
+      const thirtyDaysFromNow = new Date();
+      thirtyDaysFromNow.setDate(today.getDate() + 30);
+      today.setHours(0, 0, 0, 0); // Start of today
+
+      result = result.filter((p) => {
+        if (p.status !== 'active' || !p.expiry_date) {
+          return false;
+        }
+        try {
+          const expiryDate = new Date(p.expiry_date);
+          if (isNaN(expiryDate.getTime())) return false; // Invalid date
+          // Is expiry date between today and 30 days from now?
+          return expiryDate >= today && expiryDate <= thirtyDaysFromNow;
+        } catch (e) {
+          return false;
+        }
+      });
+    } else if (statusFilter !== 'all') {
       result = result.filter((p) => (p.status ?? '').toLowerCase() === statusFilter);
     }
+    // --- End of status filter logic ---
+
     if (outletFilter !== 'all') {
       result = result.filter((p) => (p.outlet ?? '').toLowerCase() === outletFilter.toLowerCase());
     }
@@ -216,6 +241,7 @@ export default function PackagesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            {/* --- 3. UPDATED DROPDOWN --- */}
             <select
               id="status"
               value={statusFilter}
@@ -224,6 +250,7 @@ export default function PackagesPage() {
             >
               <option value="all">All Statuses</option>
               <option value="active">Active</option>
+              <option value="expiring_soon">Expiring Soon (30d)</option>
               <option value="expired">Expired</option>
             </select>
           </div>
@@ -298,7 +325,7 @@ export default function PackagesPage() {
                         {customer.remaining_hours.toFixed(1)} hrs
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowGrap text-sm text-gray-500">
                       {formatDate(customer.expiry_date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">

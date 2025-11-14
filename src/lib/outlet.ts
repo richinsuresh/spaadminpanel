@@ -32,6 +32,12 @@ export type Outlet = {
    * in the 'public/qr-codes/' directory.
    */
   qrCodeUrl: string;
+
+  /**
+   * The minimum amount (in Rupees) for a single
+   * treatment at this outlet.
+   */
+  minTreatmentAmount: number;
 };
 
 // --- MASTER OUTLET LIST ---
@@ -42,6 +48,7 @@ export const OUTLETS: Outlet[] = [
     password: 'indira123',
     location: 'Indiranagar, Bangalore',
     qrCodeUrl: '/qr-codes/indiranagar-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '2',
@@ -49,6 +56,7 @@ export const OUTLETS: Outlet[] = [
     password: 'kaggada123',
     location: 'Kaggadaspura, Bangalore',
     qrCodeUrl: '/qr-codes/kaggadaspura-upi.png',
+    minTreatmentAmount: 1500, // Custom
   },
   {
     id: '3',
@@ -56,6 +64,7 @@ export const OUTLETS: Outlet[] = [
     password: 'kalyan123',
     location: 'Kalyan Nagar, Bangalore',
     qrCodeUrl: '/qr-codes/kalyannagar-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '4',
@@ -63,6 +72,7 @@ export const OUTLETS: Outlet[] = [
     password: 'cunningham123',
     location: 'Cunningham Road, Bangalore',
     qrCodeUrl: '/qr-codes/cunningham-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '5',
@@ -70,6 +80,7 @@ export const OUTLETS: Outlet[] = [
     password: 'hsr2-123',
     location: 'HSR Layout 2, Bangalore',
     qrCodeUrl: '/qr-codes/hsr-2-upi.png',
+    minTreatmentAmount: 1500, // Custom
   },
   {
     id: '6',
@@ -77,6 +88,7 @@ export const OUTLETS: Outlet[] = [
     password: 'vone123',
     location: 'V-ONE, Bangalore',
     qrCodeUrl: '/qr-codes/v-one-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '7',
@@ -84,6 +96,7 @@ export const OUTLETS: Outlet[] = [
     password: 'hsr1-123',
     location: 'HSR Layout 1, Bangalore',
     qrCodeUrl: '/qr-codes/hsr-1-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '8',
@@ -91,6 +104,7 @@ export const OUTLETS: Outlet[] = [
     password: 'malleswaram123',
     location: 'Malleswaram, Bangalore',
     qrCodeUrl: '/qr-codes/malleswaram-upi.png',
+    minTreatmentAmount: 1800, // Default
   },
   {
     id: '9',
@@ -98,6 +112,7 @@ export const OUTLETS: Outlet[] = [
     password: 'marathahalli123',
     location: 'Marathahalli, Bangalore',
     qrCodeUrl: '/qr-codes/marathahalli-upi.png',
+    minTreatmentAmount: 1500, // Custom
   },
 ];
 // --- END OF MASTER LIST ---

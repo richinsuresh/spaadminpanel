@@ -15,7 +15,7 @@ type ClientInfo = {
   usedPackageHours: number;
   remainingHours: number;
   expiryDate: string;
-  email?: string; // <-- Added email
+  // email?: string; // <-- REMOVED from previous step
 };
 
 const outletsList = OUTLETS.map((o: any) => o.name);
@@ -28,7 +28,7 @@ export default function ClientForm() {
   
   const [formData, setFormData] = useState({
     name: '',
-    email: '', // <-- NEW: Added email to state
+    // email: '', // <-- REMOVED from previous step
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
@@ -59,7 +59,7 @@ export default function ClientForm() {
     };
   }, []);
 
-  // --- UPDATED: To handle email pre-fill ---
+  // --- UPDATED: Email pre-fill REMOVED ---
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -72,7 +72,7 @@ export default function ClientForm() {
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           if (!res.ok) {
             setClientInfo(null);
-            setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
+            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
             return;
           }
           const data: ClientInfo | null = await res.json();
@@ -81,21 +81,20 @@ export default function ClientForm() {
             setFormData(prev => ({ 
               ...prev, 
               name: data.name, 
-              email: data.email || '', // Pre-fill email
               isPackageCustomer: data.status === 'active' 
             }));
           } else {
-            setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
+            setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
           }
         } catch (e) {
           console.error('Lookup error', e);
           setClientInfo(null);
-          setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
+          setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
         }
       };
       lookupTimeout.current = setTimeout(lookup, 500);
     } else if (mobile.length < 10) {
-      setFormData(prev => ({ ...prev, name: '', email: '', isPackageCustomer: false, tookPackage: false }));
+      setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
     }
   }, [mobile]);
 
@@ -150,12 +149,7 @@ export default function ClientForm() {
         setIsSubmitting(false);
         return;
       }
-      // --- NEW: Validate email ---
-      if (!formData.email.trim() || !formData.email.includes('@')) {
-        setInputError('Please enter a valid client email address.');
-        setIsSubmitting(false);
-        return;
-      }
+      // --- REMOVED: Validate email ---
     }
     if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setInputError('Please enter a valid Amount for the treatment.');
@@ -183,7 +177,7 @@ export default function ClientForm() {
       const payload = {
         name: formData.name.trim(),
         mobile: mobile,
-        email: formData.email.trim(), // <-- NEW: Send email
+        // email: formData.email.trim(), // <-- REMOVED
         date: formData.date,
         treatment: formData.treatment,
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
@@ -197,7 +191,8 @@ export default function ClientForm() {
         paymentMethod: effectivePaymentMethod,
         finalAmountInPaise: finalAmountInPaise, 
         check_in_time: checkInTime,
-        sold_by: formData.tookPackage ? formData.sold_by : null,
+        // --- ★★★ BUG FIX WAS HERE ★★★ ---
+        packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
       };
 
@@ -221,7 +216,7 @@ export default function ClientForm() {
         setFormData(prev => ({
           ...prev,
           name: '',
-          email: '', // <-- NEW: Reset email
+          // email: '', // <-- REMOVED
           treatment: '',
           amountPaid: 0,
           sessionHours: 0,
@@ -318,21 +313,8 @@ export default function ClientForm() {
             />
           </div>
 
-          {/* --- NEW: Email Field --- */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client Email * (for OTP)</label>
-            <input
-              name="email"
-              type="email"
-              value={formData.email}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-              placeholder="client@example.com"
-            />
-          </div>
-          {/* --- END NEW FIELD --- */}
-
+          {/* --- REMOVED: Email Field --- */}
+          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
             <select
@@ -461,6 +443,7 @@ export default function ClientForm() {
                 />
               </div>
               <div>
+                {/* --- ★★★ THIS IS THE FIX ★★★ --- */}
                 <label className="block text-sm font-medium text-gray-700 mb-1">Total Hours *</label>
                 <input
                   name="totalPackageHours"
