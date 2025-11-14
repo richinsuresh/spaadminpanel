@@ -69,7 +69,7 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- ★★★ FIX: Corrected Payment Method Logic ★★★ ---
+// --- UPDATED: Payment Method Logic ---
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
   // The API stores 'card' for UPI payments
@@ -95,16 +95,15 @@ export default function AdminSalesPage() {
   const [roomInputs, setRoomInputs] = useState<{ [key: string]: string }>({});
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
 
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // REMOVED: All state and refs for modals are gone
-
+  // --- REMOVED: pollTimerRef is no longer needed ---
+  
   const fetchSales = useCallback(async () => {
+    // console.log('Fetching sales...'); // Helpful for debugging
     // setLoading(true); // Removed for smoother background refreshes
     try {
       let query = supabase
         .from('customers')
         .select(
-          // --- UPDATED: Added payment_method ---
           'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by, payment_method'
         )
         .gte('date', startDate)
@@ -141,17 +140,27 @@ export default function AdminSalesPage() {
     fetchSales();
   }, [fetchSales]);
 
-  // --- ★★★ UPDATED: AUTO-REFRESH every 3 minutes (180,000 ms) ★★★ ---
+  // --- ★★★ ADDED: REAL-TIME AUTO-REFRESH ★★★ ---
   useEffect(() => {
-    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    const THREE_MIN_MS = 180000; // 3 minutes
-    pollTimerRef.current = setInterval(() => {
-      fetchSales();
-    }, THREE_MIN_MS);
+    // Listen to all changes in the 'customers' table
+    const channel = supabase
+      .channel('admin-sales-channel') // Unique channel name
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customers' },
+        (payload) => {
+          console.log('Change detected in customers table, refreshing sales...', payload);
+          // When a change happens, re-run the fetchSales function
+          fetchSales();
+        }
+      )
+      .subscribe();
+
+    // Cleanup function to remove the subscription when the component unmounts
     return () => {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      supabase.removeChannel(channel);
     };
-  }, [fetchSales]);
+  }, [fetchSales]); // Re-subscribe if the fetchSales function ever changes
 
   // --- UPDATED: All sales calculations are now based on check_in_time ---
   const activeSales = useMemo(() => {
@@ -195,7 +204,6 @@ export default function AdminSalesPage() {
       let query = supabase
         .from('customers')
         .select(
-          // --- UPDATED: Added payment_method ---
           'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room, payment_method'
         )
         .gte('date', startDate)
@@ -214,7 +222,6 @@ export default function AdminSalesPage() {
         return;
       }
 
-      // --- UPDATED: Added 'Payment Method' to export data ---
       const dataToExport = data.map((sale: any) => ({
         Date: new Date(sale.date).toLocaleDateString('en-IN'),
         Outlet: sale.outlet_name,
@@ -250,7 +257,7 @@ export default function AdminSalesPage() {
   const handleRoomSave = async (id: string, room: string) => {
     if (!room) return;
     await supabase.from('customers').update({ room }).eq('id', id);
-    fetchSales();
+    // fetchSales(); // <-- REMOVED (Realtime will handle it)
   };
   const handleTherapistInputChange = (id: string, name: string) => {
     setTherapistInputs((prev) => ({ ...prev, [id]: name }));
@@ -258,14 +265,14 @@ export default function AdminSalesPage() {
   const handleTherapistSave = async (id: string, therapistName: string) => {
     if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
-    fetchSales();
+    // fetchSales(); // <-- REMOVED (Realtime will handle it)
   };
   
   // This is the simple, manual override for admins
   const handleCheckOut = async (id: string) => {
     if (!confirm('Are you sure you want to check out this client?')) return;
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
-    fetchSales();
+    // fetchSales(); // <-- REMOVED (Realtime will handle it)
   };
 
   return (
@@ -341,14 +348,14 @@ export default function AdminSalesPage() {
             <p className="text-gray-500 text-sm">{activeSalesCount} active/completed session(s)</p>
           </div>
           
-          {/* ★★★ FIX: Cash/Card Sales ★★★ */}
+          {/* Cash/Card Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Cash/Card Sales</h3>
             <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p> 
           </div>
 
-          {/* ★★★ FIX: UPI Sales ★★★ */}
+          {/* UPI Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
             <h3 className="text-gray-500 text-sm font-medium">Total UPI Sales</h3>
             <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
