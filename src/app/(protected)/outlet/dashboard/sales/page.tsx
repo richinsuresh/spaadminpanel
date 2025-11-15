@@ -1,6 +1,5 @@
 'use client';
 
-// NEW: Import 'useRef'
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
@@ -19,10 +18,9 @@ type Sale = {
   room: string | null;
   therapist_name: string | null;
   session_hours: number | null;
-  payment_method: string | null; // <-- NEW
+  payment_method: string | null;
 };
 
-// --- (Helper functions) ---
 const formatCurrency = (amountInPaise: number) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -31,13 +29,11 @@ const formatCurrency = (amountInPaise: number) =>
     maximumFractionDigits: 0,
   }).format(amountInPaise / 100);
 
-// UPDATED: More robust formatTime function
 const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
 
   const date = new Date(dateString);
 
-  // Check if the date is valid
   if (isNaN(date.getTime())) {
     console.warn('Invalid date string passed to formatTime:', dateString);
     return 'Invalid Date';
@@ -69,19 +65,17 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- NEW: Helper to format payment method ---
 const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
-  if (tookPackage) return 'Package'; // This rule comes first
+  if (tookPackage) return 'Package';
   if (method === 'card') return 'UPI / Card';
   if (method === 'cash') return 'Cash';
-  if (method === 'package') return 'Package'; // Fallback
+  if (method === 'package') return 'Package';
   if (!method) return 'N/A';
-  // Capitalize any other values
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
 
 
-// --- NEW: Add-on Modal Component ---
+// --- Add-on Modal Component ---
 function AddonModal({
   sale,
   onClose,
@@ -148,7 +142,7 @@ function AddonModal({
   );
 }
 
-// --- NEW: Checkout Confirmation Modal Component ---
+// --- Checkout Confirmation Modal Component ---
 function CheckoutConfirmModal({
   sale,
   expectedTime,
@@ -158,7 +152,7 @@ function CheckoutConfirmModal({
 }: {
   sale: Sale | null;
   expectedTime: string | null;
-  onClose: () => void; // This will be used for "snoozing"
+  onClose: () => void; 
   onCheckout: (saleId: string) => void;
   onAddon: (sale: Sale) => void;
 }) {
@@ -176,7 +170,7 @@ function CheckoutConfirmModal({
 
         <div className="flex justify-end gap-3 pt-4">
           <button
-            onClick={onClose} // "No" or "Snooze" is just closing the modal
+            onClick={onClose} 
             className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
           >
             No (Snooze 5m)
@@ -209,18 +203,15 @@ export default function OutletSalesPage() {
   const [roomInputs, setRoomInputs] = useState<{[key: string]: string}>({});
   const [therapistInputs, setTherapistInputs] = useState<{[key: string]: string}>({});
   
-  // --- NEW: Refs and State for new features ---
   const warningTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const snoozedClients = useRef<Set<string>>(new Set());
   
   const [addonModalOpen, setAddonModalOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   
-  // --- NEW: State for Checkout Warning Modal ---
   const [warningModalOpen, setWarningModalOpen] = useState(false);
   const [warningSale, setWarningSale] = useState<Sale | null>(null);
   const [warningExpectedTime, setWarningExpectedTime] = useState<string | null>(null);
-  // --- End of new state ---
 
   useEffect(() => {
     async function fetchOutletSession() {
@@ -246,11 +237,9 @@ export default function OutletSalesPage() {
   const fetchSales = useCallback(async () => {
     if (!outletId) return; 
     
-    // setLoading(true); // Removed for smoother refreshes
     try {
       let query = supabase
         .from('customers')
-        // --- UPDATED: Added payment_method ---
         .select('id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, payment_method')
         .eq('outlet_id', outletId) 
         .order('check_in_time', { ascending: false, nullsFirst: false });
@@ -279,7 +268,6 @@ export default function OutletSalesPage() {
     }
   }, [dateFilter, outletId]);
 
-  // This useEffect handles Supabase Realtime
   useEffect(() => {
     if (!outletId) return;
     
@@ -295,7 +283,7 @@ export default function OutletSalesPage() {
           filter: `outlet_id=eq.${outletId}` 
         },
         (payload) => {
-          fetchSales(); // Refetch on any change
+          fetchSales(); 
         }
       )
       .subscribe();
@@ -307,40 +295,30 @@ export default function OutletSalesPage() {
   }, [fetchSales, outletId]);
 
   
-  // --- NEW: Checkout Warning Pop-up System ---
   const handleCheckOut = async (id: string) => {
-    // This can be called by the button or the new pop-up
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
-    // Realtime listener will call fetchSales
   };
 
-  // --- UPDATED: This useEffect now opens the custom modal ---
   useEffect(() => {
     const checkClientWarnings = () => {
       const now = new Date();
       
-      // Don't run if a warning is already open
       if (warningModalOpen) return; 
 
       for (const sale of sales) {
-        // Find active, un-snoozed clients
         if (!sale.check_out_time && sale.check_in_time && sale.session_hours && !snoozedClients.current.has(sale.id)) {
           const expectedCheckout = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
           
           if (expectedCheckout && now >= expectedCheckout) {
-            // --- Trigger Warning Modal ---
-            // NEW: Set state to open the modal
             setWarningExpectedTime(formatTime(expectedCheckout.toISOString()));
             setWarningSale(sale);
             setWarningModalOpen(true);
-            // Stop after finding the first one to warn about
             break; 
           }
         }
       }
     };
 
-    // Run this check every 30 seconds
     const WARNING_CHECK_MS = 30000;
     if (warningTimerRef.current) clearInterval(warningTimerRef.current);
     warningTimerRef.current = setInterval(checkClientWarnings, WARNING_CHECK_MS);
@@ -348,10 +326,9 @@ export default function OutletSalesPage() {
     return () => {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
     };
-  }, [sales, fetchSales, warningModalOpen]); // Added warningModalOpen
+  }, [sales, fetchSales, warningModalOpen]);
 
 
-  // --- (Input save handlers are unchanged) ---
   const handleRoomInputChange = (id: string, room: string) => {
     setRoomInputs(prev => ({ ...prev, [id]: room }));
   };
@@ -368,10 +345,8 @@ export default function OutletSalesPage() {
   };
   
   
-  // --- NEW: Handlers for Checkout Warning Modal ---
   const handleWarningModalClose = () => {
     if (warningSale) {
-      // User clicked "No" - Snooze for 5 minutes
       snoozedClients.current.add(warningSale.id);
       console.log(`Snoozing client ${warningSale.id} for 5 minutes.`);
       setTimeout(() => {
@@ -379,7 +354,7 @@ export default function OutletSalesPage() {
           snoozedClients.current.delete(warningSale.id);
           console.log(`Snooze ended for ${warningSale.id}.`);
         }
-      }, 300000); // 5 minutes
+      }, 300000); 
     }
     setWarningModalOpen(false);
     setWarningSale(null);
@@ -387,7 +362,7 @@ export default function OutletSalesPage() {
   };
 
   const handleWarningModalCheckout = (saleId: string) => {
-    handleCheckOut(saleId); // Re-uses the existing checkout function
+    handleCheckOut(saleId); 
     setWarningModalOpen(false);
     setWarningSale(null);
     setWarningExpectedTime(null);
@@ -398,13 +373,9 @@ export default function OutletSalesPage() {
     setWarningSale(null);
     setWarningExpectedTime(null);
     
-    // Open the *other* modal (AddonModal)
     handleOpenAddonModal(sale);
   };
-  // --- End of new handlers ---
   
-  
-  // --- NEW: Add-on Modal Handlers ---
   const handleOpenAddonModal = (sale: Sale) => {
     setSelectedSale(sale);
     setAddonModalOpen(true);
@@ -431,7 +402,6 @@ export default function OutletSalesPage() {
       const newSessionHours = (currentSale.session_hours || 0) + extraHours;
       
       const extraAmountInPaise = extraAmount * 100;
-      // Note: Outlet sales page doesn't show package_amount, assumes it's amount_paid
       const newAmountPaid = (currentSale.amount_paid || 0) + extraAmountInPaise;
       
       const newTreatment = `${currentSale.treatment} (+${extraMinutes}m addon)`;
@@ -440,7 +410,7 @@ export default function OutletSalesPage() {
         .from('customers')
         .update({
           session_hours: newSessionHours,
-          amount_paid: newAmountPaid, // This updates amount_paid for non-package
+          amount_paid: newAmountPaid, 
           treatment: newTreatment,
         })
         .eq('id', saleId);
@@ -448,7 +418,6 @@ export default function OutletSalesPage() {
       if (error) throw error;
 
       alert('Add-on saved successfully!');
-      // fetchSales(); // Realtime listener will handle this
       handleCloseAddonModal();
     } catch (err: any) {
       console.error('Error saving add-on:', err);
@@ -457,26 +426,23 @@ export default function OutletSalesPage() {
   };
 
 
-  // --- UPDATED: totalSales calculation based on check_in_time ---
   const totalSales = sales
-    .filter(sale => !!sale.check_in_time) // CHANGED
+    .filter(sale => !!sale.check_out_time) 
     .reduce((sum, sale) => {
       const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
       return sum + (amount || 0);
     }, 0);
 
-  const activeSalesCount = sales.filter(s => !!s.check_in_time).length; // NEW
+  const activeSalesCount = sales.filter(s => !!s.check_out_time).length; 
 
   return (
     <div className="space-y-6">
-      {/* --- Render the Add-on Modal --- */}
       <AddonModal
         sale={selectedSale}
         onClose={handleCloseAddonModal}
         onConfirm={handleConfirmAddon}
       />
 
-      {/* --- NEW: Render the Checkout Warning Modal --- */}
       <CheckoutConfirmModal
         sale={warningSale}
         expectedTime={warningExpectedTime}
@@ -487,7 +453,6 @@ export default function OutletSalesPage() {
 
       <h1 className="text-2xl font-bold text-gray-800">{outletName} Sales & Check-out</h1>
 
-      {/* Filter Bar (unchanged) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-1">Date</label>
@@ -501,70 +466,69 @@ export default function OutletSalesPage() {
         </div>
       </div>
 
-      {/* --- UPDATED: Total Sales Card --- */}
-      <div className="bg-white p-6 rounded-xl shadow-sm">
+      {/* --- UI FIX: Smaller Padding and Font Size --- */}
+      <div className="bg-white p-4 rounded-xl shadow-sm">
         <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (Filtered)</h3>
-        <p className="text-3xl font-bold mt-2 text-green-600">
+        <p className="text-2xl font-bold mt-2 text-green-600">
           {formatCurrency(totalSales)}
         </p>
-        <p className="text-gray-500 text-sm">{activeSalesCount} active/completed transaction(s)</p>
+        <p className="text-gray-500 text-sm">{activeSalesCount} completed transaction(s)</p>
       </div>
 
-      {/* Sales Table (UI Updated) */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
-              {/* --- UPDATED: Added Payment Method Header --- */}
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                {/* --- UI FIX: Smaller Padding --- */}
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
-                // --- UPDATED: ColSpan ---
                 <tr><td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td></tr>
               ) : sales.length === 0 ? (
-                // --- UPDATED: ColSpan ---
                 <tr><td colSpan={9} className="p-6 text-center text-gray-500">No sales found for these filters.</td></tr>
               ) : (
                 sales.map(sale => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{sale.name}</div>
-                      <div className="text-sm text-gray-500">{sale.mobile}</div>
+                    
+                    {/* --- UI FIX: Smaller Padding, Text, and allows wrapping --- */}
+                    <td className="px-3 py-2 text-xs">
+                      <div className="font-medium text-gray-900">{sale.name}</div>
+                      <div className="text-gray-500">{sale.mobile}</div>
                     </td>
                     
-                    {/* NEW: Updated Service column to show treatment changes */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {/* --- UI FIX: Smaller Padding, Text, and allows wrapping --- */}
+                    <td className="px-3 py-2 text-xs text-gray-500 max-w-xs">
                       {sale.took_package ? (
                         <span className="font-medium text-purple-700">New Package</span>
                       ) : (
-                        <div className="max-w-xs truncate" title={sale.treatment}>{sale.treatment}</div>
+                        <div className="truncate" title={sale.treatment}>{sale.treatment}</div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    
+                    {/* --- UI FIX: Smaller Padding and Text --- */}
+                    <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
                       {formatDuration(sale.session_hours)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
+                    <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
                     
-                    {/* --- NEW: Payment Method Cell --- */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
                       {formatPaymentMethod(sale.payment_method, sale.took_package)}
                     </td>
                     
-                    {/* Session Time Column (unchanged) */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
                       <div>
                         <span className="font-medium">In: </span>
                         {formatTime(sale.check_in_time)}
@@ -590,10 +554,10 @@ export default function OutletSalesPage() {
                       )}
                     </td>
                     
-                    {/* Therapist Column (unchanged) */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    {/* --- UI FIX: Smaller Padding, Inputs, and Text --- */}
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
+                        <span className="text-xs text-gray-500">{sale.therapist_name || 'N/A'}</span>
                       ) : (
                         <div className="flex">
                           <input 
@@ -601,11 +565,11 @@ export default function OutletSalesPage() {
                             value={therapistInputs[sale.id] || ''}
                             onChange={(e) => handleTherapistInputChange(sale.id, e.target.value)}
                             placeholder="Therapist"
-                            className="w-24 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
+                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-xs text-black"
                           />
                           <button
                             onClick={() => handleTherapistSave(sale.id, therapistInputs[sale.id])}
-                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-sm hover:bg-gray-300"
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-xs hover:bg-gray-300"
                           >
                             Save
                           </button>
@@ -613,10 +577,9 @@ export default function OutletSalesPage() {
                       )}
                     </td>
 
-                    {/* Room Column (unchanged) */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
+                        <span className="text-xs text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
                         <div className="flex">
                           <input 
@@ -624,11 +587,11 @@ export default function OutletSalesPage() {
                             value={roomInputs[sale.id] || ''}
                             onChange={(e) => handleRoomInputChange(sale.id, e.target.value)}
                             placeholder="Room name"
-                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
+                            className="w-16 px-2 py-1 border border-gray-300 rounded-l-md text-xs text-black"
                           />
                           <button
                             onClick={() => handleRoomSave(sale.id, roomInputs[sale.id])}
-                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-sm hover:bg-gray-300"
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-xs hover:bg-gray-300"
                           >
                             Save
                           </button>
@@ -636,23 +599,22 @@ export default function OutletSalesPage() {
                       )}
                     </td>
                     
-                    {/* NEW: Updated Action Column with Add-on button */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {sale.check_out_time ? (
-                         <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                         <span className="px-3 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
                           Completed
                         </span>
                       ) : (
-                        <div className="flex flex-col gap-2">
+                        <div className="flex flex-row gap-2">
                           <button
                             onClick={() => handleCheckOut(sale.id)}
-                            className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
+                            className="px-3 py-1 bg-red-500 text-white text-xs rounded-lg hover:bg-red-600"
                           >
                             Check Out
                           </button>
                           <button
                             onClick={() => handleOpenAddonModal(sale)}
-                            className="px-3 py-1 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600"
+                            className="px-3 py-1 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600"
                           >
                             Add-on
                           </button>

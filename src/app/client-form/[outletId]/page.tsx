@@ -247,14 +247,10 @@ export default function ClientCheckinForm() {
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
     
-    // Transform payment method for the API
-    let apiPaymentMethod: string;
-    if (formData.paymentMethod === 'upi') {
-      apiPaymentMethod = 'card'; // 'card' is the trigger for the API's UPI logic
-    } else {
-      apiPaymentMethod = 'cash'; // Both 'cash' and 'card' selections go to the API as 'cash'
-    }
-
+    // --- ★★★ THIS IS THE CHANGE ★★★ ---
+    // REMOVED the logic for 'apiPaymentMethod'
+    // We now send the *exact* payment method to the API
+    
     try {
       let checkInTime: string | null = new Date().toISOString();
 
@@ -279,7 +275,8 @@ export default function ClientCheckinForm() {
           // --- UNCHANGED ---
           outlet: outlet!.name,
           outlet_id: outlet!.id,
-          paymentMethod: apiPaymentMethod, // Send the transformed 'apiPaymentMethod'
+          // --- ★★★ THIS IS THE CHANGE ★★★ ---
+          paymentMethod: formData.paymentMethod, // Send 'cash', 'card', or 'upi'
           finalAmountInPaise: finalAmountInPaise, 
           check_in_time: checkInTime,
       };
@@ -296,22 +293,28 @@ export default function ClientCheckinForm() {
         throw new Error(data.error || 'Submission failed');
       }
 
-      // --- Success (API returns 'cash' or 'card') ---
-      if (data.paymentMethod === 'cash') {
-        setSuccess('Registration successful! Redirecting...');
-        setTimeout(() => {
-          router.push(`/client-cash-success?outletId=${outletId}`);
-        }, 1500);
-      } 
-      else if (data.paymentMethod === 'card') {
+      // --- ★★★ THIS IS THE CHANGE ★★★ ---
+      // The API will now return 'upi' for UPI payments,
+      // and 'cash' or 'card' for the others.
+      if (data.paymentMethod === 'upi') {
         setSuccess('Registration complete. Redirecting to payment QR...');
         const amountInRupees = data.finalAmountInPaise / 100;
         setTimeout(() => {
           router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}`);
         }, 1500);
+      } 
+      else if (data.paymentMethod === 'cash' || data.paymentMethod === 'card') {
+        setSuccess('Registration successful! Redirecting...');
+        setTimeout(() => {
+          router.push(`/client-cash-success?outletId=${outletId}`);
+        }, 1500);
       }
       else {
-          throw new Error("Invalid response from server.");
+          // This handles the 'package' case
+          setSuccess('Registration successful! Redirecting...');
+           setTimeout(() => {
+            router.push(`/client-cash-success?outletId=${outletId}`);
+          }, 1500);
       }
 
     } catch (err: any) {
@@ -549,7 +552,6 @@ export default function ClientCheckinForm() {
               >
                 <option value="cash">Pay with Cash</option>
                 <option value="card">Pay with Card</option>
-                {/* --- THIS IS THE FIX --- */}
                 <option value="upi">Pay with UPI</option>
               </select>
             </div>
@@ -568,7 +570,6 @@ export default function ClientCheckinForm() {
               >
                 <option value="cash">Pay with Cash</option>
                 <option value="card">Pay with Card</option>
-                {/* --- THIS IS THE FIX --- */}
                 <option value="upi">Pay with UPI</option>
               </select>
             </div>

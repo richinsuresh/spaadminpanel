@@ -21,7 +21,7 @@ type Sale = {
   session_hours: number | null;
   outlet_name: string;
   package_sold_by: string | null;
-  payment_method: string | null; // <-- NEW: Added payment_method
+  payment_method: string | null;
 };
 
 const formatCurrency = (amountInPaise: number) =>
@@ -32,7 +32,6 @@ const formatCurrency = (amountInPaise: number) =>
     maximumFractionDigits: 0,
   }).format(amountInPaise / 100);
 
-// UPDATED: More robust formatTime function
 const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
   
@@ -69,15 +68,11 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- UPDATED: Payment Method Logic ---
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  // The API stores 'card' for UPI payments
-  if (method === 'card') return 'UPI';
-  // The API stores 'cash' for both Cash and Card payments
-  if (method === 'cash') return 'Cash / Card';
+  if (method === 'card') return 'UPI / Card';
+  if (method === 'cash') return 'Cash';
   if (method === 'package') return 'Package';
-  // Capitalize any other values
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
 
@@ -95,11 +90,7 @@ export default function AdminSalesPage() {
   const [roomInputs, setRoomInputs] = useState<{ [key: string]: string }>({});
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
 
-  // --- REMOVED: pollTimerRef is no longer needed ---
-  
   const fetchSales = useCallback(async () => {
-    // console.log('Fetching sales...'); // Helpful for debugging
-    // setLoading(true); // Removed for smoother background refreshes
     try {
       let query = supabase
         .from('customers')
@@ -135,36 +126,30 @@ export default function AdminSalesPage() {
     }
   }, [startDate, endDate, selectedOutletId]);
 
-  // Initial fetch + whenever filters change
   useEffect(() => {
     fetchSales();
   }, [fetchSales]);
 
-  // --- ★★★ ADDED: REAL-TIME AUTO-REFRESH ★★★ ---
   useEffect(() => {
-    // Listen to all changes in the 'customers' table
     const channel = supabase
-      .channel('admin-sales-channel') // Unique channel name
+      .channel('admin-sales-channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'customers' },
         (payload) => {
           console.log('Change detected in customers table, refreshing sales...', payload);
-          // When a change happens, re-run the fetchSales function
           fetchSales();
         }
       )
       .subscribe();
 
-    // Cleanup function to remove the subscription when the component unmounts
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchSales]); // Re-subscribe if the fetchSales function ever changes
+  }, [fetchSales]);
 
-  // --- UPDATED: All sales calculations are now based on check_in_time ---
   const activeSales = useMemo(() => {
-    return sales.filter((sale) => !!sale.check_in_time);
+    return sales.filter((sale) => !!sale.check_out_time);
   }, [sales]);
   
   const totalSales = useMemo(() => {
@@ -174,21 +159,18 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
-  // --- Total Cash/Card Sales ---
   const totalCashSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'cash')
       .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
   }, [activeSales]);
 
-  // --- Total UPI Sales ---
   const totalUpiSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'card')
       .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
   }, [activeSales]);
 
-  // --- Total Package Sales (by value) ---
   const totalPackageSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'package' || sale.took_package)
@@ -196,7 +178,6 @@ export default function AdminSalesPage() {
   }, [activeSales]);
 
   const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
-
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -229,7 +210,7 @@ export default function AdminSalesPage() {
         Mobile: sale.mobile,
         Service: sale.took_package ? 'New Package' : sale.treatment,
         'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-        'Payment Method': formatPaymentMethod(sale.payment_method), // <-- Uses new logic
+        'Payment Method': formatPaymentMethod(sale.payment_method),
         Duration: formatDuration(sale.session_hours),
         'Sold By': sale.package_sold_by || 'N/A',
         Therapist: sale.therapist_name || 'N/A',
@@ -257,7 +238,6 @@ export default function AdminSalesPage() {
   const handleRoomSave = async (id: string, room: string) => {
     if (!room) return;
     await supabase.from('customers').update({ room }).eq('id', id);
-    // fetchSales(); // <-- REMOVED (Realtime will handle it)
   };
   const handleTherapistInputChange = (id: string, name: string) => {
     setTherapistInputs((prev) => ({ ...prev, [id]: name }));
@@ -265,14 +245,24 @@ export default function AdminSalesPage() {
   const handleTherapistSave = async (id: string, therapistName: string) => {
     if (!therapistName) return;
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
-    // fetchSales(); // <-- REMOVED (Realtime will handle it)
   };
   
-  // This is the simple, manual override for admins
   const handleCheckOut = async (id: string) => {
     if (!confirm('Are you sure you want to check out this client?')) return;
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
-    // fetchSales(); // <-- REMOVED (Realtime will handle it)
+  };
+
+  // --- NEW: Delete Function ---
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to PERMANENTLY DELETE this sale? This action cannot be undone.')) return;
+    try {
+      const { error } = await supabase.from('customers').delete().eq('id', id);
+      if (error) throw error;
+      // No need to call fetchSales(), realtime listener will handle it.
+    } catch (err: any) {
+      console.error('Error deleting sale:', err);
+      alert(`Error deleting sale: ${err.message}`);
+    }
   };
 
   return (
@@ -280,8 +270,8 @@ export default function AdminSalesPage() {
       
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+      {/* Filter Bar (Responsive) */}
+      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
@@ -338,26 +328,26 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* --- UPDATED: Total Sales Card Grid --- */}
+      {/* Total Sales Card Grid (Responsive) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 divide-y md:divide-y-0 md:divide-x">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 divide-y md:divide-x lg:divide-y-0">
           {/* Total Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (All)</h3>
             <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
-            <p className="text-gray-500 text-sm">{activeSalesCount} active/completed session(s)</p>
+            <p className="text-gray-500 text-sm">{activeSalesCount} completed session(s)</p>
           </div>
           
-          {/* Cash/Card Sales */}
+          {/* Cash Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total Cash/Card Sales</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
             <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p> 
           </div>
 
-          {/* UPI Sales */}
+          {/* UPI/Card Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total UPI Sales</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
             <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
           </div>
@@ -377,7 +367,6 @@ export default function AdminSalesPage() {
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
-              {/* --- UPDATED: Added Payment Method Header --- */}
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
@@ -393,31 +382,34 @@ export default function AdminSalesPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  {/* --- UPDATED: ColSpan --- */}
                   <td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : sales.length === 0 ? (
                 <tr>
-                  {/* --- UPDATED: ColSpan --- */}
                   <td colSpan={9} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
                 </tr>
               ) : (
                 sales.map((sale) => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    
+                    {/* --- UI FIX: Removed whitespace-nowrap to allow wrapping --- */}
+                    <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{sale.name}</div>
                       <div className="text-sm text-gray-500">{sale.mobile}</div>
                     </td>
+                    
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sale.outlet_name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    
+                    {/* --- UI FIX: Removed whitespace-nowrap to allow wrapping --- */}
+                    <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
                       {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
                       <div className="text-xs text-gray-400">{formatDuration(sale.session_hours)}</div>
                     </td>
+                    
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
                     
-                    {/* --- NEW: Payment Method Cell --- */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatPaymentMethod(sale.payment_method)}
                     </td>
@@ -471,7 +463,6 @@ export default function AdminSalesPage() {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {/* Fixed typo: sale.check__time -> sale.check_out_time */}
                       {sale.check_out_time ? (
                         <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
@@ -493,20 +484,30 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* --- REVERTED: Action Column is simple again --- */}
+                    {/* --- NEW: Action Column with Delete Button --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {sale.check_out_time ? (
-                        <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
-                          Completed
-                        </span>
-                      ) : (
+                      <div className="flex flex-col gap-2 items-start">
+                        {sale.check_out_time ? (
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                            Completed
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleCheckOut(sale.id)}
+                            className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
+                          >
+                            Check Out
+                          </button>
+                        )}
+                        
+                        {/* --- NEW: Delete Button --- */}
                         <button
-                          onClick={() => handleCheckOut(sale.id)}
-                          className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
+                          onClick={() => handleDelete(sale.id)}
+                          className="px-3 py-1 bg-red-700 text-white text-sm rounded-lg hover:bg-red-800"
                         >
-                          Check Out
+                          Delete
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))
