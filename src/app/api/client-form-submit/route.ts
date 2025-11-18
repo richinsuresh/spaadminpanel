@@ -7,9 +7,7 @@ export async function POST(req: NextRequest) {
 
     // --- 1. HANDLE PACKAGE LOGIC *FIRST* ---
 
-    // --- CASE A: CLIENT USED AN EXISTING PACKAGE ---
     if (payload.isPackageCustomer) {
-      // (No changes needed in this section)
       const hoursToDeduct = payload.sessionHours;
       
       if (!hoursToDeduct || hoursToDeduct <= 0) { 
@@ -47,7 +45,7 @@ export async function POST(req: NextRequest) {
       if (updateError) { throw new Error(`Error deducting package hours: ${updateError.message}`); }
     }
     
-    // --- CASE B: CLIENT BOUGHT A NEW PACKAGE (UPDATED LOGIC) ---
+    // --- CASE B: CLIENT BOUGHT A NEW PACKAGE ---
     else if (payload.tookPackage) {
       
       const totalHours = Number(payload.totalPackageHours) || 0;
@@ -70,10 +68,10 @@ export async function POST(req: NextRequest) {
         .insert({
           name: payload.name,
           mobile: payload.mobile,
-          total_hours: totalHours, // The full total
-          remaining_hours: initialRemainingHours, // Deducted amount
-          used_hours: initialUsedHours, // The first session
-          status: newStatus, // Status after first session
+          total_hours: totalHours, 
+          remaining_hours: initialRemainingHours, 
+          used_hours: initialUsedHours, 
+          status: newStatus, 
           start_date: payload.date, 
           expiry_date: expiryDate.toISOString(),
           outlet: payload.outlet, 
@@ -88,7 +86,6 @@ export async function POST(req: NextRequest) {
     }
     
     // --- 2. INSERT THE CLIENT SESSION (to 'customers' table) ---
-    // The 'paymentMethod' field will now correctly store 'cash', 'card', or 'upi'
     const { data: sessionData, error: sessionError } = await supabase
       .from('customers')
       .insert({
@@ -97,7 +94,7 @@ export async function POST(req: NextRequest) {
         date: payload.date,
         treatment: payload.treatment,
         amount_paid: payload.amountPaid, 
-        session_hours: payload.sessionHours, // This is correct
+        session_hours: payload.sessionHours, 
         is_package_customer: payload.isPackageCustomer,
         took_package: payload.tookPackage, 
         package_amount: payload.packageAmount,
@@ -105,8 +102,11 @@ export async function POST(req: NextRequest) {
         package_sold_by: payload.packageSoldBy,
         outlet_id: payload.outlet_id,
         outlet_name: payload.outlet, 
-        payment_method: payload.paymentMethod, // This now saves 'cash', 'card', or 'upi'
-        check_in_time: payload.check_in_time, 
+        payment_method: payload.paymentMethod, 
+        check_in_time: payload.check_in_time,
+        // --- ★★★ MAPPED FIELDS ★★★ ---
+        therapist_name: payload.therapist_name,
+        room: payload.room, 
       })
       .select('id')
       .single();
@@ -118,18 +118,15 @@ export async function POST(req: NextRequest) {
 
     const customerSessionId = sessionData.id;
 
-    // --- ★★★ THIS IS THE CHANGE ★★★ ---
-    // We now check for 'upi' to trigger the QR code
     if (payload.paymentMethod === 'upi') {
       return NextResponse.json({
         success: true,
-        paymentMethod: 'upi', // Send back 'upi'
+        paymentMethod: 'upi', 
         customer_session_id: customerSessionId,
         outlet_id: payload.outlet_id,
         finalAmountInPaise: payload.finalAmountInPaise
       });
     } else {
-      // This will now correctly return 'cash', 'card', or 'package'
       return NextResponse.json({
         success: true,
         paymentMethod: payload.paymentMethod,

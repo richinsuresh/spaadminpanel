@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-// --- 1. IMPORT Outlet TYPE ---
 import { OUTLETS, Outlet } from '@/lib/outlet';
 
 // --- Type Definitions ---
@@ -21,7 +20,6 @@ export default function ClientCheckinForm() {
   const outletId = params.outletId as string;
   const router = useRouter();
 
-  // --- 2. UPDATE STATE TO USE Outlet TYPE ---
   const [outlet, setOutlet] = useState<Outlet | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [mobile, setMobile] = useState('');
@@ -35,21 +33,19 @@ export default function ClientCheckinForm() {
     sessionHours: 0,
     sessionMinutes: 0,
     paymentMethod: 'cash',
-    // --- NEW PACKAGE STATE ---
     tookPackage: false,
     packageAmount: 0,
     totalPackageHours: 0,
     packageValidity: '3 months',
-    sold_by: '', // <-- Added 'Sold By'
+    sold_by: '',
+    therapistName: '', // <-- NEW
+    room: '',          // <-- NEW
   });
 
-  // --- OTP State REMOVED ---
-  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Effect 1: Load Outlet Info & Treatments
   useEffect(() => {
     if (!outletId) {
       setError('Outlet ID missing in URL.');
@@ -64,7 +60,7 @@ export default function ClientCheckinForm() {
       setLoading(false);
       return;
     }
-    setOutlet(outletInfo); // This now stores the full outlet object
+    setOutlet(outletInfo); 
     const fetchTreatments = async () => {
       try {
         const { data, error: dbError } = await supabase
@@ -84,7 +80,6 @@ export default function ClientCheckinForm() {
     fetchTreatments();
   }, [outletId]);
 
-  // Effect 2 & 3: Client Lookup (Simplified)
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
@@ -136,7 +131,6 @@ export default function ClientCheckinForm() {
     };
   }, [mobile, performClientLookup]);
 
-  // --- Event Handlers ---
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
@@ -154,7 +148,6 @@ export default function ClientCheckinForm() {
       }
       const updated = { ...prev, [name]: updatedValue };
 
-      // If taking package, clear single-session amount
       if (name === 'tookPackage' && checked) {
         updated.amountPaid = 0;
       }
@@ -163,9 +156,6 @@ export default function ClientCheckinForm() {
     });
   };
 
-  // --- OTP Handler REMOVED ---
-
-  // --- Helper Functions (UPDATED) ---
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
@@ -173,7 +163,6 @@ export default function ClientCheckinForm() {
   }, [formData.sessionHours, formData.sessionMinutes]);
 
   const getFinalAmountInPaise = useCallback(() => {
-    // --- UPDATED: Logic now checks tookPackage ---
     if (formData.tookPackage) {
       return (Number(formData.packageAmount) || 0) * 100;
     }
@@ -181,14 +170,12 @@ export default function ClientCheckinForm() {
   }, [formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
 
-  // --- handleSubmit (UPDATED) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
 
-    // --- 3. ADDED SAFETY CHECK FOR OUTLET ---
     if (!outlet) {
       setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
@@ -198,9 +185,14 @@ export default function ClientCheckinForm() {
     const sessionHours = getSessionDuration();
     const totalPackageHours = Number(formData.totalPackageHours) || 0;
 
-    // --- UPDATED VALIDATION LOGIC ---
+    // --- Updated Validation ---
+    if ((sessionHours > 0) && !formData.therapistName.trim()) {
+       setError('Please enter the Therapist Name.');
+       setLoading(false);
+       return;
+    }
+
     if (formData.tookPackage) {
-      // Package purchase checks
       if (!formData.packageAmount || formData.packageAmount <= 0 || !totalPackageHours || totalPackageHours <= 0) {
         setError('Please enter a valid Package Amount and Total Hours.');
         setLoading(false);
@@ -211,14 +203,12 @@ export default function ClientCheckinForm() {
         setLoading(false);
         return;
       }
-      // Check if first session is longer than the package itself
       if (sessionHours > totalPackageHours) {
         setError('First session duration cannot be longer than the total package hours.');
         setLoading(false);
         return;
       }
     } else {
-      // Normal session checks
       if (sessionHours <= 0) {
         setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins).');
         setLoading(false);
@@ -231,7 +221,6 @@ export default function ClientCheckinForm() {
           return;
       }
       
-      // --- 4. USE DYNAMIC MINIMUM AMOUNT ---
       const minAmount = outlet.minTreatmentAmount;
       if (amountInRupees < minAmount) {
           setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${minAmount}. Redirecting...`);
@@ -242,14 +231,9 @@ export default function ClientCheckinForm() {
           return; 
       }
     }
-    // --- END OF VALIDATION ---
     
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
-    
-    // --- ★★★ THIS IS THE CHANGE ★★★ ---
-    // REMOVED the logic for 'apiPaymentMethod'
-    // We now send the *exact* payment method to the API
     
     try {
       let checkInTime: string | null = new Date().toISOString();
@@ -260,28 +244,27 @@ export default function ClientCheckinForm() {
           date: new Date().toISOString().split('T')[0],
           treatment: treatmentName,
           
-          // --- NEW PACKAGE LOGIC ---
           tookPackage: formData.tookPackage,
           packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
-          totalPackageHours: totalPackageHours, // Send the total
+          totalPackageHours: totalPackageHours, 
           packageSoldBy: formData.tookPackage ? formData.sold_by.trim() : null,
           packageValidity: formData.tookPackage ? formData.packageValidity : null,
           
-          // --- OLD LOGIC (modified) ---
           amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
-          sessionHours: sessionHours, // Send the first session hours
-          isPackageCustomer: false, // Always false now
+          sessionHours: sessionHours, 
+          isPackageCustomer: false, 
 
-          // --- UNCHANGED ---
           outlet: outlet!.name,
           outlet_id: outlet!.id,
-          // --- ★★★ THIS IS THE CHANGE ★★★ ---
-          paymentMethod: formData.paymentMethod, // Send 'cash', 'card', or 'upi'
+          paymentMethod: formData.paymentMethod,
           finalAmountInPaise: finalAmountInPaise, 
           check_in_time: checkInTime,
+
+          // --- SEND NEW FIELDS ---
+          therapist_name: formData.therapistName || null,
+          room: formData.room || null,
       };
 
-      // API call
       const res = await fetch('/api/client-form-submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,9 +276,6 @@ export default function ClientCheckinForm() {
         throw new Error(data.error || 'Submission failed');
       }
 
-      // --- ★★★ THIS IS THE CHANGE ★★★ ---
-      // The API will now return 'upi' for UPI payments,
-      // and 'cash' or 'card' for the others.
       if (data.paymentMethod === 'upi') {
         setSuccess('Registration complete. Redirecting to payment QR...');
         const amountInRupees = data.finalAmountInPaise / 100;
@@ -303,18 +283,11 @@ export default function ClientCheckinForm() {
           router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}`);
         }, 1500);
       } 
-      else if (data.paymentMethod === 'cash' || data.paymentMethod === 'card') {
+      else {
         setSuccess('Registration successful! Redirecting...');
         setTimeout(() => {
           router.push(`/client-cash-success?outletId=${outletId}`);
         }, 1500);
-      }
-      else {
-          // This handles the 'package' case
-          setSuccess('Registration successful! Redirecting...');
-           setTimeout(() => {
-            router.push(`/client-cash-success?outletId=${outletId}`);
-          }, 1500);
       }
 
     } catch (err: any) {
@@ -324,13 +297,9 @@ export default function ClientCheckinForm() {
     }
   };
 
-  // --- Render Logic (Updated) ---
   const showAmountField = !formData.tookPackage;
   const isSubmitDisabled = loading;
-  
-  // --- maskEmail helper REMOVED ---
 
-  // --- Main Form Render ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
       <div className="max-w-lg w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
@@ -341,7 +310,6 @@ export default function ClientCheckinForm() {
         {success && <div className="mb-4 p-3 bg-green-900/50 text-green-300 rounded-lg border border-green-700 text-sm">{success}</div>}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Section 1: Client Info */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="mobile" className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
@@ -373,7 +341,6 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* Package Info Display */}
           {clientInfo && clientInfo.status === 'active' && (
             <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg text-sm text-center text-green-300">
               <strong>Active package found.</strong> (Can buy another)
@@ -385,7 +352,6 @@ export default function ClientCheckinForm() {
             </div>
           )}
 
-          {/* Section 2: Service & Duration */}
           <div>
             <label htmlFor="treatment" className="block text-sm font-medium text-gray-300 mb-1">Select Treatment *</label>
             <select
@@ -404,10 +370,37 @@ export default function ClientCheckinForm() {
                 </option>
               ))}
             </select>
-            {treatments.length === 0 && !loading && <p className="text-xs text-red-500 mt-1">No treatments loaded for this outlet.</p>}
           </div>
 
-          {/* --- SESSION DURATION (NOW ALWAYS VISIBLE) --- */}
+          {/* --- NEW: Therapist & Room Inputs --- */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Therapist Name</label>
+              <input
+                name="therapistName"
+                type="text"
+                value={formData.therapistName}
+                onChange={handleChange}
+                placeholder="Therapist"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                disabled={loading}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Room Number</label>
+              <input
+                name="room"
+                type="text"
+                value={formData.room}
+                onChange={handleChange}
+                placeholder="Room No."
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                disabled={loading}
+              />
+            </div>
+          </div>
+          {/* --- End New Inputs --- */}
+
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
               {formData.tookPackage ? 'First Session Duration (Optional)' : 'Session Duration *'}
@@ -439,7 +432,6 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* --- Section 3: Package Options (UPDATED) --- */}
           <div className="pt-4 border-t border-gray-700 space-y-3">
             <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-800">
               <input
@@ -455,7 +447,6 @@ export default function ClientCheckinForm() {
               </span>
             </label>
             
-            {/* --- NEW: Add Package Fields --- */}
             {formData.tookPackage && (
               <div className="p-4 bg-gray-800 rounded-lg border border-gray-700 space-y-4">
                 <h3 className="text-md font-medium text-white">New Package Details</h3>
@@ -500,7 +491,6 @@ export default function ClientCheckinForm() {
                     <option value="9 months">9 Months</option>
                   </select>
                 </div>
-                {/* --- 'SOLD BY' INPUT FIELD (FIXED) --- */}
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Sold By (Staff Name) *</label>
                   <input
@@ -515,10 +505,8 @@ export default function ClientCheckinForm() {
                 </div>
               </div>
             )}
-            {/* --- END: Add Package Fields --- */}
           </div>
 
-          {/* Section 4: Conditional Price Fields */}
           {showAmountField && (
             <div>
               <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Amount for Treatment (₹) *</label>
@@ -538,7 +526,6 @@ export default function ClientCheckinForm() {
             </div>
           )}
 
-          {/* --- Payment Method Select (MODIFIED) --- */}
           {!formData.tookPackage && (
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
@@ -556,7 +543,6 @@ export default function ClientCheckinForm() {
               </select>
             </div>
           )}
-          {/* If a package is being taken, show all payment options */}
           {formData.tookPackage && (
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
@@ -574,10 +560,7 @@ export default function ClientCheckinForm() {
               </select>
             </div>
           )}
-          {/* --- End of modification --- */}
 
-
-          {/* --- Submit Button Text (MODIFIED) --- */}
           <button
             type="submit"
             disabled={isSubmitDisabled}
@@ -591,7 +574,6 @@ export default function ClientCheckinForm() {
               formData.paymentMethod === 'cash' ? 'Register & Accept Cash' : 'Register & Accept Card'
             }
           </button>
-          {/* --- End of modification --- */}
         </form>
       </div>
     </div>

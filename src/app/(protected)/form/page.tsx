@@ -40,7 +40,8 @@ export default function ClientForm() {
     paymentMethod: 'cash',
     sold_by: '',
     packageValidity: '3 months', 
-    therapistName: '', // <-- NEW: Added therapist name
+    therapistName: '', // Updated: Available for all
+    room: '',          // NEW: Added room
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -137,9 +138,10 @@ export default function ClientForm() {
       return;
     }
     
-    // --- NEW: Validation for Therapist Name ---
-    if (formData.isPackageCustomer && !formData.therapistName.trim()) {
-      setInputError("Please enter the Therapist Name for this redeemed service.");
+    // --- Updated: Validate Therapist Name if a session is happening ---
+    // If sessionHours > 0, we generally expect a therapist
+    if ((sessionHours > 0 || formData.isPackageCustomer) && !formData.therapistName.trim()) {
+      setInputError("Please enter the Therapist Name.");
       setIsSubmitting(false);
       return;
     }
@@ -175,7 +177,7 @@ export default function ClientForm() {
 
     try {
       let checkInTime: string | null = null;
-      if (formData.paymentMethod === 'cash' || formData.isPackageCustomer) {
+      if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.isPackageCustomer) {
         checkInTime = new Date().toISOString();
       }
       
@@ -197,7 +199,9 @@ export default function ClientForm() {
         check_in_time: checkInTime,
         packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
-        therapist_name: formData.isPackageCustomer ? formData.therapistName : null, // <-- NEW: Send therapist name
+        // --- NEW: Sending Therapist and Room ---
+        therapist_name: formData.therapistName, 
+        room: formData.room, 
       };
 
       const response = await fetch('/api/client-form-submit', {
@@ -230,7 +234,9 @@ export default function ClientForm() {
           totalPackageHours: 0,
           sold_by: '',
           packageValidity: '3 months',
-          therapistName: '', // <-- NEW: Reset therapist name
+          therapistName: '', 
+          room: '', 
+          paymentMethod: 'cash',
         }));
       } else {
         const err = data.error || 'Unknown error';
@@ -343,6 +349,33 @@ export default function ClientForm() {
             />
           </div>
 
+          {/* --- NEW: Therapist Name & Room Inputs --- */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name</label>
+            <input
+              name="therapistName"
+              type="text"
+              value={formData.therapistName}
+              onChange={handleChange}
+              placeholder="Enter therapist's name"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Room</label>
+            <input
+              name="room"
+              type="text"
+              value={formData.room}
+              onChange={handleChange}
+              placeholder="Enter room no."
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+            />
+          </div>
+          {/* --- End New Inputs --- */}
+
+
           {showAmountField && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹) *</label>
@@ -356,6 +389,38 @@ export default function ClientForm() {
                 required={!formData.isPackageCustomer && !formData.tookPackage}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
               />
+            </div>
+          )}
+
+          {!formData.tookPackage && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Payment Option</label>
+              <select
+                name="paymentMethod"
+                value={formData.paymentMethod}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
+              >
+                <option value="cash">Pay with Cash</option>
+                <option value="card">Pay with Card</option>
+                <option value="upi">Pay with UPI</option>
+              </select>
+            </div>
+          )}
+          {/* Also show for new packages */}
+          {formData.tookPackage && (
+             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Payment Option</label>
+              <select
+                name="paymentMethod"
+                value={formData.paymentMethod}
+                onChange={handleChange}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
+              >
+                <option value="cash">Pay with Cash</option>
+                <option value="card">Pay with Card</option>
+                <option value="upi">Pay with UPI</option>
+              </select>
             </div>
           )}
 
@@ -419,7 +484,6 @@ export default function ClientForm() {
                 className="sr-only"
                 disabled={!!clientInfo && clientInfo.status === 'active'}
               />
-              {/* --- ★★★ TYPO FIX 1: 'opacity-5G' to 'opacity-50' ★★★ --- */}
               <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
@@ -428,25 +492,6 @@ export default function ClientForm() {
             </div>
           </label>
         </div>
-
-        {/* --- NEW: Therapist Name field for Redeemed Service --- */}
-        {formData.isPackageCustomer && (
-          <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-200 space-y-4">
-            <h3 className="text-md font-semibold text-green-800">Redeemed Service Details</h3>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name *</label>
-              <input
-                name="therapistName"
-                type="text"
-                value={formData.therapistName}
-                onChange={handleChange}
-                required={formData.isPackageCustomer}
-                placeholder="Enter therapist's name"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-green-500 focus:border-green-500 text-black"
-              />
-            </div>
-          </div>
-        )}
 
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
@@ -492,7 +537,6 @@ export default function ClientForm() {
                 />
               </div>
               <div>
-                {/* --- ★★★ TYPO FIX 2: '</G>' to '</label>' ★★★ --- */}
                 <label className="block text-sm font-medium text-gray-700 mb-1">Package Validity *</label>
                 <select
                   name="packageValidity"
