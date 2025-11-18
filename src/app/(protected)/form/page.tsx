@@ -15,7 +15,6 @@ type ClientInfo = {
   usedPackageHours: number;
   remainingHours: number;
   expiryDate: string;
-  // email?: string; // <-- REMOVED from previous step
 };
 
 const outletsList = OUTLETS.map((o: any) => o.name);
@@ -28,7 +27,6 @@ export default function ClientForm() {
   
   const [formData, setFormData] = useState({
     name: '',
-    // email: '', // <-- REMOVED from previous step
     date: new Date().toISOString().split('T')[0],
     treatment: '',
     amountPaid: 0,
@@ -42,6 +40,7 @@ export default function ClientForm() {
     paymentMethod: 'cash',
     sold_by: '',
     packageValidity: '3 months', 
+    therapistName: '', // <-- NEW: Added therapist name
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -59,7 +58,6 @@ export default function ClientForm() {
     };
   }, []);
 
-  // --- UPDATED: Email pre-fill REMOVED ---
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -138,6 +136,14 @@ export default function ClientForm() {
       setIsSubmitting(false);
       return;
     }
+    
+    // --- NEW: Validation for Therapist Name ---
+    if (formData.isPackageCustomer && !formData.therapistName.trim()) {
+      setInputError("Please enter the Therapist Name for this redeemed service.");
+      setIsSubmitting(false);
+      return;
+    }
+
     if (formData.tookPackage) {
       if (!formData.packageAmount || formData.packageAmount <= 0 || !formData.totalPackageHours || formData.totalPackageHours <= 0) {
         setInputError('Please enter a valid Package Amount and Total Hours for the new package.');
@@ -149,7 +155,6 @@ export default function ClientForm() {
         setIsSubmitting(false);
         return;
       }
-      // --- REMOVED: Validate email ---
     }
     if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
         setInputError('Please enter a valid Amount for the treatment.');
@@ -177,7 +182,6 @@ export default function ClientForm() {
       const payload = {
         name: formData.name.trim(),
         mobile: mobile,
-        // email: formData.email.trim(), // <-- REMOVED
         date: formData.date,
         treatment: formData.treatment,
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
@@ -191,9 +195,9 @@ export default function ClientForm() {
         paymentMethod: effectivePaymentMethod,
         finalAmountInPaise: finalAmountInPaise, 
         check_in_time: checkInTime,
-        // --- ★★★ BUG FIX WAS HERE ★★★ ---
         packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
+        therapist_name: formData.isPackageCustomer ? formData.therapistName : null, // <-- NEW: Send therapist name
       };
 
       const response = await fetch('/api/client-form-submit', {
@@ -216,7 +220,6 @@ export default function ClientForm() {
         setFormData(prev => ({
           ...prev,
           name: '',
-          // email: '', // <-- REMOVED
           treatment: '',
           amountPaid: 0,
           sessionHours: 0,
@@ -226,7 +229,8 @@ export default function ClientForm() {
           packageAmount: 0,
           totalPackageHours: 0,
           sold_by: '',
-          packageValidity: '3 months', 
+          packageValidity: '3 months',
+          therapistName: '', // <-- NEW: Reset therapist name
         }));
       } else {
         const err = data.error || 'Unknown error';
@@ -312,8 +316,6 @@ export default function ClientForm() {
               placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
             />
           </div>
-
-          {/* --- REMOVED: Email Field --- */}
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Outlet *</label>
@@ -417,6 +419,7 @@ export default function ClientForm() {
                 className="sr-only"
                 disabled={!!clientInfo && clientInfo.status === 'active'}
               />
+              {/* --- ★★★ TYPO FIX 1: 'opacity-5G' to 'opacity-50' ★★★ --- */}
               <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
@@ -425,6 +428,25 @@ export default function ClientForm() {
             </div>
           </label>
         </div>
+
+        {/* --- NEW: Therapist Name field for Redeemed Service --- */}
+        {formData.isPackageCustomer && (
+          <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-200 space-y-4">
+            <h3 className="text-md font-semibold text-green-800">Redeemed Service Details</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name *</label>
+              <input
+                name="therapistName"
+                type="text"
+                value={formData.therapistName}
+                onChange={handleChange}
+                required={formData.isPackageCustomer}
+                placeholder="Enter therapist's name"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-green-500 focus:border-green-500 text-black"
+              />
+            </div>
+          </div>
+        )}
 
         {formData.tookPackage && (
           <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200 space-y-4">
@@ -443,7 +465,6 @@ export default function ClientForm() {
                 />
               </div>
               <div>
-                {/* --- ★★★ THIS IS THE FIX ★★★ --- */}
                 <label className="block text-sm font-medium text-gray-700 mb-1">Total Hours *</label>
                 <input
                   name="totalPackageHours"
@@ -471,6 +492,7 @@ export default function ClientForm() {
                 />
               </div>
               <div>
+                {/* --- ★★★ TYPO FIX 2: '</G>' to '</label>' ★★★ --- */}
                 <label className="block text-sm font-medium text-gray-700 mb-1">Package Validity *</label>
                 <select
                   name="packageValidity"
