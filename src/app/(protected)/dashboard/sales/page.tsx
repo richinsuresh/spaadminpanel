@@ -68,9 +68,11 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
+// --- ★★★ FIX 1: Robust Payment Formatting ★★★ ---
+// This now correctly labels both 'card' and 'upi' as "UPI / Card"
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  if (method === 'card') return 'UPI / Card';
+  if (method === 'card' || method === 'upi') return 'UPI / Card'; // Handles both
   if (method === 'cash') return 'Cash';
   if (method === 'package') return 'Package';
   return method.charAt(0).toUpperCase() + method.slice(1);
@@ -159,22 +161,35 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
+  // --- ★★★ FIX 2: Correct Total Calculation ★★★ ---
   const totalCashSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'cash')
-      .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
+      .reduce((sum, sale) => {
+        // Use package_amount if it's a package sale, otherwise amount_paid
+        const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
+        return sum + (amount || 0);
+      }, 0);
   }, [activeSales]);
 
+  // --- ★★★ FIX 3: Correct Total Calculation (for 'card' AND 'upi') ★★★ ---
   const totalUpiSales = useMemo(() => {
     return activeSales
-      .filter((sale) => sale.payment_method === 'card')
-      .reduce((sum, sale) => sum + (sale.amount_paid || 0), 0);
+      // Filters for both 'card' and 'upi'
+      .filter((sale) => sale.payment_method === 'card' || sale.payment_method === 'upi')
+      .reduce((sum, sale) => {
+        // Use package_amount if it's a package sale, otherwise amount_paid
+        const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
+        return sum + (amount || 0);
+      }, 0);
   }, [activeSales]);
 
   const totalPackageSales = useMemo(() => {
     return activeSales
-      .filter((sale) => sale.payment_method === 'package' || sale.took_package)
-      .reduce((sum, sale) => sum + (sale.package_amount || 0), 0);
+      .filter((sale) => sale.took_package) // Only count *new* packages sold
+      .reduce((sum, sale) => {
+        return sum + (sale.package_amount || 0);
+      }, 0);
   }, [activeSales]);
 
   const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
@@ -210,7 +225,7 @@ export default function AdminSalesPage() {
         Mobile: sale.mobile,
         Service: sale.took_package ? 'New Package' : sale.treatment,
         'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-        'Payment Method': formatPaymentMethod(sale.payment_method),
+        'Payment Method': formatPaymentMethod(sale.payment_method), // Uses new logic
         Duration: formatDuration(sale.session_hours),
         'Sold By': sale.package_sold_by || 'N/A',
         Therapist: sale.therapist_name || 'N/A',
@@ -252,13 +267,12 @@ export default function AdminSalesPage() {
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
   };
 
-  // --- NEW: Delete Function ---
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to PERMANENTLY DELETE this sale? This action cannot be undone.')) return;
     try {
       const { error } = await supabase.from('customers').delete().eq('id', id);
       if (error) throw error;
-      // No need to call fetchSales(), realtime listener will handle it.
+      // Real-time listener will refresh the list
     } catch (err: any) {
       console.error('Error deleting sale:', err);
       alert(`Error deleting sale: ${err.message}`);
@@ -331,30 +345,27 @@ export default function AdminSalesPage() {
       {/* Total Sales Card Grid (Responsive) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 divide-y md:divide-x lg:divide-y-0">
-          {/* Total Sales */}
+          
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total Active Sales (All)</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales</h3>
             <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
             <p className="text-gray-500 text-sm">{activeSalesCount} completed session(s)</p>
           </div>
           
-          {/* Cash Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
             <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p> 
           </div>
 
-          {/* UPI/Card Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
             <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
             <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
           </div>
 
-          {/* Package Sales */}
           <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total Package Value</h3>
+            <h3 className="text-gray-500 text-sm font-medium">Total Package Value Sold</h3>
             <p className="text-3xl font-bold mt-2 text-gray-600">{formatCurrency(totalPackageSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
           </div>
@@ -392,7 +403,6 @@ export default function AdminSalesPage() {
                 sales.map((sale) => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
                     
-                    {/* --- UI FIX: Removed whitespace-nowrap to allow wrapping --- */}
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{sale.name}</div>
                       <div className="text-sm text-gray-500">{sale.mobile}</div>
@@ -400,7 +410,6 @@ export default function AdminSalesPage() {
                     
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sale.outlet_name}</td>
                     
-                    {/* --- UI FIX: Removed whitespace-nowrap to allow wrapping --- */}
                     <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
                       {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
                       <div className="text-xs text-gray-400">{formatDuration(sale.session_hours)}</div>
@@ -411,6 +420,7 @@ export default function AdminSalesPage() {
                     </td>
                     
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {/* This will now display "UPI / Card" */}
                       {formatPaymentMethod(sale.payment_method)}
                     </td>
                     
@@ -484,7 +494,6 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* --- NEW: Action Column with Delete Button --- */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col gap-2 items-start">
                         {sale.check_out_time ? (
@@ -500,7 +509,6 @@ export default function AdminSalesPage() {
                           </button>
                         )}
                         
-                        {/* --- NEW: Delete Button --- */}
                         <button
                           onClick={() => handleDelete(sale.id)}
                           className="px-3 py-1 bg-red-700 text-white text-sm rounded-lg hover:bg-red-800"
