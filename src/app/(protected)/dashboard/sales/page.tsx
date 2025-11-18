@@ -22,6 +22,7 @@ type Sale = {
   outlet_name: string;
   package_sold_by: string | null;
   payment_method: string | null;
+  is_package_customer: boolean; // <-- Added this
 };
 
 const formatCurrency = (amountInPaise: number) =>
@@ -87,6 +88,28 @@ const formatPaymentMethod = (method: string | null) => {
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
 
+// --- ★★★ Service Formatting Logic ★★★ ---
+const formatService = (sale: Sale) => {
+  if (sale.took_package) {
+    return (
+      <>
+        <span className="font-medium text-purple-700">New Package</span>
+        <div className="text-gray-500 truncate" title={sale.treatment}>{sale.treatment}</div>
+      </>
+    );
+  }
+  if (sale.is_package_customer) {
+     return (
+      <>
+        <span className="font-medium text-yellow-600">Package Redemption</span>
+        <div className="text-gray-500 truncate" title={sale.treatment}>{sale.treatment}</div>
+      </>
+    );
+  }
+  return <span className="text-gray-900" title={sale.treatment}>{sale.treatment}</span>;
+};
+
+
 const getToday = () => new Date().toISOString().split('T')[0];
 
 export default function AdminSalesPage() {
@@ -107,7 +130,7 @@ export default function AdminSalesPage() {
       let query = supabase
         .from('customers')
         .select(
-          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by, payment_method'
+          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, is_package_customer, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, package_sold_by, payment_method'
         )
         .gte('date', startDate)
         .lte('date', endDate)
@@ -120,7 +143,7 @@ export default function AdminSalesPage() {
       const { data, error } = await query;
       if (error) throw error;
 
-      setSales(data || []);
+      setSales((data as Sale[]) || []);
 
       const initialRooms: { [key: string]: string } = {};
       const initialTherapists: { [key: string]: string } = {};
@@ -208,7 +231,7 @@ export default function AdminSalesPage() {
       let query = supabase
         .from('customers')
         .select(
-          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room, payment_method'
+          'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, is_package_customer, package_amount, check_in_time, check_out_time, therapist_name, outlet_name, package_sold_by, room, payment_method'
         )
         .gte('date', startDate)
         .lte('date', endDate)
@@ -226,21 +249,30 @@ export default function AdminSalesPage() {
         return;
       }
 
-      const dataToExport = data.map((sale: any) => ({
-        Date: new Date(sale.date).toLocaleDateString('en-IN'),
-        Outlet: sale.outlet_name,
-        'Customer Name': sale.name,
-        Mobile: sale.mobile,
-        Service: sale.took_package ? 'New Package' : sale.treatment,
-        'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-        'Payment Method': formatPaymentMethod(sale.payment_method),
-        Duration: formatDuration(sale.session_hours),
-        'Sold By': sale.package_sold_by || 'N/A',
-        Therapist: sale.therapist_name || 'N/A',
-        Room: sale.room || 'N/A',
-        'Check-in Time': formatTime(sale.check_in_time),
-        'Check-out Time': formatTime(sale.check_out_time),
-      }));
+      const dataToExport = data.map((sale: any) => {
+        let service = sale.treatment;
+        if (sale.took_package) {
+          service = `New Package - ${sale.treatment}`;
+        } else if (sale.is_package_customer) {
+          service = `Package Redemption - ${sale.treatment}`;
+        }
+
+        return {
+          Date: new Date(sale.date).toLocaleDateString('en-IN'),
+          Outlet: sale.outlet_name,
+          'Customer Name': sale.name,
+          Mobile: sale.mobile,
+          Service: service, // <-- Updated logic
+          'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
+          'Payment Method': formatPaymentMethod(sale.payment_method),
+          Duration: formatDuration(sale.session_hours),
+          'Sold By': sale.package_sold_by || 'N/A',
+          Therapist: sale.therapist_name || 'N/A',
+          Room: sale.room || 'N/A',
+          'Check-in Time': formatTime(sale.check_in_time),
+          'Check-out Time': formatTime(sale.check_out_time),
+        };
+      });
 
       const outletName =
         selectedOutletId === 'all' ? 'AllOutlets' : OUTLETS.find((o) => o.id === selectedOutletId)?.name || 'Outlet';
@@ -308,8 +340,10 @@ export default function AdminSalesPage() {
   return (
     <div className="space-y-6">
       
+      {/* --- Light Mode Theme --- */}
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
+      {/* --- Light Mode Theme --- */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
@@ -358,7 +392,7 @@ export default function AdminSalesPage() {
 
         <div>
           <button
-            onClick={handleExport}
+            onClick={handleExport as any}
             disabled={loading || isExporting}
             className="w-full px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
           >
@@ -367,28 +401,29 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
+      {/* --- Light Mode Theme --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 divide-y md:divide-x lg:divide-y-0">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           
-          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+          <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6">
             <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales</h3>
             <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
             <p className="text-gray-500 text-sm">{activeSalesCount} completed session(s)</p>
           </div>
           
-          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+          <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6 pt-4 md:pt-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
             <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p> 
           </div>
 
-          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+          <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6 pt-4 md:pt-0">
             <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
             <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
           </div>
 
-          <div className="py-2 md:py-0 md:px-4 first:pt-0 first:pl-0 last:pr-0">
+          <div className="pt-4 md:pt-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Package Value Sold</h3>
             <p className="text-3xl font-bold mt-2 text-gray-600">{formatCurrency(totalPackageSales)}</p>
             <p className="text-gray-500 text-sm">&nbsp;</p>
@@ -397,13 +432,12 @@ export default function AdminSalesPage() {
       </div>
 
 
-      {/* --- ★★★ UI FIXES APPLIED TO TABLE ★★★ --- */}
+      {/* --- Light Mode Table Theme --- */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                {/* 1. Smaller Padding */}
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sale Date</th>
@@ -429,7 +463,6 @@ export default function AdminSalesPage() {
                 sales.map((sale) => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
                     
-                    {/* 2. Smaller Padding + Text, Wrapping enabled */}
                     <td className="px-3 py-2">
                       <div className="text-xs font-medium text-gray-900">{sale.name}</div>
                       <div className="text-xs text-gray-500">{sale.mobile}</div>
@@ -437,7 +470,6 @@ export default function AdminSalesPage() {
                     
                     <td className="px-3 py-2 text-xs font-medium text-gray-900">{sale.outlet_name}</td>
                     
-                    {/* 3. Smaller Input */}
                     <td className="px-3 py-2">
                       <div className="flex">
                         <input
@@ -455,8 +487,21 @@ export default function AdminSalesPage() {
                       </div>
                     </td>
                     
-                    <td className="px-3 py-2 text-xs text-gray-500 max-w-xs">
-                      {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
+                    <td className="px-3 py-2 text-xs max-w-xs">
+                      {/* --- Updated Service Logic --- */}
+                      {sale.took_package ? (
+                        <>
+                          <span className="font-medium text-purple-700">New Package</span>
+                          <div className="text-gray-500 truncate" title={sale.treatment}>{sale.treatment}</div>
+                        </>
+                      ) : sale.is_package_customer ? (
+                        <>
+                          <span className="font-medium text-yellow-600">Package Redemption</span>
+                          <div className="text-gray-500 truncate" title={sale.treatment}>{sale.treatment}</div>
+                        </>
+                      ) : (
+                        <span className="text-gray-900" title={sale.treatment}>{sale.treatment}</span>
+                      )}
                       <div className="text-xs text-gray-400">{formatDuration(sale.session_hours)}</div>
                     </td>
                     
@@ -494,7 +539,6 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* 3. Smaller Inputs */}
                     <td className="px-3 py-2">
                       {sale.check_out_time ? (
                         <span className="text-xs text-gray-500">{sale.therapist_name || 'N/A'}</span>
@@ -539,7 +583,6 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    {/* 4. Action Buttons side-by-side */}
                     <td className="px-3 py-2">
                       <div className="flex flex-row gap-2 items-center">
                         {sale.check_out_time ? (
