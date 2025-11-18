@@ -49,6 +49,17 @@ const formatTime = (dateString: string | null) => {
   });
 };
 
+const toInputDate = (dateString: string | null): string => {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '';
+    return date.toISOString().split('T')[0];
+  } catch (e) {
+    return '';
+  }
+};
+
 const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
   if (!checkIn || !hours || hours <= 0) {
     return null;
@@ -68,11 +79,9 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- ★★★ FIX 1: Robust Payment Formatting ★★★ ---
-// This now correctly labels both 'card' and 'upi' as "UPI / Card"
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  if (method === 'card' || method === 'upi') return 'UPI / Card'; // Handles both
+  if (method === 'card' || method === 'upi') return 'UPI / Card';
   if (method === 'cash') return 'Cash';
   if (method === 'package') return 'Package';
   return method.charAt(0).toUpperCase() + method.slice(1);
@@ -91,6 +100,7 @@ export default function AdminSalesPage() {
 
   const [roomInputs, setRoomInputs] = useState<{ [key: string]: string }>({});
   const [therapistInputs, setTherapistInputs] = useState<{ [key: string]: string }>({});
+  const [dateInputs, setDateInputs] = useState<{ [key: string]: string }>({});
 
   const fetchSales = useCallback(async () => {
     try {
@@ -114,12 +124,15 @@ export default function AdminSalesPage() {
 
       const initialRooms: { [key: string]: string } = {};
       const initialTherapists: { [key: string]: string } = {};
+      const initialDates: { [key: string]: string } = {};
       (data || []).forEach((sale: any) => {
         initialRooms[sale.id] = sale.room || '';
         initialTherapists[sale.id] = sale.therapist_name || '';
+        initialDates[sale.id] = toInputDate(sale.date);
       });
       setRoomInputs(initialRooms);
       setTherapistInputs(initialTherapists);
+      setDateInputs(initialDates);
     } catch (err) {
       console.error('Error fetching sales:', err);
       alert('Error fetching sales. See console for details.');
@@ -161,24 +174,19 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
-  // --- ★★★ FIX 2: Correct Total Calculation ★★★ ---
   const totalCashSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'cash')
       .reduce((sum, sale) => {
-        // Use package_amount if it's a package sale, otherwise amount_paid
         const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
         return sum + (amount || 0);
       }, 0);
   }, [activeSales]);
 
-  // --- ★★★ FIX 3: Correct Total Calculation (for 'card' AND 'upi') ★★★ ---
   const totalUpiSales = useMemo(() => {
     return activeSales
-      // Filters for both 'card' and 'upi'
       .filter((sale) => sale.payment_method === 'card' || sale.payment_method === 'upi')
       .reduce((sum, sale) => {
-        // Use package_amount if it's a package sale, otherwise amount_paid
         const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
         return sum + (amount || 0);
       }, 0);
@@ -186,7 +194,7 @@ export default function AdminSalesPage() {
 
   const totalPackageSales = useMemo(() => {
     return activeSales
-      .filter((sale) => sale.took_package) // Only count *new* packages sold
+      .filter((sale) => sale.took_package)
       .reduce((sum, sale) => {
         return sum + (sale.package_amount || 0);
       }, 0);
@@ -225,7 +233,7 @@ export default function AdminSalesPage() {
         Mobile: sale.mobile,
         Service: sale.took_package ? 'New Package' : sale.treatment,
         'Amount (INR)': (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-        'Payment Method': formatPaymentMethod(sale.payment_method), // Uses new logic
+        'Payment Method': formatPaymentMethod(sale.payment_method),
         Duration: formatDuration(sale.session_hours),
         'Sold By': sale.package_sold_by || 'N/A',
         Therapist: sale.therapist_name || 'N/A',
@@ -262,6 +270,25 @@ export default function AdminSalesPage() {
     await supabase.from('customers').update({ therapist_name: therapistName }).eq('id', id);
   };
   
+  const handleDateInputChange = (id: string, date: string) => {
+    setDateInputs((prev) => ({ ...prev, [id]: date }));
+  };
+  
+  const handleDateSave = async (id: string, newDate: string) => {
+    if (!newDate) {
+      alert('Please select a valid date.');
+      return;
+    }
+    try {
+      const { error } = await supabase.from('customers').update({ date: newDate }).eq('id', id);
+      if (error) throw error;
+      alert('Sale date updated successfully!');
+    } catch (err: any) {
+      console.error('Error updating date:', err);
+      alert('Failed to update sale date.');
+    }
+  };
+  
   const handleCheckOut = async (id: string) => {
     if (!confirm('Are you sure you want to check out this client?')) return;
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
@@ -272,7 +299,6 @@ export default function AdminSalesPage() {
     try {
       const { error } = await supabase.from('customers').delete().eq('id', id);
       if (error) throw error;
-      // Real-time listener will refresh the list
     } catch (err: any) {
       console.error('Error deleting sale:', err);
       alert(`Error deleting sale: ${err.message}`);
@@ -284,7 +310,6 @@ export default function AdminSalesPage() {
       
       <h1 className="text-2xl font-bold text-gray-800">Admin Live Dashboard & Sales</h1>
 
-      {/* Filter Bar (Responsive) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label htmlFor="outlet" className="block text-sm font-medium text-gray-700 mb-1">
@@ -342,7 +367,6 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* Total Sales Card Grid (Responsive) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 divide-y md:divide-x lg:divide-y-0">
           
@@ -373,58 +397,78 @@ export default function AdminSalesPage() {
       </div>
 
 
-      {/* Sales Table */}
+      {/* --- ★★★ UI FIXES APPLIED TO TABLE ★★★ --- */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                {/* 1. Smaller Padding */}
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sale Date</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td>
+                  <td colSpan={10} className="p-6 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : sales.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
+                  <td colSpan={10} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
                 </tr>
               ) : (
                 sales.map((sale) => (
                   <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : 'bg-white'}>
                     
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">{sale.name}</div>
-                      <div className="text-sm text-gray-500">{sale.mobile}</div>
+                    {/* 2. Smaller Padding + Text, Wrapping enabled */}
+                    <td className="px-3 py-2">
+                      <div className="text-xs font-medium text-gray-900">{sale.name}</div>
+                      <div className="text-xs text-gray-500">{sale.mobile}</div>
                     </td>
                     
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{sale.outlet_name}</td>
+                    <td className="px-3 py-2 text-xs font-medium text-gray-900">{sale.outlet_name}</td>
                     
-                    <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
+                    {/* 3. Smaller Input */}
+                    <td className="px-3 py-2">
+                      <div className="flex">
+                        <input
+                          type="date"
+                          value={dateInputs[sale.id] || ''}
+                          onChange={(e) => handleDateInputChange(sale.id, e.target.value)}
+                          className="w-28 px-2 py-1 border border-gray-300 rounded-l-md text-xs text-black"
+                        />
+                        <button
+                          onClick={() => handleDateSave(sale.id, dateInputs[sale.id])}
+                          className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-xs hover:bg-gray-300"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </td>
+                    
+                    <td className="px-3 py-2 text-xs text-gray-500 max-w-xs">
                       {sale.took_package ? <span className="font-medium text-purple-700">New Package</span> : sale.treatment}
                       <div className="text-xs text-gray-400">{formatDuration(sale.session_hours)}</div>
                     </td>
                     
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
+                    <td className="px-3 py-2 text-xs font-medium text-green-600">
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
                     </td>
                     
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {/* This will now display "UPI / Card" */}
+                    <td className="px-3 py-2 text-xs text-gray-500">
                       {formatPaymentMethod(sale.payment_method)}
                     </td>
                     
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-3 py-2 text-xs text-gray-500">
                       <div>
                         <span className="font-medium">In: </span>
                         {formatTime(sale.check_in_time)}
@@ -450,9 +494,10 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    {/* 3. Smaller Inputs */}
+                    <td className="px-3 py-2">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{sale.therapist_name || 'N/A'}</span>
+                        <span className="text-xs text-gray-500">{sale.therapist_name || 'N/A'}</span>
                       ) : (
                         <div className="flex">
                           <input
@@ -460,11 +505,11 @@ export default function AdminSalesPage() {
                             value={therapistInputs[sale.id] || ''}
                             onChange={(e) => handleTherapistInputChange(sale.id, e.target.value)}
                             placeholder="Therapist"
-                            className="w-24 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
+                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-xs text-black"
                           />
                           <button
                             onClick={() => handleTherapistSave(sale.id, therapistInputs[sale.id])}
-                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-sm hover:bg-gray-300"
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-xs hover:bg-gray-300"
                           >
                             Save
                           </button>
@@ -472,9 +517,9 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-2">
                       {sale.check_out_time ? (
-                        <span className="text-sm text-gray-500">{sale.room || 'N/A'}</span>
+                        <span className="text-xs text-gray-500">{sale.room || 'N/A'}</span>
                       ) : (
                         <div className="flex">
                           <input
@@ -482,11 +527,11 @@ export default function AdminSalesPage() {
                             value={roomInputs[sale.id] || ''}
                             onChange={(e) => handleRoomInputChange(sale.id, e.target.value)}
                             placeholder="Room name"
-                            className="w-20 px-2 py-1 border border-gray-300 rounded-l-md text-sm text-black"
+                            className="w-16 px-2 py-1 border border-gray-300 rounded-l-md text-xs text-black"
                           />
                           <button
                             onClick={() => handleRoomSave(sale.id, roomInputs[sale.id])}
-                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-sm hover:bg-gray-300"
+                            className="px-2 py-1 bg-gray-200 text-gray-700 rounded-r-md text-xs hover:bg-gray-300"
                           >
                             Save
                           </button>
@@ -494,16 +539,17 @@ export default function AdminSalesPage() {
                       )}
                     </td>
 
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex flex-col gap-2 items-start">
+                    {/* 4. Action Buttons side-by-side */}
+                    <td className="px-3 py-2">
+                      <div className="flex flex-row gap-2 items-center">
                         {sale.check_out_time ? (
-                          <span className="px-3 py-1 bg-green-100 text-green-700 text-sm rounded-full font-medium">
+                          <span className="px-3 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
                             Completed
                           </span>
                         ) : (
                           <button
                             onClick={() => handleCheckOut(sale.id)}
-                            className="px-3 py-1 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600"
+                            className="px-3 py-1 bg-red-500 text-white text-xs rounded-lg hover:bg-red-600"
                           >
                             Check Out
                           </button>
@@ -511,7 +557,7 @@ export default function AdminSalesPage() {
                         
                         <button
                           onClick={() => handleDelete(sale.id)}
-                          className="px-3 py-1 bg-red-700 text-white text-sm rounded-lg hover:bg-red-800"
+                          className="px-3 py-1 bg-red-700 text-white text-xs rounded-lg hover:bg-red-800"
                         >
                           Delete
                         </button>
