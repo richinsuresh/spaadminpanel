@@ -20,7 +20,7 @@ type Sale = {
   room: string | null;
   therapist_name: string | null;
   session_hours: number | null;
-  outlet_id: string; // Added for editing
+  outlet_id: string;
   outlet_name: string;
   package_sold_by: string | null;
   payment_method: string | null;
@@ -45,6 +45,15 @@ const formatTime = (dateString: string | null) => {
     minute: '2-digit',
     hour12: true,
   });
+};
+
+// Convert full ISO string to HH:MM for input
+const toInputTime = (dateString: string | null) => {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
 };
 
 const toInputDate = (dateString: string | null): string => {
@@ -77,9 +86,11 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
+// --- ★★★ Updated Payment Formatting ★★★ ---
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  if (method === 'card' || method === 'upi') return 'UPI / Card';
+  if (method === 'card') return 'Card'; // Now separate
+  if (method === 'upi') return 'UPI';   // Now separate
   if (method === 'cash') return 'Cash';
   if (method === 'package') return 'Package';
   return method.charAt(0).toUpperCase() + method.slice(1);
@@ -129,7 +140,6 @@ export default function AdminSalesPage() {
       let query = supabase
         .from('customers')
         .select(
-          // Added outlet_id to selection
           'id, date, name, mobile, treatment, session_hours, amount_paid, took_package, is_package_customer, package_amount, check_in_time, check_out_time, room, therapist_name, outlet_name, outlet_id, package_sold_by, payment_method'
         )
         .gte('date', startDate)
@@ -153,6 +163,7 @@ export default function AdminSalesPage() {
   }, [startDate, endDate, selectedOutletId]);
 
   useEffect(() => {
+    setLoading(true);
     fetchSales();
   }, [fetchSales]);
 
@@ -185,6 +196,8 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
+  // --- Totals Calculation ---
+
   const totalCashSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'cash')
@@ -194,9 +207,20 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
+  // --- ★★★ SEPARATED UPI SALES ★★★ ---
   const totalUpiSales = useMemo(() => {
     return activeSales
-      .filter((sale) => sale.payment_method === 'card' || sale.payment_method === 'upi')
+      .filter((sale) => sale.payment_method === 'upi')
+      .reduce((sum, sale) => {
+        const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
+        return sum + (amount || 0);
+      }, 0);
+  }, [activeSales]);
+
+  // --- ★★★ SEPARATED CARD SALES ★★★ ---
+  const totalCardSales = useMemo(() => {
+    return activeSales
+      .filter((sale) => sale.payment_method === 'card')
       .reduce((sum, sale) => {
         const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
         return sum + (amount || 0);
@@ -299,13 +323,13 @@ export default function AdminSalesPage() {
       mobile: sale.mobile,
       outlet_id: sale.outlet_id,
       treatment: sale.treatment,
-      // Convert to Rupees for editing
       amount: (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
       payment_method: sale.payment_method,
       date: toInputDate(sale.date),
       therapist_name: sale.therapist_name || '',
       room: sale.room || '',
       session_hours: sale.session_hours || 0,
+      check_in_time: toInputTime(sale.check_in_time), 
     });
     setEditPassword('');
     setSaveError(null);
@@ -318,24 +342,31 @@ export default function AdminSalesPage() {
     setSaveError(null);
   };
 
+  const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setEditForm((prev: any) => ({ ...prev, [name]: value }));
+  };
+
   const handleSaveEdit = async (e: FormEvent) => {
     e.preventDefault();
     setSaveError(null);
 
-    if (editPassword !== 'admin123') { // Hardcoded password check
+    if (editPassword !== 'admin123') { 
       setSaveError('Incorrect Admin Password');
       return;
     }
 
     setIsSaving(true);
     try {
-      // Find outlet name from ID to keep DB consistent
       const outlet = OUTLETS.find(o => o.id === editForm.outlet_id);
       const outlet_name = outlet ? outlet.name : 'Unknown';
 
-      // Calculate amount (convert back to paise)
+      let fullCheckInTime = editingSale?.check_in_time;
+      if (editForm.check_in_time && editForm.date) {
+        fullCheckInTime = new Date(`${editForm.date}T${editForm.check_in_time}:00`).toISOString();
+      }
+
       const amountInPaise = Number(editForm.amount) * 100;
-      
       const updates: any = {
         name: editForm.name,
         mobile: editForm.mobile,
@@ -347,15 +378,14 @@ export default function AdminSalesPage() {
         therapist_name: editForm.therapist_name || null,
         room: editForm.room || null,
         session_hours: editForm.session_hours,
+        check_in_time: fullCheckInTime,
       };
 
-      // Update the correct amount field based on sale type
       if (editingSale?.took_package) {
         updates.package_amount = amountInPaise;
-        // Don't touch amount_paid, it stays 0 for packages
+        updates.amount_paid = 0; 
       } else {
         updates.amount_paid = amountInPaise;
-        // Don't touch package_amount
       }
 
       const { error } = await supabase
@@ -365,7 +395,6 @@ export default function AdminSalesPage() {
 
       if (error) throw error;
 
-      // Refresh data to update totals immediately
       await fetchSales();
       handleCloseEdit();
     } catch (err: any) {
@@ -430,7 +459,7 @@ export default function AdminSalesPage() {
 
         <div>
           <button
-            onClick={handleExport as any}
+            onClick={handleExport}
             disabled={loading || isExporting}
             className="w-full px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
           >
@@ -439,32 +468,40 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* Totals Cards */}
+      {/* --- ★★★ UPDATED: 5-Column Grid for Totals ★★★ --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
           
           <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6">
             <h3 className="text-gray-500 text-sm font-medium">Total Completed Sales</h3>
-            <p className="text-3xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
-            <p className="text-gray-500 text-sm">{activeSalesCount} completed session(s)</p>
+            <p className="text-2xl font-bold mt-2 text-green-600">{formatCurrency(totalSales)}</p>
+            <p className="text-gray-500 text-xs">{activeSalesCount} sessions</p>
           </div>
           
           <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6 pt-4 md:pt-0">
             <h3 className="text-gray-500 text-sm font-medium">Total Cash Sales</h3>
-            <p className="text-3xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
-            <p className="text-gray-500 text-sm">&nbsp;</p> 
+            <p className="text-2xl font-bold mt-2 text-blue-600">{formatCurrency(totalCashSales)}</p>
+            <p className="text-gray-500 text-xs">&nbsp;</p> 
           </div>
 
+          {/* UPI Separate */}
           <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6 pt-4 md:pt-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total UPI/Card Sales</h3>
-            <p className="text-3xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
-            <p className="text-gray-500 text-sm">&nbsp;</p>
+            <h3 className="text-gray-500 text-sm font-medium">Total UPI Sales</h3>
+            <p className="text-2xl font-bold mt-2 text-purple-600">{formatCurrency(totalUpiSales)}</p>
+            <p className="text-gray-500 text-xs">&nbsp;</p>
+          </div>
+
+          {/* Card Separate */}
+          <div className="border-b border-gray-200 md:border-b-0 md:border-r md:pr-6 pt-4 md:pt-0">
+            <h3 className="text-gray-500 text-sm font-medium">Total Card Sales</h3>
+            <p className="text-2xl font-bold mt-2 text-indigo-600">{formatCurrency(totalCardSales)}</p>
+            <p className="text-gray-500 text-xs">&nbsp;</p>
           </div>
 
           <div className="pt-4 md:pt-0">
-            <h3 className="text-gray-500 text-sm font-medium">Total Package Value Sold</h3>
-            <p className="text-3xl font-bold mt-2 text-gray-600">{formatCurrency(totalPackageSales)}</p>
-            <p className="text-gray-500 text-sm">&nbsp;</p>
+            <h3 className="text-gray-500 text-sm font-medium">Total Package Value</h3>
+            <p className="text-2xl font-bold mt-2 text-gray-600">{formatCurrency(totalPackageSales)}</p>
+            <p className="text-gray-500 text-xs">&nbsp;</p>
           </div>
         </div>
       </div>
@@ -481,8 +518,8 @@ export default function AdminSalesPage() {
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sale Date</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Session Time</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Room</th>
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
@@ -524,45 +561,26 @@ export default function AdminSalesPage() {
                     </td>
                     
                     <td className="px-3 py-2 text-xs text-gray-500">
-                      <div>
-                        <span className="font-medium">In: </span>
-                        {formatTime(sale.check_in_time)}
-                      </div>
+                      <div>In: {formatTime(sale.check_in_time)}</div>
                       {sale.check_out_time ? (
-                        <div>
-                          <span className="font-medium">Out: </span>
-                          {formatTime(sale.check_out_time)}
-                        </div>
+                        <div>Out: {formatTime(sale.check_out_time)}</div>
                       ) : (
                         (() => {
                           const expectedTime = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
-                          if (expectedTime) {
-                            return (
-                              <div className="text-gray-400">
-                                <span className="font-medium">Est. Out: </span>
-                                {formatTime(expectedTime.toISOString())}
-                              </div>
-                            );
-                          }
-                          return <div><span className="font-medium">Out: </span>—</div>;
+                          return expectedTime ? <div className="text-gray-400">Est: {formatTime(expectedTime.toISOString())}</div> : <div>Out: —</div>;
                         })()
                       )}
                     </td>
-
                     <td className="px-3 py-2 text-xs text-gray-500">{sale.therapist_name || '—'}</td>
-
                     <td className="px-3 py-2 text-xs text-gray-500">{sale.room || '—'}</td>
-
                     <td className="px-3 py-2">
-                      <div className="flex flex-row gap-2 items-center">
-                        {/* --- EDIT BUTTON --- */}
+                      <div className="flex gap-2">
                         <button
                           onClick={() => handleOpenEdit(sale)}
                           className="px-3 py-1 bg-blue-100 text-blue-700 text-xs rounded-lg hover:bg-blue-200"
                         >
                           Edit
                         </button>
-
                         {!sale.check_out_time && (
                           <button
                             onClick={() => handleCheckOut(sale.id)}
@@ -571,7 +589,6 @@ export default function AdminSalesPage() {
                             Check Out
                           </button>
                         )}
-                        
                         <button
                           onClick={() => handleDelete(sale.id)}
                           className="px-3 py-1 bg-red-700 text-white text-xs rounded-lg hover:bg-red-800"
@@ -588,7 +605,7 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* --- Edit Sale Modal --- */}
+      {/* --- Edit Modal --- */}
       {isEditModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <form onSubmit={handleSaveEdit} className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
@@ -599,39 +616,40 @@ export default function AdminSalesPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Name</label>
-                <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <input type="text" value={editForm.name} onChange={handleEditFormChange} name="name" className="w-full p-2 border rounded text-black" required />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Mobile</label>
-                <input type="text" value={editForm.mobile} onChange={e => setEditForm({...editForm, mobile: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <input type="text" value={editForm.mobile} onChange={handleEditFormChange} name="mobile" className="w-full p-2 border rounded text-black" required />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Outlet</label>
-                <select value={editForm.outlet_id} onChange={e => setEditForm({...editForm, outlet_id: e.target.value})} className="w-full p-2 border rounded bg-white text-black">
+                <select value={editForm.outlet_id} onChange={handleEditFormChange} name="outlet_id" className="w-full p-2 border rounded bg-white text-black">
                   {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Date</label>
-                <input type="date" value={editForm.date} onChange={e => setEditForm({...editForm, date: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <input type="date" value={editForm.date} onChange={handleEditFormChange} name="date" className="w-full p-2 border rounded text-black" required />
               </div>
             </div>
 
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase">Treatment / Service</label>
-              <input type="text" value={editForm.treatment} onChange={e => setEditForm({...editForm, treatment: e.target.value})} className="w-full p-2 border rounded text-black" required />
+              <input type="text" value={editForm.treatment} onChange={handleEditFormChange} name="treatment" className="w-full p-2 border rounded text-black" required />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Amount (₹)</label>
-                <input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <input type="number" value={editForm.amount} onChange={handleEditFormChange} name="amount" className="w-full p-2 border rounded text-black" required />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Payment Method</label>
-                <select value={editForm.payment_method} onChange={e => setEditForm({...editForm, payment_method: e.target.value})} className="w-full p-2 border rounded bg-white text-black">
+                <select value={editForm.payment_method} onChange={handleEditFormChange} name="payment_method" className="w-full p-2 border rounded bg-white text-black">
                   <option value="cash">Cash</option>
-                  <option value="card">UPI / Card</option>
+                  <option value="card">Card</option>
+                  <option value="upi">UPI</option>
                   <option value="package">Package Redemption</option>
                 </select>
               </div>
@@ -640,16 +658,29 @@ export default function AdminSalesPage() {
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Therapist</label>
-                <input type="text" value={editForm.therapist_name} onChange={e => setEditForm({...editForm, therapist_name: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <input type="text" value={editForm.therapist_name} onChange={handleEditFormChange} name="therapist_name" className="w-full p-2 border rounded text-black" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Room</label>
-                <input type="text" value={editForm.room} onChange={e => setEditForm({...editForm, room: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <input type="text" value={editForm.room} onChange={handleEditFormChange} name="room" className="w-full p-2 border rounded text-black" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase">Duration (Hrs)</label>
-                <input type="number" step="0.1" value={editForm.session_hours} onChange={e => setEditForm({...editForm, session_hours: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <input type="number" step="0.1" value={editForm.session_hours} onChange={handleEditFormChange} name="session_hours" className="w-full p-2 border rounded text-black" />
               </div>
+            </div>
+
+            {/* Check-in Time Edit */}
+             <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Check-In Time (HH:MM)</label>
+                <input 
+                  type="time" 
+                  value={editForm.check_in_time || ''} 
+                  onChange={handleEditFormChange}
+                  name="check_in_time"
+                  className="w-full p-2 border rounded text-black" 
+                />
+                <p className="text-[10px] text-gray-400 mt-1">Set this if estimated time is missing</p>
             </div>
 
             <div className="pt-4 border-t mt-4">
