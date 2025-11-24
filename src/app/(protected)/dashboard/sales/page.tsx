@@ -5,6 +5,9 @@ import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
 import { Loader2 } from 'lucide-react';
+// === FIX 1: Add Missing Hook Import ===
+import { useActivityLog } from '@/hooks/useActivityLog'; // Adjust path if necessary
+import LastAction from '@/components/LastAction'; // Assuming this component is in '@/components'
 
 type Sale = {
   id: string;
@@ -67,14 +70,6 @@ const toInputDate = (dateString: string | null): string => {
   }
 };
 
-const toInputTime = (dateString: string | null) => {
-  if (!dateString) return '';
-  try {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  } catch (e) { return ''; }
-};
-
 const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
   if (!checkIn || !hours || hours <= 0) {
     return null;
@@ -94,11 +89,11 @@ const formatDuration = (hours: number | null) => {
   return `${h}hr ${m}m`;
 };
 
-// --- ★★★ Updated Payment Formatting ★★★ ---
+// --- Updated Payment Formatting ---
 const formatPaymentMethod = (method: string | null) => {
   if (!method) return 'N/A';
-  if (method === 'card') return 'Card'; // Now separate
-  if (method === 'upi') return 'UPI';   // Now separate
+  if (method === 'card') return 'Card'; 
+  if (method === 'upi') return 'UPI';   
   if (method === 'cash') return 'Cash';
   if (method === 'package') return 'Package';
   return method.charAt(0).toUpperCase() + method.slice(1);
@@ -217,7 +212,7 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
-  // --- ★★★ SEPARATED UPI SALES ★★★ ---
+  // --- SEPARATED UPI SALES ---
   const totalUpiSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'upi')
@@ -227,7 +222,7 @@ export default function AdminSalesPage() {
       }, 0);
   }, [activeSales]);
 
-  // --- ★★★ SEPARATED CARD SALES ★★★ ---
+  // --- SEPARATED CARD SALES ---
   const totalCardSales = useMemo(() => {
     return activeSales
       .filter((sale) => sale.payment_method === 'card')
@@ -315,18 +310,21 @@ export default function AdminSalesPage() {
     await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
   };
 
+  // === FIX 2A: Updated handleDelete for Activity Log and UI Refresh ===
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to PERMANENTLY DELETE this sale? This action cannot be undone.')) return;
     try {
       const { error } = await supabase.from('customers').delete().eq('id', id);
       if (error) throw error;
+
+      logActivity('delete_sale', `Permanently deleted Sale ID: ${id}`);
+      await fetchSales(); // Refresh the sales list
     } catch (err: any) {
-      console.error('Update failed:', err);
-      setSaveError(err.message || 'Failed to update sale.');
-    } finally {
-      setIsSaving(false);
+      console.error('Delete failed:', err);
+      alert(err.message || 'Failed to delete sale.');
     }
   };
+  // ------------------------------------------------------------------
 
   // --- Edit Modal Logic ---
   const handleOpenEdit = (sale: Sale) => {
@@ -408,6 +406,7 @@ export default function AdminSalesPage() {
 
       if (error) throw error;
 
+      logActivity('edit_sale', `Edited Sale ID: ${editingSale?.id}`); // Log the edit
       await fetchSales();
       handleCloseEdit();
     } catch (err: any) {
@@ -482,7 +481,7 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* --- ★★★ UPDATED: 5-Column Grid for Totals ★★★ --- */}
+      {/* --- UPDATED: 5-Column Grid for Totals --- */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
           
@@ -603,12 +602,21 @@ export default function AdminSalesPage() {
                             Check Out
                           </button>
                         )}
+                        {/* === FIX 2B: Replace undefined handleOpenDelete with secure handleDelete === */}
                         <button
-                          onClick={() => handleOpenDelete(sale)}
+                          onClick={() => {
+                            const password = prompt("Enter Admin Password to delete:");
+                            if (password === 'admin123') {
+                                handleDelete(sale.id); 
+                            } else if (password !== null) {
+                                alert('Incorrect Admin Password');
+                            }
+                          }}
                           className="px-3 py-1 bg-red-700 text-white text-xs rounded-lg hover:bg-red-800"
                         >
                           Delete
                         </button>
+                        {/* -------------------------------------------------------------------------- */}
                       </div>
                     </td>
                   </tr>
