@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useUser } from '@/context/UserContext';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { Loader2, ShieldAlert, FileText, Search } from 'lucide-react';
+import { Loader2, ShieldAlert, FileText, Search, X } from 'lucide-react';
 
 type Log = {
   id: string;
@@ -32,15 +32,9 @@ const formatDate = (dateString: string) => {
   });
 };
 
-/**
- * Try to extract sale IDs from text. This regex is permissive:
- * - Matches "Sale ID: <id>", "sale id <id>", "ID: <id>", "SaleID <id>".
- * - ID is assumed to be alphanumeric plus dashes, length 6-80 (covers UUIDs and other ids).
- */
 const extractSaleIds = (text: string): string[] => {
   if (!text) return [];
   const ids = new Set<string>();
-  // common patterns
   const regex = /(?:sale[\s-_]*id|sale|id)\s*[:#-]?\s*([a-z0-9-]{6,80})/ig;
   let m;
   while ((m = regex.exec(text))) {
@@ -49,6 +43,75 @@ const extractSaleIds = (text: string): string[] => {
   return Array.from(ids);
 };
 
+/** Parse description for structured changes.
+ * Returns array of { field, before, after } or [] if nothing parsed.
+ */
+const parseChangesFromDescription = (desc: string): { field: string; before: string | null; after: string | null }[] => {
+  if (!desc) return [];
+
+  // 1) If desc is JSON with { before, after } or { changes: [...] } , try to parse it
+  try {
+    const parsed = JSON.parse(desc);
+    if (parsed && typeof parsed === 'object') {
+      // case: { before: {...}, after: {...} }
+      if (parsed.before && parsed.after && typeof parsed.before === 'object' && typeof parsed.after === 'object') {
+        const keys = Array.from(new Set([...Object.keys(parsed.before), ...Object.keys(parsed.after)]));
+        return keys.map((k) => ({
+          field: k,
+          before: parsed.before[k] !== undefined ? String(parsed.before[k]) : null,
+          after: parsed.after[k] !== undefined ? String(parsed.after[k]) : null
+        }));
+      }
+
+      // case: { changes: [{ field, before, after }, ...] }
+      if (Array.isArray((parsed as any).changes)) {
+        return (parsed as any).changes.map((c: any) => ({
+          field: String(c.field ?? c.key ?? 'unknown'),
+          before: c.before !== undefined ? String(c.before) : null,
+          after: c.after !== undefined ? String(c.after) : null
+        }));
+      }
+
+      // case: parsed is an array of changes
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((x: any) => x.field && ('before' in x || 'after' in x))) {
+        return parsed.map((c: any) => ({
+          field: String(c.field),
+          before: c.before !== undefined ? String(c.before) : null,
+          after: c.after !== undefined ? String(c.after) : null
+        }));
+      }
+    }
+  } catch (e) {
+    // not JSON
+  }
+
+  // 2) Attempt to extract verbal change patterns like:
+  // "changed name from 'John' to 'Jane'"
+  // "name: 'John' -> 'Jane'"
+  const results: { field: string; before: string | null; after: string | null }[] = [];
+
+  const verbalRegex = /changed\s+([a-zA-Z0-9_\s]+?)\s+from\s+['"]?([^'"]+?)['"]?\s+to\s+['"]?([^'"]+?)['"]?/ig;
+  let m;
+  while ((m = verbalRegex.exec(desc))) {
+    results.push({ field: (m[1] || '').trim(), before: m[2] || null, after: m[3] || null });
+  }
+
+  // pattern: field: 'old' -> 'new'  or field: "old" -> "new"
+  const arrowRegex = /([\w\s_]+?)\s*[:]\s*['"]([^'"]*?)['"]\s*[-=]>\s*['"]([^'"]*?)['"]/ig;
+  while ((m = arrowRegex.exec(desc))) {
+    results.push({ field: (m[1] || '').trim(), before: m[2] || null, after: m[3] || null });
+  }
+
+  // pattern: field changed from old to new (no quotes)
+  const simpleRegex = /([\w\s_]+?)\s+changed\s+from\s+([^\.;,]+?)\s+to\s+([^\.;,]+?)(?:[.,;]|$)/ig;
+  while ((m = simpleRegex.exec(desc))) {
+    results.push({ field: (m[1] || '').trim(), before: (m[2] || '').trim(), after: (m[3] || '').trim() });
+  }
+
+  return results;
+};
+
+
 export default function ActivityPage() {
   const { user, isLoading } = useUser();
   const [logs, setLogs] = useState<EnrichedLog[]>([]);
@@ -56,11 +119,13 @@ export default function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // helper: enrich array of logs with customer details if sale IDs are present
+  // modal state for viewing change details
+  const [selectedLog, setSelectedLog] = useState<EnrichedLog | null>(null);
+  const [parsedChanges, setParsedChanges] = useState<{ field: string; before: string | null; after: string | null }[] | null>(null);
+
   const enrichLogs = async (rawLogs: Log[]): Promise<EnrichedLog[]> => {
     if (!rawLogs || rawLogs.length === 0) return [];
 
-    // collect sale ids from all descriptions
     const saleIdSet = new Set<string>();
     rawLogs.forEach(l => {
       extractSaleIds(l.description).forEach(id => saleIdSet.add(id));
@@ -71,8 +136,6 @@ export default function ActivityPage() {
 
     if (saleIds.length > 0) {
       try {
-        // batch fetch customers with ids found in logs
-        // supabase .in requires array
         const { data: customers, error } = await supabase
           .from('customers')
           .select('id, name, mobile, outlet_name')
@@ -96,10 +159,8 @@ export default function ActivityPage() {
       }
     }
 
-    // attach found customer info to logs
     const enriched: EnrichedLog[] = rawLogs.map((l) => {
       const ids = extractSaleIds(l.description);
-      // prefer first matched ID if multiple
       const firstId = ids[0];
       const cust = firstId ? customersMap[firstId] : undefined;
       return {
@@ -145,7 +206,6 @@ export default function ActivityPage() {
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
-  // Realtime: when a new activity_log is inserted, refresh the list so enrichment runs.
   useEffect(() => {
     const channel = supabase
       .channel('activity-monitor')
@@ -153,7 +213,6 @@ export default function ActivityPage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'activity_logs' },
         () => {
-          // call fetchLogs which will enrich the new entry
           fetchLogs().catch((e) => console.warn('Failed to refresh logs after insert', e));
         }
       )
@@ -161,7 +220,6 @@ export default function ActivityPage() {
 
     return () => {
       try {
-        // supabase client versions differ in API — try both unsubscribe patterns
         if ((channel as any).unsubscribe) (channel as any).unsubscribe();
         else if ((supabase as any).removeChannel) (supabase as any).removeChannel(channel);
       } catch (e) {
@@ -201,6 +259,18 @@ export default function ActivityPage() {
     exportToExcel(data, `Activity_Log_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  // Open modal and parse changes
+  const openLogModal = (log: EnrichedLog) => {
+    setSelectedLog(log);
+    const parsed = parseChangesFromDescription(log.description);
+    setParsedChanges(parsed.length > 0 ? parsed : null);
+  };
+
+  const closeLogModal = () => {
+    setSelectedLog(null);
+    setParsedChanges(null);
+  };
+
   if (isLoading) return <div className="p-10 text-center">Checking permissions...</div>;
 
   if (user?.role !== 'developer') {
@@ -215,6 +285,7 @@ export default function ActivityPage() {
 
   return (
     <div className="space-y-6">
+      {/* header */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Activity Logs</h1>
@@ -242,6 +313,7 @@ export default function ActivityPage() {
         </div>
       </div>
 
+      {/* table */}
       <div className="bg-white shadow rounded-lg overflow-hidden border border-gray-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -262,7 +334,7 @@ export default function ActivityPage() {
                 <tr><td colSpan={5} className="p-6 text-center text-gray-500">No logs found.</td></tr>
               ) : (
                 filteredLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-gray-50">
+                  <tr key={log.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => openLogModal(log)}>
                     <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-500">{formatDate(log.created_at)}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">{log.username}</span>
@@ -271,7 +343,7 @@ export default function ActivityPage() {
 
                     <td className="px-6 py-4 text-sm text-gray-600">
                       <div className="font-medium">{log.clientName ?? '—'}</div>
-                      <div className="text-xs text-gray-500">{log.clientMobile ?? (log.outletName ? `Outlet: ${log.outletName}` : '—')}</div>
+                      <div className="text-xs text-gray-500">{log.clientMobile ?? '—'}</div>
                       {log.outletName && <div className="text-xs text-gray-400">Outlet: {log.outletName}</div>}
                     </td>
 
@@ -283,6 +355,60 @@ export default function ActivityPage() {
           </table>
         </div>
       </div>
+
+      {/* modal */}
+      {selectedLog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={closeLogModal} />
+          <div className="relative bg-white rounded-xl w-full max-w-2xl p-6 shadow-xl z-10">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">{selectedLog.action_type}</h2>
+                <div className="text-xs text-gray-500">{formatDate(selectedLog.created_at)} — {selectedLog.username}</div>
+                {selectedLog.clientName && <div className="mt-2 text-sm"><strong>Client:</strong> {selectedLog.clientName} ({selectedLog.clientMobile ?? '—'})</div>}
+                {selectedLog.outletName && <div className="text-sm text-gray-500">Outlet: {selectedLog.outletName}</div>}
+              </div>
+              <button onClick={closeLogModal} className="p-2 rounded hover:bg-gray-100">
+                <X className="h-5 w-5 text-gray-600" />
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {parsedChanges ? (
+                <div className="overflow-auto max-h-72 border rounded p-2">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-gray-500">
+                        <th className="py-1 text-left">Field</th>
+                        <th className="py-1 text-left">Before</th>
+                        <th className="py-1 text-left">After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedChanges.map((c, i) => (
+                        <tr key={i} className="even:bg-gray-50">
+                          <td className="py-2 align-top font-medium">{c.field}</td>
+                          <td className="py-2 align-top text-gray-600 whitespace-pre-wrap">{c.before ?? '—'}</td>
+                          <td className="py-2 align-top text-green-700 whitespace-pre-wrap">{c.after ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div>
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Raw Details</h3>
+                  <pre className="bg-gray-50 p-3 rounded text-sm text-gray-700 max-h-72 overflow-auto whitespace-pre-wrap">{selectedLog.description}</pre>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-4">
+              <button onClick={closeLogModal} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { User, Loader2 } from 'lucide-react';
+import { User } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 type PackageCustomer = {
@@ -16,7 +16,7 @@ type PackageCustomer = {
   used_hours: number;
   remaining_hours: number;
   start_date: string | null;
-  expiry_date: string | null; 
+  expiry_date: string | null;
   status: 'active' | 'expired' | string;
   outlet: string;
   created_at?: string | null;
@@ -41,18 +41,22 @@ export default function PackagesPage() {
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+
   const outlets = ['all', ...OUTLETS.map(o => o.name)];
   const [outletFilter, setOutletFilter] = useState('all');
 
   // Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false); // NEW
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState<PackageCustomer | null>(null);
-  
+
   // Form States
   const [editFormData, setEditFormData] = useState<any>({});
+  const [editPassword, setEditPassword] = useState('');
+  const [editRemark, setEditRemark] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteRemark, setDeleteRemark] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -106,7 +110,12 @@ export default function PackagesPage() {
     const channel = supabase.channel('packages-admin')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'packages' }, () => fetchPackages())
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      try {
+        if ((channel as any).unsubscribe) (channel as any).unsubscribe();
+        else if ((supabase as any).removeChannel) (supabase as any).removeChannel(channel);
+      } catch { /* ignore */ }
+    };
   }, [fetchPackages]);
 
   useEffect(() => {
@@ -155,50 +164,105 @@ export default function PackagesPage() {
   };
 
   const handleOpenEditModal = (pkg: PackageCustomer, e: React.MouseEvent) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     setSelectedPackage(pkg);
     setEditFormData({
+      name: pkg.name,
+      mobile: pkg.mobile,
       package_amount: pkg.package_amount / 100,
       total_hours: pkg.total_hours,
       used_hours: pkg.used_hours,
+      remaining_hours: pkg.remaining_hours,
+      start_date: toInputDate(pkg.start_date),
       expiry_date: toInputDate(pkg.expiry_date),
       status: pkg.status,
+      outlet: pkg.outlet,
     });
+    setEditPassword('');
+    setEditRemark('');
+    setSaveError(null);
     setIsEditModalOpen(true);
   };
 
-  const handleCloseEditModal = () => { setIsEditModalOpen(false); setSelectedPackage(null); setIsSaving(false); setErrorMsg(null); };
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedPackage(null);
+    setIsSaving(false);
+    setErrorMsg(null);
+    setSaveError(null);
+  };
 
   const handleEditSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedPackage) return;
     setIsSaving(true);
-    setErrorMsg(null);
-    
-    const total_hours = Number(editFormData.total_hours);
-    const used_hours = Number(editFormData.used_hours);
-    const remaining_hours = total_hours - used_hours;
-    
-    const payload = {
-      package_amount: Number(editFormData.package_amount) * 100,
-      total_hours: total_hours,
-      used_hours: used_hours,
-      remaining_hours: remaining_hours,
-      expiry_date: editFormData.expiry_date || null,
-      status: editFormData.status,
-    };
+    setSaveError(null);
+
+    // password + remark required
+    if (editPassword !== 'admin123') {
+      setSaveError('Incorrect Admin Password');
+      setIsSaving(false);
+      return;
+    }
+    if (!editRemark.trim()) {
+      setSaveError('Please explain what you edited');
+      setIsSaving(false);
+      return;
+    }
+
     try {
-      const { error } = await supabase.from('packages').update(payload).eq('id', selectedPackage.id);
+      // build before snapshot
+      const before = { ...selectedPackage };
+
+      // prepare numeric conversions
+      const total_hours = Number(editFormData.total_hours) || 0;
+      const used_hours = Number(editFormData.used_hours) || 0;
+      const remaining_hours = total_hours - used_hours;
+
+      const updates: any = {
+        name: editFormData.name,
+        mobile: editFormData.mobile,
+        package_amount: Math.round(Number(editFormData.package_amount || 0) * 100),
+        total_hours: total_hours,
+        used_hours: used_hours,
+        remaining_hours,
+        start_date: editFormData.start_date || null,
+        expiry_date: editFormData.expiry_date || null,
+        status: editFormData.status,
+        outlet: editFormData.outlet,
+      };
+
+      const { error } = await supabase.from('packages').update(updates).eq('id', selectedPackage.id);
+
       if (error) throw error;
-      
-      logActivity('edit_package', `Edited package for ${selectedPackage.name}`);
-      await fetchPackages(); 
+
+      // build after snapshot
+      const after = {
+        ...before,
+        ...updates,
+      };
+
+      // log structured JSON so ActivityPage can show changes
+      const description = JSON.stringify({
+        remark: editRemark,
+        before,
+        after
+      });
+
+      logActivity('edit_package', description);
+
+      await fetchPackages();
       handleCloseEditModal();
-    } catch (err: any) { setErrorMsg(err.message || 'Failed to update package.'); } finally { setIsSaving(false); }
+    } catch (err: any) {
+      console.error('Failed to update package', err);
+      setSaveError(err?.message ?? 'Failed to update package');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleOpenDeleteModal = (pkg: PackageCustomer, e: React.MouseEvent) => {
-    e.stopPropagation(); 
+    e.stopPropagation();
     setSelectedPackage(pkg);
     setDeletePassword('');
     setDeleteRemark('');
@@ -218,14 +282,13 @@ export default function PackagesPage() {
     try {
       const { error } = await supabase.from('packages').delete().eq('id', selectedPackage.id);
       if (error) throw error;
-      
+
       logActivity('delete_package', `Deleted package for ${selectedPackage.name}. Remark: ${deleteRemark}`);
       await fetchPackages();
       handleCloseDeleteModal();
     } catch (err: any) { setDeleteError(err.message || 'Failed to delete package.'); } finally { setIsDeleting(false); }
   };
 
-  // --- ROW CLICK HANDLER ---
   const handleRowClick = (pkg: PackageCustomer) => {
     setSelectedPackage(pkg);
     setIsDetailsModalOpen(true);
@@ -266,7 +329,7 @@ export default function PackagesPage() {
       </div>
 
       {/* Table */}
-      {loading ? <div className="bg-white shadow rounded-lg p-8 text-center">Loading...</div> : 
+      {loading ? <div className="bg-white shadow rounded-lg p-8 text-center">Loading...</div> :
        filteredPackages.length === 0 ? <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">No clients found.</div> : (
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
@@ -280,10 +343,10 @@ export default function PackagesPage() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredPackages.map((customer) => (
-                  <tr 
-                    key={customer.id} 
-                    className="hover:bg-gray-50 cursor-pointer" 
-                    onClick={() => handleRowClick(customer)} 
+                  <tr
+                    key={customer.id}
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => handleRowClick(customer)}
                   >
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{customer.name}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.mobile}</td>
@@ -291,7 +354,7 @@ export default function PackagesPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatCurrency(customer.package_amount)}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.total_hours} hrs</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.used_hours.toFixed(1)} hrs</td>
-                    
+
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                        <div className="w-24">
                          <div className="flex justify-between text-xs mb-1"><span className={customer.status === 'active' ? 'text-green-700' : 'text-red-700'}>{customer.remaining_hours.toFixed(1)} hrs</span></div>
@@ -320,15 +383,77 @@ export default function PackagesPage() {
       {/* Edit Modal */}
       {isEditModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleEditSubmit} className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4">
-            <h2 className="text-xl font-bold text-gray-800">Edit Package</h2>
+          <form onSubmit={handleEditSubmit} className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 space-y-4">
+            <h2 className="text-xl font-bold text-gray-800">Edit Package - {selectedPackage.name}</h2>
+
+            {saveError && <div className="p-2 bg-red-100 text-red-700 rounded">{saveError}</div>}
+
             <div className="grid grid-cols-2 gap-4">
-              <div><label className="text-xs uppercase font-bold text-gray-500">Amount</label><input type="number" value={editFormData.package_amount} onChange={(e) => setEditFormData({...editFormData, package_amount: e.target.value})} className="w-full p-2 border rounded text-black"/></div>
-              <div><label className="text-xs uppercase font-bold text-gray-500">Expires</label><input type="date" value={editFormData.expiry_date} onChange={(e) => setEditFormData({...editFormData, expiry_date: e.target.value})} className="w-full p-2 border rounded text-black"/></div>
-              <div><label className="text-xs uppercase font-bold text-gray-500">Total Hrs</label><input type="number" step="0.1" value={editFormData.total_hours} onChange={(e) => setEditFormData({...editFormData, total_hours: e.target.value})} className="w-full p-2 border rounded text-black"/></div>
-              <div><label className="text-xs uppercase font-bold text-gray-500">Used Hrs</label><input type="number" step="0.1" value={editFormData.used_hours} onChange={(e) => setEditFormData({...editFormData, used_hours: e.target.value})} className="w-full p-2 border rounded text-black"/></div>
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Client Name</label>
+                <input type="text" value={editFormData.name ?? ''} onChange={(e) => setEditFormData({...editFormData, name: e.target.value})} className="w-full p-2 border rounded text-black" required />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Mobile</label>
+                <input type="text" value={editFormData.mobile ?? ''} onChange={(e) => setEditFormData({...editFormData, mobile: e.target.value})} className="w-full p-2 border rounded text-black" required />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Outlet</label>
+                <select value={editFormData.outlet ?? OUTLETS[0]?.name ?? ''} onChange={(e) => setEditFormData({...editFormData, outlet: e.target.value})} className="w-full p-2 border rounded text-black">
+                  {OUTLETS.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Status</label>
+                <select value={editFormData.status ?? 'active'} onChange={(e) => setEditFormData({...editFormData, status: e.target.value})} className="w-full p-2 border rounded text-black">
+                  <option value="active">Active</option>
+                  <option value="expired">Expired</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Package Amount (₹)</label>
+                <input type="number" value={editFormData.package_amount ?? 0} onChange={(e) => setEditFormData({...editFormData, package_amount: e.target.value})} className="w-full p-2 border rounded text-black" required />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Start Date</label>
+                <input type="date" value={editFormData.start_date ?? ''} onChange={(e) => setEditFormData({...editFormData, start_date: e.target.value})} className="w-full p-2 border rounded text-black" />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Expiry Date</label>
+                <input type="date" value={editFormData.expiry_date ?? ''} onChange={(e) => setEditFormData({...editFormData, expiry_date: e.target.value})} className="w-full p-2 border rounded text-black" />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Total Hours</label>
+                <input type="number" step="0.1" value={editFormData.total_hours ?? 0} onChange={(e) => setEditFormData({...editFormData, total_hours: e.target.value})} className="w-full p-2 border rounded text-black" />
+              </div>
+
+              <div>
+                <label className="text-xs uppercase font-bold text-gray-500">Used Hours</label>
+                <input type="number" step="0.1" value={editFormData.used_hours ?? 0} onChange={(e) => setEditFormData({...editFormData, used_hours: e.target.value})} className="w-full p-2 border rounded text-black" />
+              </div>
             </div>
-            <div className="flex justify-end gap-2"><button type="button" onClick={handleCloseEditModal} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button><button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded">{isSaving ? 'Saving...' : 'Save'}</button></div>
+
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">Remark (Required)</label>
+              <textarea value={editRemark} onChange={(e) => setEditRemark(e.target.value)} className="w-full p-2 border rounded text-black" rows={3} required />
+            </div>
+
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">Admin Password</label>
+              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} className="w-full p-2 border rounded text-black" placeholder="Enter admin123" required />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={handleCloseEditModal} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
+              <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded">{isSaving ? 'Saving...' : 'Save Changes'}</button>
+            </div>
           </form>
         </div>
       )}
@@ -346,12 +471,12 @@ export default function PackagesPage() {
         </div>
       )}
 
-      {/* Details Modal (Re-integrated) */}
+      {/* Details Modal */}
       {isDetailsModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 relative">
             <button onClick={() => setIsDetailsModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">&times;</button>
-            
+
             <div className="flex items-center gap-4 mb-6">
                <div className={`p-3 rounded-full ${selectedPackage.status === 'active' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                  <User size={24} />
@@ -382,13 +507,13 @@ export default function PackagesPage() {
                    <span className="font-medium text-gray-900">{selectedPackage.used_hours.toFixed(1)} / {selectedPackage.total_hours} Hours</span>
                  </div>
                  <div className="w-full bg-gray-200 rounded-full h-3">
-                    <div 
-                      className="h-3 rounded-full bg-blue-600" 
+                    <div
+                      className="h-3 rounded-full bg-blue-600"
                       style={{ width: `${Math.min(100, (selectedPackage.used_hours / selectedPackage.total_hours) * 100)}%` }}
                     ></div>
                  </div>
                </div>
-               
+
                <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t">
                   <div>
                     <p className="text-gray-500">Package Value</p>

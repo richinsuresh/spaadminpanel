@@ -1,209 +1,292 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Search, Loader2, AlertCircle } from 'lucide-react';
+import { exportToExcel } from '@/lib/exportToExcel';
+import { Search, Loader2, FileText } from 'lucide-react';
 
-type PackageInfo = {
+type HistoryRow = {
   id: string;
-  name: string;
-  mobile: string;
-  total_hours: number;
-  used_hours: number;
-  start_date: string;
-  expiry_date: string;
-  status: 'active' | 'expired';
-  remaining_hours: number;
-};
-
-type Visit = {
-  date: string;
-  treatment: string;
-  therapist_name: string | null;
-  outlet_name: string;
+  date: string | null;
+  name: string | null;
+  mobile: string | null;
+  treatment: string | null;
+  session_hours: number | null;
+  amount_paid: number | null;
+  took_package: boolean | null;
+  package_amount: number | null;
   check_in_time: string | null;
+  check_out_time: string | null;
+  therapist_name: string | null;
+  outlet_name: string | null;
+  [k: string]: any;
 };
 
-type CustomerDetails = {
-  packageInfo: PackageInfo | null;
-  visitHistory: Visit[];
+const formatDateTime = (iso: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Invalid';
+  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
 };
 
-// Helper function to format date
-const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
+const formatDateOnly = (iso: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Invalid';
+  return d.toLocaleDateString('en-IN');
 };
 
-// Helper function to format time
-const formatTime = (timeString: string | null) => {
-  if (!timeString) return '—';
-  return new Date(timeString).toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+/**
+ * Format duration stored as decimal hours (e.g. 1.5 => "1 hr 30 min", 0.75 => "45 mins")
+ * Careful numeric handling (digit-by-digit reasoning):
+ * - Convert to Number
+ * - If < 1 hour: round(n*60) -> minutes
+ * - Else split integer hours and remainder minutes
+ */
+const formatDuration = (h: number | null | undefined): string => {
+  if (h === null || h === undefined) return '—';
+  const n = Number(h);
+  if (!Number.isFinite(n) || n === 0) return '—';
+
+  // compute minutes precisely
+  const totalMinutes = Math.round(n * 60); // e.g. 1.5 * 60 = 90
+  if (totalMinutes < 60) return `${totalMinutes} mins`;
+
+  const hours = Math.floor(totalMinutes / 60); // integer hours
+  const minutes = totalMinutes - hours * 60; // remaining minutes (digit-by-digit safe)
+  if (minutes === 0) return `${hours} hr${hours > 1 ? 's' : ''}`;
+  return `${hours} hr ${minutes} min`;
 };
 
-export default function SearchCustomersPage() {
-  const [mobile, setMobile] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [customerDetails, setCustomerDetails] = useState<CustomerDetails | null>(null);
+/** If check-in exists and session_hours provided, estimate checkout Date object or null */
+const getExpectedCheckoutTime = (checkInIso: string | null, hrs: number | null | undefined): Date | null => {
+  if (!checkInIso || !hrs) return null;
+  const dt = new Date(checkInIso);
+  if (Number.isNaN(dt.getTime())) return null;
+  const msToAdd = Math.round(hrs * 60 * 60 * 1000); // hours -> ms (digit-by-digit)
+  return new Date(dt.getTime() + msToAdd);
+};
 
-  const handleSearch = async () => {
-    if (mobile.length !== 10) {
-      setError('Please enter a valid 10-digit mobile number.');
-      setCustomerDetails(null);
+export default function ClientHistoryPage() {
+  const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [filtered, setFiltered] = useState<HistoryRow[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const fetchHistory = useCallback(async (filterMobile?: string | null) => {
+    setLoading(true);
+    try {
+      // select fields including session_hours
+      const selectFields = [
+        'id',
+        'date',
+        'name',
+        'mobile',
+        'treatment',
+        'session_hours',
+        'amount_paid',
+        'took_package',
+        'package_amount',
+        'check_in_time',
+        'check_out_time',
+        'therapist_name',
+        'outlet_name'
+      ].join(', ');
+
+      let query = supabase
+        .from('customers')
+        .select(selectFields)
+        .order('date', { ascending: false })
+        .limit(1000);
+
+      if (filterMobile) {
+        query = query.eq('mobile', filterMobile);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching client history', error);
+        setHistory([]);
+        setFiltered([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = Array.isArray(data) ? data.map((r: any) => ({
+        id: String(r.id),
+        date: r.date ?? null,
+        name: r.name ?? null,
+        mobile: r.mobile ?? null,
+        treatment: r.treatment ?? null,
+        session_hours: r.session_hours !== undefined && r.session_hours !== null ? Number(r.session_hours) : null,
+        amount_paid: r.amount_paid !== undefined && r.amount_paid !== null ? Number(r.amount_paid) : null,
+        took_package: !!r.took_package,
+        package_amount: r.package_amount !== undefined && r.package_amount !== null ? Number(r.package_amount) : null,
+        check_in_time: r.check_in_time ?? null,
+        check_out_time: r.check_out_time ?? null,
+        therapist_name: r.therapist_name ?? null,
+        outlet_name: r.outlet_name ?? null,
+        ...r
+      })) : [];
+
+      setHistory(rows);
+      setFiltered(rows);
+    } catch (e) {
+      console.error('fetchHistory failed', e);
+      setHistory([]);
+      setFiltered([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // initially fetch all history (or you may prefer to fetch by a particular mobile)
+    fetchHistory().catch((e) => console.warn(e));
+  }, [fetchHistory]);
+
+  // simple search across name / mobile / treatment
+  useEffect(() => {
+    if (!searchTerm) {
+      setFiltered(history);
       return;
     }
+    const lower = searchTerm.toLowerCase();
+    setFiltered(history.filter((r) =>
+      (r.name ?? '').toLowerCase().includes(lower) ||
+      (r.mobile ?? '').toLowerCase().includes(lower) ||
+      (r.treatment ?? '').toLowerCase().includes(lower) ||
+      (r.therapist_name ?? '').toLowerCase().includes(lower) ||
+      (r.outlet_name ?? '').toLowerCase().includes(lower)
+    ));
+  }, [searchTerm, history]);
 
-    setIsLoading(true);
-    setError(null);
-    setCustomerDetails(null);
-
+  const handleExport = async () => {
+    setIsExporting(true);
     try {
-      // 1. Check for a package
-      const { data: packageData, error: packageError } = await supabase
-        .from('packages')
-        .select('*')
-        .eq('mobile', mobile)
-        .single();
-
-      let packageInfo: PackageInfo | null = null;
-      if (packageData) {
-        const now = new Date();
-        const expiry = new Date(packageData.expiry_date);
-        const remaining_hours = (packageData.total_hours || 0) - (packageData.used_hours || 0);
-        const status = now > expiry || remaining_hours <= 0 ? 'expired' : 'active';
-        
-        packageInfo = { ...packageData, status, remaining_hours };
+      const data = filtered.map((r) => ({
+        Date: formatDateOnly(r.date),
+        'Check-in': formatDateTime(r.check_in_time),
+        'Check-out': formatDateTime(r.check_out_time),
+        Name: r.name ?? '-',
+        Mobile: r.mobile ?? '-',
+        Service: r.treatment ?? '-',
+        Duration: formatDuration(r.session_hours),
+        'Therapist': r.therapist_name ?? '-',
+        'Outlet': r.outlet_name ?? '-',
+        'Amount (INR)': r.took_package ? (r.package_amount ?? 0) / 100 : (r.amount_paid ?? 0) / 100,
+      }));
+      if (data.length === 0) {
+        alert('No history to export');
+        setIsExporting(false);
+        return;
       }
-
-      // 2. Fetch visit history
-      const { data: visitData, error: visitError } = await supabase
-        .from('customers')
-        .select('date, treatment, therapist_name, outlet_name, check_in_time')
-        .eq('mobile', mobile)
-        .order('date', { ascending: false })
-        .order('check_in_time', { ascending: false, nullsFirst: true });
-
-      if (visitError) throw visitError;
-      
-      if (!packageInfo && visitData.length === 0) {
-        setError('No records found for this mobile number.');
-      } else {
-        setCustomerDetails({
-          packageInfo,
-          visitHistory: visitData || [],
-        });
-      }
-
-    } catch (err: any) {
-      console.error('Search error:', err);
-      setError(`An error occurred: ${err.message}`);
+      exportToExcel(data, `Client_History_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) {
+      console.error('Export failed', e);
+      alert('Export failed — check console');
     } finally {
-      setIsLoading(false);
+      setIsExporting(false);
     }
   };
 
+  const rows = useMemo(() => filtered, [filtered]);
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-800">Search Customers</h1>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">Client History</h1>
+          <p className="text-sm text-gray-500">Recent visits and treatments</p>
+        </div>
 
-      {/* Search Bar */}
-      <div className="bg-white p-4 rounded-xl shadow-sm flex items-center gap-4">
-        <input
-          type="tel"
-          value={mobile}
-          onChange={(e) => setMobile(e.target.value.replace(/\D/g, ''))}
-          maxLength={10}
-          placeholder="Enter 10-digit mobile number..."
-          className="flex-grow px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-blue-500"
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-        />
-        <button
-          onClick={handleSearch}
-          disabled={isLoading}
-          className="px-5 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-        >
-          {isLoading ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
-          Search
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 text-gray-400 h-4 w-4" />
+            <input
+              type="text"
+              placeholder="Search by name, mobile or treatment..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 pr-3 py-2 border rounded-lg text-sm w-96 text-black"
+            />
+          </div>
+
+          <button
+            onClick={() => fetchHistory().catch((e) => console.warn(e))}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+          >
+            Refresh
+          </button>
+
+          <button
+            onClick={handleExport}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm flex items-center gap-2"
+            disabled={isExporting || loading || rows.length === 0}
+          >
+            {isExporting ? <Loader2 className="animate-spin h-4 w-4" /> : <FileText size={16} />} Export
+          </button>
+        </div>
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div className="bg-red-50 text-red-700 border border-red-200 p-4 rounded-lg flex items-center gap-3">
-          <AlertCircle size={20} />
-          <span className="font-medium">{error}</span>
-        </div>
-      )}
+      <div className="bg-white shadow rounded-lg overflow-hidden border border-gray-200">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Service</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Times</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
+                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Amount</th>
+              </tr>
+            </thead>
 
-      {/* Results */}
-      {customerDetails && (
-        <div className="space-y-6">
-          {/* Package Status Card */}
-          <div className="bg-white p-6 rounded-xl shadow-sm">
-            <h2 className="text-lg font-semibold text-gray-700 mb-4">Package Status</h2>
-            {customerDetails.packageInfo ? (
-              <div className={`p-4 rounded-lg border ${customerDetails.packageInfo.status === 'active' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                <div className="flex justify-between items-center">
-                  <span className="text-xl font-bold">
-                    {customerDetails.packageInfo.status === 'active' ? 'Active Package' : 'Expired/Used Package'}
-                  </span>
-                  <span className="text-lg font-semibold">
-                    {customerDetails.packageInfo.remaining_hours.toFixed(1)} hrs remaining
-                  </span>
-                </div>
-                <div className="mt-2 text-sm">
-                  <p>Client: <span className="font-medium">{customerDetails.packageInfo.name}</span></p>
-                  <p>Total: <span className="font-medium">{customerDetails.packageInfo.total_hours} hrs</span> | Used: <span className="font-medium">{customerDetails.packageInfo.used_hours.toFixed(1)} hrs</span></p>
-                  <p>Expires on: <span className="font-medium">{formatDate(customerDetails.packageInfo.expiry_date)}</span></p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-gray-500">No package found for this customer.</p>
-            )}
-          </div>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {loading ? (
+                <tr><td colSpan={7} className="p-6 text-center text-gray-500">Loading…</td></tr>
+              ) : rows.length === 0 ? (
+                <tr><td colSpan={7} className="p-6 text-center text-gray-500">No history found.</td></tr>
+              ) : (
+                rows.map((r) => {
+                  const expected = getExpectedCheckoutTime(r.check_in_time, r.session_hours);
+                  const displayAmount = r.took_package ? (r.package_amount ?? 0) / 100 : (r.amount_paid ?? 0) / 100;
+                  return (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{formatDateOnly(r.date)}</td>
 
-          {/* Visit History Table */}
-          <div className="bg-white shadow rounded-lg overflow-hidden">
-            <h2 className="text-lg font-semibold text-gray-700 p-6">Visit History</h2>
-            {customerDetails.visitHistory.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Visit</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Treatment</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Therapist</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
+                      <td className="px-4 py-3 text-sm text-gray-900 max-w-xs">
+                        <div className="font-medium">{r.treatment ?? '—'}</div>
+                        <div className="text-xs text-gray-500">{r.name ?? '—'} • {r.mobile ?? '—'}</div>
+                      </td>
+
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{formatDuration(r.session_hours)}</td>
+
+                      <td className="px-4 py-3 text-sm text-gray-700">
+                        <div>In: {r.check_in_time ? new Date(r.check_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}</div>
+                        <div>Out: {r.check_out_time ? new Date(r.check_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}</div>
+                        {!r.check_out_time && (
+                          <div className="text-xs text-gray-400">Est: {expected ? expected.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}</div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{r.therapist_name ?? '—'}</td>
+
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{r.outlet_name ?? '—'}</td>
+
+                      <td className="px-4 py-3 text-sm text-gray-900 whitespace-nowrap font-medium">₹{(displayAmount).toLocaleString()}</td>
                     </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {customerDetails.visitHistory.map((visit, index) => (
-                      <tr key={index}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{formatDate(visit.date)}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{formatTime(visit.check_in_time)}</td>
-                        <td className="px-6 py-4 text-sm text-gray-700 max-w-xs">{visit.treatment}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{visit.therapist_name || 'N/A'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{visit.outlet_name}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-gray-500 px-6 pb-6">No visit history found.</p>
-            )}
-          </div>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
     </div>
   );
 }

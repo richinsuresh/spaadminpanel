@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
@@ -38,7 +38,9 @@ export default function ClientCheckinForm() {
     totalPackageHours: 0,
     packageValidity: '3 months',
     sold_by: '',
-    therapistName: '', 
+    therapistPrimary: '',         // primary therapist
+    therapistSecondary: '',       // secondary therapist (hidden by default)
+    showSecondaryTherapist: false, // NEW: whether to reveal secondary dropdown
     room: '',          
   });
 
@@ -105,23 +107,17 @@ export default function ClientCheckinForm() {
 
   }, [outletId, fetchTreatments, fetchStaff]);
 
-  // --- ★★★ NEW: Auto-Refresh Logic (Realtime Listeners) ★★★ ---
+  // --- Realtime listeners to keep staff/treatments fresh ---
   useEffect(() => {
     const channel = supabase
       .channel('client-form-realtime')
-      // Listen for changes in Employees (new hires, name changes, check-in status updates)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
-        console.log('Employee change detected, refreshing...');
         fetchStaff();
       })
-      // Listen for changes in Attendance (this also affects check-in status)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
-        console.log('Attendance change detected, refreshing...');
         fetchStaff();
       })
-      // Listen for changes in Treatments (new services added)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'treatments' }, () => {
-        console.log('Treatment change detected, refreshing...');
         fetchTreatments();
       })
       .subscribe();
@@ -200,6 +196,11 @@ export default function ClientCheckinForm() {
       }
       const updated = { ...prev, [name]: updatedValue };
 
+      // if user toggles off showSecondaryTherapist, clear secondary therapist selection
+      if (name === 'showSecondaryTherapist' && updatedValue === false) {
+        (updated as any).therapistSecondary = '';
+      }
+
       if (name === 'tookPackage' && checked) {
         updated.amountPaid = 0;
       }
@@ -238,8 +239,8 @@ export default function ClientCheckinForm() {
     const totalPackageHours = Number(formData.totalPackageHours) || 0;
 
     // --- Validation ---
-    if ((sessionHours > 0) && !formData.therapistName.trim()) {
-       setError('Please select a Therapist.');
+    if ((sessionHours > 0) && !String(formData.therapistPrimary || '').trim()) {
+       setError('Please select a Therapist (Primary).');
        setLoading(false);
        return;
     }
@@ -290,8 +291,14 @@ export default function ClientCheckinForm() {
     try {
       let checkInTime: string | null = new Date().toISOString();
 
+      // Build therapist info:
+      const therapistPrimary = String(formData.therapistPrimary || '').trim() || null;
+      const therapistSecondary = formData.showSecondaryTherapist ? (String(formData.therapistSecondary || '').trim() || null) : null;
+      // legacy-compatible combined string
+      const therapistCombined = therapistPrimary && therapistSecondary ? `${therapistPrimary} & ${therapistSecondary}` : therapistPrimary || therapistSecondary || null;
+
       const payload = {
-          name: formData.name.trim(),
+          name: String(formData.name || '').trim(),
           mobile: mobile,
           date: new Date().toISOString().split('T')[0],
           treatment: treatmentName,
@@ -312,7 +319,11 @@ export default function ClientCheckinForm() {
           finalAmountInPaise: finalAmountInPaise, 
           check_in_time: checkInTime,
 
-          therapist_name: formData.therapistName || null,
+          // therapists: keep both discrete fields and combined legacy field
+          therapist_name: therapistCombined,
+          therapist_primary: therapistPrimary,
+          therapist_secondary: therapistSecondary,
+
           room: formData.room || null,
       };
 
@@ -423,40 +434,75 @@ export default function ClientCheckinForm() {
             </select>
           </div>
 
-          {/* --- Therapist & Room Inputs --- */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Therapist Name</label>
-              {/* --- Dropdown Logic --- */}
-              <select
-                name="therapistName"
-                value={formData.therapistName}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                disabled={loading}
-              >
-                <option value="">-- Select Therapist --</option>
-                {employees.map((emp) => (
-                  <option key={emp.id} value={emp.name}>
-                     {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
-                  </option>
-                ))}
-              </select>
+          {/* --- Therapist Inputs: Primary + optional Secondary reveal checkbox --- */}
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Therapist (Primary) *</label>
+                <select
+                  name="therapistPrimary"
+                  value={formData.therapistPrimary}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  disabled={loading}
+                  required={true}
+                >
+                  <option value="">-- Select Therapist 1 --</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.name}>
+                       {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Room Number</label>
+                <input
+                  name="room"
+                  type="text"
+                  value={formData.room}
+                  onChange={handleChange}
+                  placeholder="Room No."
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  disabled={loading}
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Room Number</label>
+
+            <label className="inline-flex items-center gap-2">
               <input
-                name="room"
-                type="text"
-                value={formData.room}
+                type="checkbox"
+                name="showSecondaryTherapist"
+                checked={formData.showSecondaryTherapist}
                 onChange={handleChange}
-                placeholder="Room No."
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                 disabled={loading}
               />
-            </div>
+              <span className="text-sm text-gray-300">Add second therapist</span>
+            </label>
+
+            {formData.showSecondaryTherapist && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Therapist (Secondary) <span className="text-xs text-gray-400">(optional)</span></label>
+                <select
+                  name="therapistSecondary"
+                  value={formData.therapistSecondary}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  disabled={loading}
+                >
+                  <option value="">-- Select Therapist 2 (optional) --</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.name}>
+                       {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
-          {/* --- End New Inputs --- */}
+          {/* --- End Therapist Inputs --- */}
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
