@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
@@ -38,14 +38,50 @@ export default function ClientCheckinForm() {
     totalPackageHours: 0,
     packageValidity: '3 months',
     sold_by: '',
-    therapistName: '', // <-- NEW
-    room: '',          // <-- NEW
+    therapistName: '', 
+    room: '',          
   });
+
+  // --- State for employees list ---
+  const [employees, setEmployees] = useState<{id: string, name: string, is_checked_in?: boolean}[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
+  // --- Data Fetching Functions (Memoized for reuse) ---
+  const fetchTreatments = useCallback(async () => {
+    try {
+      const { data, error: dbError } = await supabase
+        .from('treatments')
+        .select('id, name')
+        .eq('outlet_id', outletId);
+      if (dbError) throw dbError;
+      setTreatments(data || []);
+    } catch (err) {
+      console.error('Error fetching treatments:', err);
+    }
+  }, [outletId]);
+
+  const fetchStaff = useCallback(async () => {
+     const { data } = await supabase
+      .from('employees')
+      .select('id, name, is_checked_in') 
+      .eq('is_active', true);
+    
+    if (!data) return;
+
+    // Sort: Checked-in employees first, then alphabetical
+    const sortedEmployees = data.sort((a, b) => {
+      if (a.is_checked_in && !b.is_checked_in) return -1;
+      if (!a.is_checked_in && b.is_checked_in) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    setEmployees(sortedEmployees);
+  }, []);
+
+  // --- Initial Load & Outlet Validation ---
   useEffect(() => {
     if (!outletId) {
       setError('Outlet ID missing in URL.');
@@ -61,24 +97,40 @@ export default function ClientCheckinForm() {
       return;
     }
     setOutlet(outletInfo); 
-    const fetchTreatments = async () => {
-      try {
-        const { data, error: dbError } = await supabase
-          .from('treatments')
-          .select('id, name')
-          .eq('outlet_id', outletId);
-        if (dbError) throw dbError;
-        setTreatments(data || []);
-      } catch (err) {
-        console.error('Error fetching treatments:', err);
-        setError('Could not load treatments. Please try refreshing.');
-        setTreatments([]);
-      } finally {
-        setLoading(false);
-      }
+    
+    // Initial data fetch
+    Promise.all([fetchTreatments(), fetchStaff()]).then(() => {
+      setLoading(false);
+    });
+
+  }, [outletId, fetchTreatments, fetchStaff]);
+
+  // --- ★★★ NEW: Auto-Refresh Logic (Realtime Listeners) ★★★ ---
+  useEffect(() => {
+    const channel = supabase
+      .channel('client-form-realtime')
+      // Listen for changes in Employees (new hires, name changes, check-in status updates)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
+        console.log('Employee change detected, refreshing...');
+        fetchStaff();
+      })
+      // Listen for changes in Attendance (this also affects check-in status)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
+        console.log('Attendance change detected, refreshing...');
+        fetchStaff();
+      })
+      // Listen for changes in Treatments (new services added)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'treatments' }, () => {
+        console.log('Treatment change detected, refreshing...');
+        fetchTreatments();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
     };
-    fetchTreatments();
-  }, [outletId]);
+  }, [fetchStaff, fetchTreatments]);
+
 
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
@@ -185,9 +237,9 @@ export default function ClientCheckinForm() {
     const sessionHours = getSessionDuration();
     const totalPackageHours = Number(formData.totalPackageHours) || 0;
 
-    // --- Updated Validation ---
+    // --- Validation ---
     if ((sessionHours > 0) && !formData.therapistName.trim()) {
-       setError('Please enter the Therapist Name.');
+       setError('Please select a Therapist.');
        setLoading(false);
        return;
     }
@@ -199,7 +251,7 @@ export default function ClientCheckinForm() {
         return;
       }
       if (!formData.sold_by.trim()) {
-        setError('Please enter the name of the staff who sold the package.');
+        setError('Please select the staff member who sold the package.');
         setLoading(false);
         return;
       }
@@ -260,7 +312,6 @@ export default function ClientCheckinForm() {
           finalAmountInPaise: finalAmountInPaise, 
           check_in_time: checkInTime,
 
-          // --- SEND NEW FIELDS ---
           therapist_name: formData.therapistName || null,
           room: formData.room || null,
       };
@@ -372,19 +423,25 @@ export default function ClientCheckinForm() {
             </select>
           </div>
 
-          {/* --- NEW: Therapist & Room Inputs --- */}
+          {/* --- Therapist & Room Inputs --- */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">Therapist Name</label>
-              <input
+              {/* --- Dropdown Logic --- */}
+              <select
                 name="therapistName"
-                type="text"
                 value={formData.therapistName}
                 onChange={handleChange}
-                placeholder="Therapist"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                 disabled={loading}
-              />
+              >
+                <option value="">-- Select Therapist --</option>
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.name}>
+                     {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">Room Number</label>
@@ -491,17 +548,23 @@ export default function ClientCheckinForm() {
                     <option value="9 months">9 Months</option>
                   </select>
                 </div>
+                {/* --- Sold By Dropdown (All Staff) --- */}
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Sold By (Staff Name) *</label>
-                  <input
-                    name="sold_by" 
-                    type="text"
+                  <select
+                    name="sold_by"
                     value={formData.sold_by}
                     onChange={handleChange}
                     required={formData.tookPackage}
-                    placeholder="Enter your name"
                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                  />
+                  >
+                     <option value="">-- Select Staff --</option>
+                     {employees.map(emp => (
+                        <option key={emp.id} value={emp.name}>
+                           {emp.name}
+                        </option>
+                     ))}
+                  </select>
                 </div>
               </div>
             )}
@@ -530,7 +593,6 @@ export default function ClientCheckinForm() {
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
               <select
-                id="paymentMethod"
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}
@@ -547,7 +609,6 @@ export default function ClientCheckinForm() {
             <div>
               <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
               <select
-                id="paymentMethod"
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}

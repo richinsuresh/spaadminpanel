@@ -67,6 +67,14 @@ const toInputDate = (dateString: string | null): string => {
   }
 };
 
+const toInputTime = (dateString: string | null) => {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
+};
+
 const getExpectedCheckoutTime = (checkIn: string | null, hours: number | null): Date | null => {
   if (!checkIn || !hours || hours <= 0) {
     return null;
@@ -119,6 +127,8 @@ const formatService = (sale: Sale) => {
 const getToday = () => new Date().toISOString().split('T')[0];
 
 export default function AdminSalesPage() {
+  const { logActivity } = useActivityLog();
+
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
@@ -291,6 +301,7 @@ export default function AdminSalesPage() {
       const fileName = `Sales_${outletName}_${startDate}_to_${endDate}.xlsx`;
 
       exportToExcel(dataToExport, fileName);
+      logActivity('export_sales', 'Downloaded Sales Excel Report');
     } catch (err: any) {
       console.error('Error exporting data:', err);
       alert(`Error exporting: ${err.message}`);
@@ -310,8 +321,10 @@ export default function AdminSalesPage() {
       const { error } = await supabase.from('customers').delete().eq('id', id);
       if (error) throw error;
     } catch (err: any) {
-      console.error('Error deleting sale:', err);
-      alert(`Error deleting sale: ${err.message}`);
+      console.error('Update failed:', err);
+      setSaveError(err.message || 'Failed to update sale.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -457,7 +470,7 @@ export default function AdminSalesPage() {
           />
         </div>
 
-        <div>
+        <div className="flex flex-col gap-1">
           <button
             onClick={handleExport}
             disabled={loading || isExporting}
@@ -465,6 +478,7 @@ export default function AdminSalesPage() {
           >
             {isExporting ? 'Exporting...' : 'Export to Excel'}
           </button>
+          <LastAction actionType="export_sales" />
         </div>
       </div>
 
@@ -590,7 +604,7 @@ export default function AdminSalesPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => handleDelete(sale.id)}
+                          onClick={() => handleOpenDelete(sale)}
                           className="px-3 py-1 bg-red-700 text-white text-xs rounded-lg hover:bg-red-800"
                         >
                           Delete

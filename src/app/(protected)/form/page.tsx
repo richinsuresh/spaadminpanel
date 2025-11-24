@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
@@ -17,6 +17,8 @@ type ClientInfo = {
   expiryDate: string;
 };
 
+type Employee = { id: string; name: string; role: string; };
+
 const outletsList = OUTLETS.map((o: any) => o.name);
 
 export default function ClientForm() {
@@ -25,6 +27,9 @@ export default function ClientForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   
+  // --- State for employees list ---
+  const [employees, setEmployees] = useState<Employee[]>([]);
+
   const [formData, setFormData] = useState({
     name: '',
     date: new Date().toISOString().split('T')[0],
@@ -40,8 +45,8 @@ export default function ClientForm() {
     paymentMethod: 'cash',
     sold_by: '',
     packageValidity: '3 months', 
-    therapistName: '', // Updated: Available for all
-    room: '',          // NEW: Added room
+    therapistName: '', 
+    room: '',
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,11 +58,33 @@ export default function ClientForm() {
     if (outletsList.length > 0) {
       setFormData(prev => ({ ...prev, outlet: outletsList[0] }));
     }
-    
     return () => {
       if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     };
   }, []);
+
+  // --- Fetch ALL active employees with Role ---
+  useEffect(() => {
+    const fetchStaff = async () => {
+      const { data } = await supabase
+        .from('employees')
+        .select('id, name, role')
+        .eq('is_active', true)
+        .order('name');
+      
+      setEmployees(data || []);
+    };
+    fetchStaff();
+  }, []);
+
+  // --- Filter Lists ---
+  // Therapists only for the "Therapist" dropdown
+  const therapistOptions = useMemo(() => 
+    employees.filter(e => e.role === 'therapist'), 
+  [employees]);
+
+  // All staff for the "Sold By" dropdown
+  const allStaffOptions = employees;
 
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
@@ -138,10 +165,9 @@ export default function ClientForm() {
       return;
     }
     
-    // --- Updated: Validate Therapist Name if a session is happening ---
-    // If sessionHours > 0, we generally expect a therapist
+    // Validate Therapist Name if a session is happening
     if ((sessionHours > 0 || formData.isPackageCustomer) && !formData.therapistName.trim()) {
-      setInputError("Please enter the Therapist Name.");
+      setInputError("Please select a Therapist.");
       setIsSubmitting(false);
       return;
     }
@@ -177,7 +203,7 @@ export default function ClientForm() {
 
     try {
       let checkInTime: string | null = null;
-      if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.isPackageCustomer) {
+      if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.isPackageCustomer) {
         checkInTime = new Date().toISOString();
       }
       
@@ -199,7 +225,6 @@ export default function ClientForm() {
         check_in_time: checkInTime,
         packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
-        // --- NEW: Sending Therapist and Room ---
         therapist_name: formData.therapistName, 
         room: formData.room, 
       };
@@ -252,6 +277,7 @@ export default function ClientForm() {
   };
   
   const showAmountField = !formData.tookPackage && !formData.isPackageCustomer;
+  const showPaymentSelector = formData.tookPackage || showAmountField;
 
   return (
     <div className="max-w-3xl mx-auto p-6 bg-white rounded-xl shadow-md mt-8 relative">
@@ -349,17 +375,20 @@ export default function ClientForm() {
             />
           </div>
 
-          {/* --- NEW: Therapist Name & Room Inputs --- */}
+          {/* --- Therapist Dropdown (Filtered for Therapists only) --- */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name</label>
-            <input
+            <select
               name="therapistName"
-              type="text"
               value={formData.therapistName}
               onChange={handleChange}
-              placeholder="Enter therapist's name"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-            />
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
+            >
+              <option value="">-- Select Therapist --</option>
+              {therapistOptions.map((emp) => (
+                <option key={emp.id} value={emp.name}>{emp.name}</option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -392,34 +421,18 @@ export default function ClientForm() {
             </div>
           )}
 
-          {!formData.tookPackage && (
+          {showPaymentSelector && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Payment Option</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method *</label>
               <select
                 name="paymentMethod"
                 value={formData.paymentMethod}
                 onChange={handleChange}
+                required
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
               >
-                <option value="cash">Pay with Cash</option>
-                <option value="card">Pay with Card</option>
-                <option value="upi">Pay with UPI</option>
-              </select>
-            </div>
-          )}
-          {/* Also show for new packages */}
-          {formData.tookPackage && (
-             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Payment Option</label>
-              <select
-                name="paymentMethod"
-                value={formData.paymentMethod}
-                onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
-              >
-                <option value="cash">Pay with Cash</option>
-                <option value="card">Pay with Card</option>
-                <option value="upi">Pay with UPI</option>
+                <option value="cash">Cash</option>
+                <option value="card">UPI / Card</option>
               </select>
             </div>
           )}
@@ -524,17 +537,21 @@ export default function ClientForm() {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              {/* --- Sold By Dropdown (All Staff) --- */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sold By (Staff Name) *</label>
-                <input
+                <select
                   name="sold_by"
-                  type="text"
                   value={formData.sold_by}
                   onChange={handleChange}
                   required={formData.tookPackage}
-                  placeholder="Enter your name"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black"
-                />
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
+                >
+                    <option value="">-- Select Staff --</option>
+                    {allStaffOptions.map(emp => (
+                    <option key={emp.id} value={emp.name}>{emp.name} ({emp.role})</option>
+                    ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Package Validity *</label>

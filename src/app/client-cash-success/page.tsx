@@ -1,38 +1,74 @@
 'use client';
 
-import Link from 'next/link';
+import { useEffect, useState, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { CheckCircle, ArrowLeft, Loader2 } from 'lucide-react';
+import { OUTLETS } from '@/lib/outlet';
 
-export default function ClientCashSuccess() {
+// --- 1. The Content Component (Uses search params) ---
+function SuccessContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const outletId = searchParams.get('outletId');
+  
+  const [outletName, setOutletName] = useState('Home');
+
+  useEffect(() => {
+    if (outletId) {
+      const found = OUTLETS.find(o => o.id === outletId);
+      if (found) setOutletName(found.name);
+    }
+  }, [outletId]);
+
+  const handleGoBack = () => {
+    if (outletId) {
+      router.push(`/client-form/${outletId}`);
+    } else {
+      router.push('/');
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
-        {/* Checkmark Icon */}
-        <svg className="w-16 h-16 text-green-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-        </svg>
+    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 text-center">
+      <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full border border-gray-700">
         
-        <h1 className="text-2xl font-bold text-black mb-3">
-          Registration Successful!
-        </h1>
+        <div className="flex justify-center mb-6">
+          <CheckCircle className="w-20 h-20 text-green-500 animate-bounce" />
+        </div>
         
-        <p className="text-black mb-6">
-          Send the screenshot of confirming the amount has received in the bank account to the backend.
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">Success!</h1>
+        <p className="text-gray-600 mb-8">
+          The sale has been recorded successfully.
         </p>
-        
-        {/* --- THIS IS THE FIX --- */}
-        {/* 1. Removed the `legacyBehavior` prop.
-          2. Moved the `className` from the <a> tag to the <Link> tag.
-          3. Removed the inner <a> tag completely.
-        */}
-        <Link 
-          href="/" 
-          className="inline-block bg-gradient-to-r from-purple-600 to-blue-500 hover:from-purple-700 hover:to-blue-600 text-white font-medium py-2 px-6 rounded-lg transition duration-300"
-        >
-          Back to Home
-        </Link>
-        {/* --- END OF FIX --- */}
 
+        <div className="space-y-3">
+          <button
+            onClick={handleGoBack}
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-blue-500/30"
+          >
+            <ArrowLeft size={20} />
+            Back to {outletName}
+          </button>
+        </div>
       </div>
+      
+      <p className="text-gray-500 text-xs mt-8">
+        Redirecting in 5 seconds...
+      </p>
     </div>
+  );
+}
+
+// --- 2. The Page Component (Wraps content in Suspense) ---
+export default function ClientCashSuccessPage() {
+  return (
+    // Suspense is required when using useSearchParams in a client component during build
+    <Suspense fallback={
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
+      </div>
+    }>
+      <SuccessContent />
+    </Suspense>
   );
 }
