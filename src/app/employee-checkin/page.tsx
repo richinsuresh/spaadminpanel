@@ -19,20 +19,22 @@ export default function EmployeeCheckInPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedEmpId, setSelectedEmpId] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-  const [manualTime, setManualTime] = useState('');
-  
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    
+
     const fetchStaff = async () => {
-      const { data } = await supabase
-        .from('employees')
-        .select('id, name, outlet_id, is_checked_in, current_attendance_id')
-        .eq('is_active', true)
-        .order('name');
-      setEmployees(data || []);
+      try {
+        const { data } = await supabase
+          .from('employees')
+          .select('id, name, outlet_id, is_checked_in, current_attendance_id')
+          .eq('is_active', true)
+          .order('name');
+        setEmployees(data || []);
+      } catch (e) {
+        console.error('Failed to fetch employees', e);
+      }
     };
     fetchStaff();
 
@@ -41,19 +43,21 @@ export default function EmployeeCheckInPage() {
 
   const selectedEmployee = employees.find(e => e.id === selectedEmpId);
 
-  const getISOFromTime = (timeStr: string) => {
-    if (!timeStr) return new Date().toISOString();
-    const today = new Date().toISOString().split('T')[0];
-    return new Date(`${today}T${timeStr}:00`).toISOString();
-  };
-
   const handleCheckIn = async () => {
-    if (!selectedEmployee || !selectedOutlet || !manualTime) return;
+    if (!selectedEmployee) {
+      setStatusMsg({ type: 'error', text: 'Please select your name.' });
+      return;
+    }
+    if (!selectedOutlet) {
+      setStatusMsg({ type: 'error', text: 'Please select your outlet.' });
+      return;
+    }
+
     setLoading(true);
     setStatusMsg(null);
 
     const outletObj = OUTLETS.find(o => o.id === selectedOutlet);
-    const checkInTime = getISOFromTime(manualTime);
+    const checkInTime = new Date().toISOString();
 
     try {
       const { data: attData, error: attError } = await supabase
@@ -78,28 +82,34 @@ export default function EmployeeCheckInPage() {
 
       if (empError) throw empError;
 
-      setStatusMsg({ type: 'success', text: `✅ Welcome, ${selectedEmployee.name}! Logged in at ${outletObj?.name}.` });
-      
-      setEmployees(prev => prev.map(e => 
-        e.id === selectedEmployee.id 
-          ? { ...e, is_checked_in: true, current_attendance_id: attData.id } 
+      setStatusMsg({ type: 'success', text: `✅ Welcome, ${selectedEmployee.name}! Logged in at ${outletObj?.name} — ${new Date(checkInTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}.` });
+
+      setEmployees(prev => prev.map(e =>
+        e.id === selectedEmployee.id
+          ? { ...e, is_checked_in: true, current_attendance_id: attData.id }
           : e
       ));
-      setManualTime(''); 
-
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message });
+      setStatusMsg({ type: 'error', text: err?.message || 'Check-in failed' });
     } finally {
       setLoading(false);
     }
   };
 
   const handleCheckOut = async () => {
-    if (!selectedEmployee || !selectedEmployee.current_attendance_id || !manualTime) return;
+    if (!selectedEmployee) {
+      setStatusMsg({ type: 'error', text: 'Please select your name.' });
+      return;
+    }
+    if (!selectedEmployee.current_attendance_id) {
+      setStatusMsg({ type: 'error', text: 'No active check-in found to log out from.' });
+      return;
+    }
+
     setLoading(true);
     setStatusMsg(null);
 
-    const checkOutTime = getISOFromTime(manualTime);
+    const checkOutTime = new Date().toISOString();
 
     try {
       const { error: attError } = await supabase
@@ -119,26 +129,27 @@ export default function EmployeeCheckInPage() {
 
       if (empError) throw empError;
 
-      setStatusMsg({ type: 'success', text: `👋 Goodbye, ${selectedEmployee.name}! Logged out successfully.` });
-      
-      setEmployees(prev => prev.map(e => 
-        e.id === selectedEmployee.id 
-          ? { ...e, is_checked_in: false, current_attendance_id: null } 
+      setStatusMsg({ type: 'success', text: `👋 Goodbye, ${selectedEmployee.name}! Logged out at ${new Date(checkOutTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}.` });
+
+      setEmployees(prev => prev.map(e =>
+        e.id === selectedEmployee.id
+          ? { ...e, is_checked_in: false, current_attendance_id: null }
           : e
       ));
-      setManualTime('');
-
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message });
+      setStatusMsg({ type: 'error', text: err?.message || 'Check-out failed' });
     } finally {
       setLoading(false);
     }
   };
 
   const handleMarkStatus = async (status: 'leave' | 'off') => {
-    if (!selectedEmployee) return;
+    if (!selectedEmployee) {
+      setStatusMsg({ type: 'error', text: 'Please select your name.' });
+      return;
+    }
     if (!confirm(`Are you sure you want to mark today as ${status === 'leave' ? 'LEAVE' : 'WEEKLY OFF'}?`)) return;
-    
+
     setLoading(true);
     setStatusMsg(null);
 
@@ -148,9 +159,9 @@ export default function EmployeeCheckInPage() {
         .insert({
           employee_id: selectedEmployee.id,
           employee_name: selectedEmployee.name,
-          outlet_id: null, 
+          outlet_id: null,
           outlet_name: status === 'leave' ? 'On Leave' : 'Weekly Off',
-          check_in_time: null, 
+          check_in_time: null,
           check_out_time: null,
           status: status
         });
@@ -158,9 +169,8 @@ export default function EmployeeCheckInPage() {
       if (error) throw error;
 
       setStatusMsg({ type: 'success', text: `✅ Marked as ${status === 'leave' ? 'Leave' : 'Weekly Off'}` });
-
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message });
+      setStatusMsg({ type: 'error', text: err?.message || 'Failed to mark status' });
     } finally {
       setLoading(false);
     }
@@ -168,8 +178,7 @@ export default function EmployeeCheckInPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
-      
-      {/* --- Left Panel: Branding & Clock --- */}
+      {/* Left Panel */}
       <div className="hidden md:flex w-1/2 bg-gradient-to-br from-blue-600 to-purple-700 text-white flex-col justify-between p-12 relative overflow-hidden">
         <div className="z-10">
           <h1 className="text-4xl font-bold tracking-tight">Staff Portal</h1>
@@ -190,10 +199,9 @@ export default function EmployeeCheckInPage() {
         </div>
       </div>
 
-      {/* --- Right Panel: Form --- */}
+      {/* Right Panel */}
       <div className="w-full md:w-1/2 flex flex-col justify-center p-6 md:p-12 bg-gray-50">
         <div className="max-w-md mx-auto w-full space-y-8">
-          
           <div className="text-center md:text-left">
             <h2 className="text-3xl font-bold text-gray-900">Log In / Log Out</h2>
             <p className="text-gray-500 mt-2">Select your name to begin.</p>
@@ -230,9 +238,9 @@ export default function EmployeeCheckInPage() {
               </div>
             </div>
 
-            {/* Outlet Select */}
+            {/* Outlet Select (only when logging in) */}
             {selectedEmployee && !selectedEmployee.is_checked_in && (
-               <div className="space-y-2 animate-in fade-in slide-in-from-top-4 duration-300">
+              <div className="space-y-2 animate-in fade-in slide-in-from-top-4 duration-300">
                 <label className="text-sm font-semibold text-gray-700">Where are you today?</label>
                 <div className="relative">
                   <select
@@ -250,21 +258,18 @@ export default function EmployeeCheckInPage() {
               </div>
             )}
 
-            {/* Time Input */}
+            {/* Display current action time (read-only) */}
             {selectedEmployee && (
               <div className="space-y-2 animate-in fade-in slide-in-from-top-4 duration-300">
-                 <label className="text-sm font-semibold text-gray-700">
-                    {selectedEmployee.is_checked_in ? 'Time of Departure' : 'Time of Arrival'}
-                 </label>
-                 <div className="relative">
-                   <input
-                    type="time"
-                    value={manualTime}
-                    onChange={(e) => setManualTime(e.target.value)}
-                    className="w-full p-4 pl-12 bg-white border-gray-200 rounded-xl text-gray-900 font-medium shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                   />
-                   <Clock className="absolute left-4 top-4 text-gray-400 h-5 w-5 pointer-events-none" />
-                 </div>
+                <label className="text-sm font-semibold text-gray-700">
+                  {selectedEmployee.is_checked_in ? 'Time of Departure' : 'Time of Arrival'}
+                </label>
+                <div className="relative">
+                  <div className="w-full p-4 pl-12 bg-white border border-gray-200 rounded-xl text-gray-900 font-medium shadow-sm">
+                    <Clock className="absolute left-4 top-4 text-gray-400 h-5 w-5 pointer-events-none" />
+                    <div className="ml-8">{currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} — {currentTime.toLocaleDateString('en-IN')}</div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -272,44 +277,43 @@ export default function EmployeeCheckInPage() {
             {selectedEmployee && (
               <div className="pt-4 space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 {selectedEmployee.is_checked_in ? (
-                   <button
+                  <button
                     onClick={handleCheckOut}
-                    disabled={loading || !manualTime}
+                    disabled={loading}
                     className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                   >
-                      {loading ? <Loader2 className="animate-spin" /> : <><LogOut size={20} /> Log Out Now</>}
-                   </button>
+                  >
+                    {loading ? <Loader2 className="animate-spin" /> : <><LogOut size={20} /> Log Out Now</>}
+                  </button>
                 ) : (
-                   <div className="space-y-3">
+                  <div className="space-y-3">
+                    <button
+                      onClick={handleCheckIn}
+                      disabled={loading || !selectedOutlet}
+                      className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {loading ? <Loader2 className="animate-spin" /> : <><LogIn size={20} /> Log In Now</>}
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-3">
                       <button
-                        onClick={handleCheckIn}
-                        disabled={loading || !selectedOutlet || !manualTime}
-                        className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-blue-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => handleMarkStatus('leave')}
+                        disabled={loading}
+                        className="py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all"
                       >
-                         {loading ? <Loader2 className="animate-spin" /> : <><LogIn size={20} /> Log In Now</>}
+                        <CalendarX size={18} className="text-orange-500" /> Mark Leave
                       </button>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                            onClick={() => handleMarkStatus('leave')}
-                            disabled={loading}
-                            className="py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all"
-                        >
-                            <CalendarX size={18} className="text-orange-500" /> Mark Leave
-                        </button>
-                        <button
-                            onClick={() => handleMarkStatus('off')}
-                            disabled={loading}
-                            className="py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all"
-                        >
-                            <Coffee size={18} className="text-gray-500" /> Weekly Off
-                        </button>
-                      </div>
-                   </div>
+                      <button
+                        onClick={() => handleMarkStatus('off')}
+                        disabled={loading}
+                        className="py-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all"
+                      >
+                        <Coffee size={18} className="text-gray-500" /> Weekly Off
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
-
           </div>
         </div>
       </div>

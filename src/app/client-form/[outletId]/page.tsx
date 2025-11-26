@@ -14,6 +14,15 @@ type ClientInfo = {
   remainingHours: number;
 };
 
+type Employee = {
+  id: string;
+  name: string;
+  is_checked_in?: boolean;
+  role?: string | null;
+  outlet_id?: string | null;
+  is_active?: boolean;
+};
+
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
   const params = useParams();
@@ -40,12 +49,15 @@ export default function ClientCheckinForm() {
     sold_by: '',
     therapistPrimary: '',         // primary therapist
     therapistSecondary: '',       // secondary therapist (hidden by default)
-    showSecondaryTherapist: false, // NEW: whether to reveal secondary dropdown
+    showSecondaryTherapist: false,// reveal second therapist
     room: '',          
   });
 
-  // --- State for employees list ---
-  const [employees, setEmployees] = useState<{id: string, name: string, is_checked_in?: boolean}[]>([]);
+  // --- State for employees list (therapists only, checked-in) ---
+  const [employees, setEmployees] = useState<Employee[]>([]);
+
+  // --- State for all staff in outlet (used for "Sold By") ---
+  const [outletStaff, setOutletStaff] = useState<Employee[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -53,6 +65,7 @@ export default function ClientCheckinForm() {
 
   // --- Data Fetching Functions (Memoized for reuse) ---
   const fetchTreatments = useCallback(async () => {
+    if (!outletId) return;
     try {
       const { data, error: dbError } = await supabase
         .from('treatments')
@@ -62,26 +75,76 @@ export default function ClientCheckinForm() {
       setTreatments(data || []);
     } catch (err) {
       console.error('Error fetching treatments:', err);
+      setTreatments([]);
     }
   }, [outletId]);
 
+  /**
+   * fetchStaff (OUTLET-SPECIFIC)
+   * - Only therapists (role = 'therapist')
+   * - Only currently checked-in (is_checked_in = true)
+   * - Only for the current outlet (outlet_id)
+   */
   const fetchStaff = useCallback(async () => {
-     const { data } = await supabase
-      .from('employees')
-      .select('id, name, is_checked_in') 
-      .eq('is_active', true);
-    
-    if (!data) return;
+    if (!outletId) {
+      setEmployees([]);
+      return;
+    }
 
-    // Sort: Checked-in employees first, then alphabetical
-    const sortedEmployees = data.sort((a, b) => {
-      if (a.is_checked_in && !b.is_checked_in) return -1;
-      if (!a.is_checked_in && b.is_checked_in) return 1;
-      return a.name.localeCompare(b.name);
-    });
+    try {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('id, name, is_checked_in, role, outlet_id')
+        .eq('is_active', true)
+        .eq('role', 'therapist')           // only therapists
+        .eq('is_checked_in', true)         // only currently checked-in
+        .eq('outlet_id', outletId)         // filter by current outlet
+        .order('name', { ascending: true });
 
-    setEmployees(sortedEmployees);
-  }, []);
+      if (error) {
+        console.error('Error fetching therapists:', error);
+        setEmployees([]);
+        return;
+      }
+
+      setEmployees(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Unexpected fetchStaff error:', err);
+      setEmployees([]);
+    }
+  }, [outletId]);
+
+  /**
+   * fetchOutletStaff
+   * - Loads all active staff for this outlet (used for "Sold By" dropdown)
+   * - Doesn't require staff to be checked-in (business rule: anyone in outlet can sell)
+   */
+  const fetchOutletStaff = useCallback(async () => {
+    if (!outletId) {
+      setOutletStaff([]);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('id, name, role, outlet_id, is_active')
+        .eq('is_active', true)
+        .eq('outlet_id', outletId)
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('Error fetching outlet staff:', error);
+        setOutletStaff([]);
+        return;
+      }
+
+      setOutletStaff(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Unexpected fetchOutletStaff error:', err);
+      setOutletStaff([]);
+    }
+  }, [outletId]);
 
   // --- Initial Load & Outlet Validation ---
   useEffect(() => {
@@ -101,33 +164,52 @@ export default function ClientCheckinForm() {
     setOutlet(outletInfo); 
     
     // Initial data fetch
-    Promise.all([fetchTreatments(), fetchStaff()]).then(() => {
+    Promise.all([fetchTreatments(), fetchStaff(), fetchOutletStaff()]).then(() => {
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
 
-  }, [outletId, fetchTreatments, fetchStaff]);
+  }, [outletId, fetchTreatments, fetchStaff, fetchOutletStaff]);
 
   // --- Realtime listeners to keep staff/treatments fresh ---
   useEffect(() => {
+    if (!outletId) return;
+
     const channel = supabase
-      .channel('client-form-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
-        fetchStaff();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
-        fetchStaff();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'treatments' }, () => {
-        fetchTreatments();
-      })
+      .channel(`client-form-realtime-${outletId}`)
+      // listen only for employees changes for this outlet
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'employees', filter: `outlet_id=eq.${outletId}` },
+        () => {
+          // Refresh both therapists and outlet staff on employees change (role/active/check-in may change)
+          fetchStaff();
+          fetchOutletStaff();
+        }
+      )
+      // listen attendance changes for this outlet (if your attendance table has an outlet_id column)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance', filter: `outlet_id=eq.${outletId}` },
+        () => { fetchStaff(); }
+      )
+      // treatments changes for this outlet
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'treatments', filter: `outlet_id=eq.${outletId}` },
+        () => { fetchTreatments(); }
+      )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      try {
+        supabase.removeChannel(channel);
+      } catch (e) {
+        console.warn('Failed to remove realtime channel', e);
+      }
     };
-  }, [fetchStaff, fetchTreatments]);
+  }, [fetchStaff, fetchTreatments, fetchOutletStaff, outletId]);
 
-
+  // --- Client lookup (same as before) ---
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
@@ -179,6 +261,7 @@ export default function ClientCheckinForm() {
     };
   }, [mobile, performClientLookup]);
 
+  // handleChange supports checkbox and number coercion
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
@@ -194,11 +277,11 @@ export default function ClientCheckinForm() {
       } else {
         updatedValue = value;
       }
-      const updated = { ...prev, [name]: updatedValue };
+      const updated: any = { ...prev, [name]: updatedValue };
 
       // if user toggles off showSecondaryTherapist, clear secondary therapist selection
       if (name === 'showSecondaryTherapist' && updatedValue === false) {
-        (updated as any).therapistSecondary = '';
+        updated.therapistSecondary = '';
       }
 
       if (name === 'tookPackage' && checked) {
@@ -289,7 +372,7 @@ export default function ClientCheckinForm() {
     const finalAmountInPaise = getFinalAmountInPaise();
     
     try {
-      let checkInTime: string | null = new Date().toISOString();
+      const checkInTime: string | null = new Date().toISOString();
 
       // Build therapist info:
       const therapistPrimary = String(formData.therapistPrimary || '').trim() || null;
@@ -448,11 +531,14 @@ export default function ClientCheckinForm() {
                   required={true}
                 >
                   <option value="">-- Select Therapist 1 --</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.name}>
-                       {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
-                    </option>
-                  ))}
+                  {employees.map((emp) => {
+                    const outletName = emp.outlet_id ? (OUTLETS.find(o => o.id === emp.outlet_id)?.name ?? emp.outlet_id) : '';
+                    return (
+                      <option key={emp.id} value={emp.name}>
+                        {emp.is_checked_in ? '🟢 ' : ''}{emp.name}{outletName ? ` — ${outletName}` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -493,11 +579,14 @@ export default function ClientCheckinForm() {
                   disabled={loading}
                 >
                   <option value="">-- Select Therapist 2 (optional) --</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.name}>
-                       {emp.is_checked_in ? '🟢 ' : ''}{emp.name}
-                    </option>
-                  ))}
+                  {employees.map((emp) => {
+                    const outletName = emp.outlet_id ? (OUTLETS.find(o => o.id === emp.outlet_id)?.name ?? emp.outlet_id) : '';
+                    return (
+                      <option key={emp.id} value={emp.name}>
+                        {emp.is_checked_in ? '🟢 ' : ''}{emp.name}{outletName ? ` — ${outletName}` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             )}
@@ -528,7 +617,7 @@ export default function ClientCheckinForm() {
                   placeholder="Mins"
                   value={formData.sessionMinutes || ''}
                   onChange={handleChange}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  className="w-full px-3 py-2 bg_gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                   disabled={loading}
                 />
               </div>
@@ -594,7 +683,7 @@ export default function ClientCheckinForm() {
                     <option value="9 months">9 Months</option>
                   </select>
                 </div>
-                {/* --- Sold By Dropdown (All Staff) --- */}
+                {/* --- Sold By Dropdown (All Staff in outlet) --- */}
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-1">Sold By (Staff Name) *</label>
                   <select
@@ -605,9 +694,9 @@ export default function ClientCheckinForm() {
                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
                   >
                      <option value="">-- Select Staff --</option>
-                     {employees.map(emp => (
+                     {outletStaff.map(emp => (
                         <option key={emp.id} value={emp.name}>
-                           {emp.name}
+                           {emp.name}{emp.role ? ` — ${emp.role}` : ''}
                         </option>
                      ))}
                   </select>

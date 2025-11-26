@@ -5,17 +5,18 @@ import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { 
   Loader2, UserPlus, Phone, Briefcase, Search, 
-  MapPin, Calendar, TrendingUp, User, Filter, X 
+  MapPin, Calendar, TrendingUp, User, Filter, X, Edit3, Trash2
 } from 'lucide-react';
 
 // --- Types ---
 type Employee = {
   id: string;
   name: string;
-  mobile: string;
+  mobile?: string | null;
   role: 'therapist' | 'manager' | 'housekeeping';
   outlet_name: string;
   outlet_id: string;
+  is_active?: boolean;
 };
 
 type StatRow = {
@@ -30,11 +31,12 @@ type StatRow = {
 const formatCurrency = (val: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(val / 100);
 
+// --- Page Component ---
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Selection & Filters
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -46,123 +48,172 @@ export default function EmployeesPage() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [history, setHistory] = useState<StatRow[]>([]);
   const [totalRevenue, setTotalRevenue] = useState(0);
-  
-  // Live Dashboard Metrics for List View
+
+  // Live Metrics
   const [todaySalesMap, setTodaySalesMap] = useState<Record<string, number>>({});
 
-  // Form State
+  // Add Modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newEmpName, setNewEmpName] = useState('');
   const [newEmpMobile, setNewEmpMobile] = useState('');
-  const [newEmpRole, setNewEmpRole] = useState<'therapist' | 'manager' | 'housekeeping'>('therapist');
-  const [newEmpOutlet, setNewEmpOutlet] = useState(OUTLETS[0].id); // Default to first outlet
+  const [newEmpRole, setNewEmpRole] = useState<Employee['role']>('therapist');
+  const [newEmpOutlet, setNewEmpOutlet] = useState(OUTLETS[0]?.id ?? '');
   const [isAdding, setIsAdding] = useState(false);
 
-  // --- 1. Fetch Initial Data ---
+  // Edit Modal
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editMobile, setEditMobile] = useState('');
+  const [editRole, setEditRole] = useState<Employee['role']>('therapist');
+  const [editOutlet, setEditOutlet] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  // --- Fetch initial data ---
   const fetchData = useCallback(async () => {
     setLoading(true);
-    // Fetch Employees
-    const { data: empData } = await supabase.from('employees').select('*').eq('is_active', true).order('name');
-    setEmployees(empData || []);
-    setFilteredEmployees(empData || []);
+    try {
+      const { data: empData } = await supabase
+        .from('employees')
+        .select('*')
+        .eq('is_active', true)
+        .order('name', { ascending: true });
 
-    // Select first employee by default if available and none selected
-    if (empData && empData.length > 0 && !selectedEmployee) {
-        setSelectedEmployee(empData[0]);
-    }
+      const emps = (empData || []) as Employee[];
 
-    // Fetch Today's Metrics (for the left sidebar list)
-    const today = new Date().toISOString().split('T')[0];
-    const { data: salesData } = await supabase
-      .from('customers')
-      .select('amount_paid, package_amount, took_package, therapist_name, package_sold_by')
-      .eq('date', today);
+      setEmployees(emps);
 
-    const salesMap: Record<string, number> = {};
-
-    (salesData || []).forEach((sale: any) => {
-      const amount = sale.took_package ? sale.package_amount : sale.amount_paid;
-      // Revenue Logic: Seller gets package credit, Therapist gets service credit
-      if (sale.took_package) {
-        if (sale.package_sold_by) salesMap[sale.package_sold_by] = (salesMap[sale.package_sold_by] || 0) + amount;
-      } else {
-        if (sale.therapist_name) salesMap[sale.therapist_name] = (salesMap[sale.therapist_name] || 0) + amount;
+      let filtered = emps;
+      if (outletFilter !== 'all') filtered = filtered.filter(e => e.outlet_id === outletFilter);
+      if (searchTerm) {
+        const t = searchTerm.toLowerCase();
+        filtered = filtered.filter(e =>
+          e.name.toLowerCase().includes(t) || (e.mobile || '').includes(t)
+        );
       }
-    });
-    setTodaySalesMap(salesMap);
-    setLoading(false);
-  }, [selectedEmployee]); // Dependency ensures it doesn't reset selection unnecessarily
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+      setFilteredEmployees(filtered);
 
-  // --- 2. Filter Logic ---
+      setSelectedEmployee(prev => {
+        if (!prev) return filtered[0] ?? null;
+        const found = emps.find(e => e.id === prev.id) ?? null;
+        if (!found) return filtered[0] ?? null;
+
+        return prev.name === found.name &&
+          prev.mobile === found.mobile &&
+          prev.role === found.role &&
+          prev.outlet_id === found.outlet_id
+          ? prev
+          : found;
+      });
+
+      const today = new Date().toISOString().split('T')[0];
+      const { data: salesData } = await supabase
+        .from('customers')
+        .select('amount_paid, package_amount, took_package, therapist_name, package_sold_by')
+        .eq('date', today);
+
+      const map: Record<string, number> = {};
+      (salesData || []).forEach(s => {
+        const amt = s.took_package ? s.package_amount || 0 : s.amount_paid || 0;
+        if (s.took_package && s.package_sold_by)
+          map[s.package_sold_by] = (map[s.package_sold_by] || 0) + amt;
+        if (!s.took_package && s.therapist_name)
+          map[s.therapist_name] = (map[s.therapist_name] || 0) + amt;
+      });
+
+      setTodaySalesMap(map);
+    } finally {
+      setLoading(false);
+    }
+  }, [outletFilter, searchTerm]);
+
   useEffect(() => {
-    let result = employees;
+    fetchData();
+  }, [fetchData]);
 
-    if (outletFilter !== 'all') {
-       result = result.filter(e => e.outlet_id === outletFilter);
-    }
-
+  // --- Filtering UI reaction ---
+  useEffect(() => {
+    let r = employees;
+    if (outletFilter !== 'all') r = r.filter(e => e.outlet_id === outletFilter);
     if (searchTerm) {
-      const lowerTerm = searchTerm.toLowerCase();
-      result = result.filter(e => 
-        e.name.toLowerCase().includes(lowerTerm) || 
-        (e.mobile && e.mobile.includes(lowerTerm))
-      );
+      const t = searchTerm.toLowerCase();
+      r = r.filter(e => e.name.toLowerCase().includes(t) || (e.mobile || '').includes(t));
     }
-    setFilteredEmployees(result);
+    setFilteredEmployees(r);
+    setSelectedEmployee(prev => {
+      if (!prev) return r[0] ?? null;
+      return r.find(e => e.id === prev.id) ? prev : (r[0] ?? null);
+    });
   }, [searchTerm, outletFilter, employees]);
 
-  // --- 3. Fetch Stats for Selected Employee ---
+  // --- Fetch history ---
   useEffect(() => {
-    if (!selectedEmployee) return;
-    
-    const fetchHistory = async () => {
-        setStatsLoading(true);
-        const { data, error } = await supabase
-        .from('customers')
-        .select('*')
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .or(`therapist_name.eq.${selectedEmployee.name},package_sold_by.eq.${selectedEmployee.name}`);
+    if (!selectedEmployee) {
+      setHistory([]);
+      setTotalRevenue(0);
+      return;
+    }
 
-        if (error) { console.error(error); setStatsLoading(false); return; }
+    const fetchHistory = async () => {
+      setStatsLoading(true);
+      try {
+        const { data } = await supabase
+          .from('customers')
+          .select('*')
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .or(
+            `therapist_name.eq.${selectedEmployee.name},package_sold_by.eq.${selectedEmployee.name}`
+          );
 
         const rows: StatRow[] = [];
         let total = 0;
 
         (data || []).forEach((row: any) => {
-            // A. Services (Therapist)
-            if (row.therapist_name === selectedEmployee.name) {
-                if (row.took_package) {
-                    // Service for New Package (No Revenue Credit)
-                    rows.push({
-                        id: row.id + '_svc_pkg', date: row.date, name: row.name,
-                        treatment: `(Pkg Start) ${row.treatment}`, amount: 0, type: 'Service'
-                    });
-                } else {
-                    // Regular Service
-                    rows.push({
-                        id: row.id + '_svc', date: row.date, name: row.name,
-                        treatment: row.treatment, amount: row.amount_paid, type: 'Service'
-                    });
-                    total += row.amount_paid;
-                }
+          if (row.therapist_name === selectedEmployee.name) {
+            if (row.took_package) {
+              rows.push({
+                id: row.id + '_svc_pkg',
+                date: row.date,
+                name: row.name,
+                treatment: `(Pkg Start) ${row.treatment}`,
+                amount: 0,
+                type: 'Service',
+              });
+            } else {
+              rows.push({
+                id: row.id + '_svc',
+                date: row.date,
+                name: row.name,
+                treatment: row.treatment,
+                amount: row.amount_paid || 0,
+                type: 'Service',
+              });
+              total += row.amount_paid || 0;
             }
-            // B. Package Sales (Seller)
-            if (row.package_sold_by === selectedEmployee.name && row.took_package) {
-                rows.push({
-                    id: row.id + '_pkg', date: row.date, name: row.name,
-                    treatment: 'New Package Sales', amount: row.package_amount, type: 'Package Sold'
-                });
-                total += row.package_amount;
-            }
+          }
+
+          if (row.package_sold_by === selectedEmployee.name && row.took_package) {
+            rows.push({
+              id: row.id + '_pkg',
+              date: row.date,
+              name: row.name,
+              treatment: 'New Package Sales',
+              amount: row.package_amount || 0,
+              type: 'Package Sold',
+            });
+            total += row.package_amount || 0;
+          }
         });
 
         rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         setHistory(rows);
         setTotalRevenue(total);
+      } finally {
         setStatsLoading(false);
+      }
     };
 
     fetchHistory();
@@ -171,269 +222,443 @@ export default function EmployeesPage() {
   // --- Add Employee ---
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsAdding(true);
-    
-    const outletObj = OUTLETS.find(o => o.id === newEmpOutlet);
-    const { error } = await supabase.from('employees').insert({
-      name: newEmpName.trim(),
-      mobile: newEmpMobile.trim(),
-      role: newEmpRole,
-      outlet_id: newEmpOutlet,   
-      outlet_name: outletObj?.name || 'Unknown', 
-      // Pin will be null initially, user must set it or use default logic if you have it
-    });
+    if (!newEmpName.trim()) return alert('Enter a name');
 
-    if (error) alert('Error: ' + error.message);
-    else {
-      setNewEmpName(''); setNewEmpMobile(''); setIsAddModalOpen(false);
-      fetchData();
+    setIsAdding(true);
+    try {
+      const outletObj = OUTLETS.find(o => o.id === newEmpOutlet);
+
+      await supabase.from('employees').insert({
+        name: newEmpName.trim(),
+        mobile: newEmpMobile.trim() || null,
+        role: newEmpRole,
+        outlet_id: newEmpOutlet,
+        outlet_name: outletObj?.name || 'Unknown',
+        is_active: true,
+      });
+
+      await fetchData();
+      setIsAddModalOpen(false);
+
+      setNewEmpName('');
+      setNewEmpMobile('');
+      setNewEmpRole('therapist');
+      setNewEmpOutlet(OUTLETS[0]?.id ?? '');
+    } finally {
+      setIsAdding(false);
     }
-    setIsAdding(false);
+  };
+
+  // --- Edit Modal Setup ---
+  const openEditModalFor = (emp: Employee) => {
+    setSelectedEmployee(emp);
+    setEditName(emp.name);
+    setEditMobile(emp.mobile || '');
+    setEditRole(emp.role);
+    setEditOutlet(emp.outlet_id);
+    setIsEditModalOpen(true);
+  };
+  // --- Save edits ---
+  const saveEdit = async () => {
+    if (!selectedEmployee) return;
+    if (!editName.trim()) return alert('Name cannot be empty');
+    setIsSavingEdit(true);
+
+    const oldName = selectedEmployee.name;
+    const newName = editName.trim();
+
+    try {
+      const outletObj = OUTLETS.find(o => o.id === editOutlet);
+      const { error: updErr } = await supabase
+        .from('employees')
+        .update({
+          name: newName,
+          mobile: editMobile.trim() || null,
+          role: editRole,
+          outlet_id: editOutlet,
+          outlet_name: outletObj?.name || editOutlet,
+        })
+        .eq('id', selectedEmployee.id);
+
+      if (updErr) throw updErr;
+
+      if (oldName !== newName) {
+        const { error: c1 } = await supabase
+          .from('customers')
+          .update({ therapist_name: newName })
+          .eq('therapist_name', oldName);
+        if (c1) throw c1;
+
+        const { error: c2 } = await supabase
+          .from('customers')
+          .update({ package_sold_by: newName })
+          .eq('package_sold_by', oldName);
+        if (c2) throw c2;
+      }
+
+      await fetchData();
+      const refreshed = (await supabase.from('employees').select('*').eq('id', selectedEmployee.id)).data?.[0] ?? null;
+      setSelectedEmployee(refreshed);
+      setIsEditModalOpen(false);
+    } catch (err: any) {
+      console.error('saveEdit error', err);
+      alert(err.message || 'Failed to save changes');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  // --- Delete employee ---
+  const deleteEmployee = async () => {
+    if (!selectedEmployee) return;
+    setIsDeleting(true);
+    try {
+      const { error: delErr } = await supabase
+        .from('employees')
+        .update({ is_active: false })
+        .eq('id', selectedEmployee.id);
+      if (delErr) throw delErr;
+
+      const { error: c1 } = await supabase
+        .from('customers')
+        .update({ therapist_name: null })
+        .eq('therapist_name', selectedEmployee.name);
+      if (c1) throw c1;
+
+      const { error: c2 } = await supabase
+        .from('customers')
+        .update({ package_sold_by: null })
+        .eq('package_sold_by', selectedEmployee.name);
+      if (c2) throw c2;
+
+      await fetchData();
+      setSelectedEmployee(null);
+      setConfirmDeleteOpen(false);
+    } catch (err: any) {
+      console.error('deleteEmployee error', err);
+      alert(err.message || 'Failed to delete employee');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // --- Helpers ---
   const getRoleBadge = (role: string) => {
-      switch(role) {
-          case 'manager': return <span className="px-2 py-0.5 rounded text-[10px] bg-purple-100 text-purple-700 font-semibold uppercase tracking-wide">Manager</span>;
-          case 'housekeeping': return <span className="px-2 py-0.5 rounded text-[10px] bg-gray-100 text-gray-600 font-semibold uppercase tracking-wide">HK</span>;
-          default: return <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700 font-semibold uppercase tracking-wide">Therapist</span>;
-      }
-  }
+    switch (role) {
+      case 'manager': return <span className="px-2 py-0.5 rounded text-[10px] bg-purple-100 text-purple-700 font-semibold uppercase tracking-wide">Manager</span>;
+      case 'housekeeping': return <span className="px-2 py-0.5 rounded text-[10px] bg-gray-100 text-gray-600 font-semibold uppercase tracking-wide">HK</span>;
+      default: return <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700 font-semibold uppercase tracking-wide">Therapist</span>;
+    }
+  };
 
   return (
     <>
-      <div className="flex h-[calc(100vh-64px)] bg-gray-50 overflow-hidden">
-        
-        {/* --- LEFT SIDEBAR (List) --- */}
+      <div className="flex h-[calc(100vh-64px)] bg-white overflow-hidden">
+        {/* LEFT: List */}
         <div className="w-full md:w-1/3 lg:w-80 bg-white border-r border-gray-200 flex flex-col z-10">
-          {/* Header & Filters */}
-          <div className="p-4 border-b border-gray-200 space-y-3">
-              <div className="flex justify-between items-center">
-                  <h2 className="font-bold text-gray-800 text-lg">Team ({filteredEmployees.length})</h2>
-                  <button onClick={() => setIsAddModalOpen(true)} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow-sm">
-                      <UserPlus size={16} />
-                  </button>
-              </div>
-              
+          <div className="p-4 border-b">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-bold text-black">Team ({filteredEmployees.length})</h2>
+              <button onClick={() => setIsAddModalOpen(true)} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700">
+                <UserPlus size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
               <div className="relative">
-                  <Search className="absolute left-3 top-2.5 text-gray-400 h-4 w-4" />
-                  <input 
-                      type="text" 
-                      placeholder="Search staff..." 
-                      value={searchTerm}
-                      onChange={e => setSearchTerm(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none text-gray-800"
-                  />
+                <Search className="absolute left-3 top-3 text-black h-4 w-4" />
+                <input
+                  className="w-full pl-9 pr-3 py-2 bg-white border rounded-lg text-sm text-black"
+                  placeholder="Search staff..."
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                />
               </div>
 
               <div className="relative">
-                   <Filter className="absolute left-3 top-2.5 text-gray-400 h-4 w-4" />
-                   <select 
-                      value={outletFilter}
-                      onChange={e => setOutletFilter(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none text-gray-800 appearance-none"
-                   >
-                      <option value="all">All Locations</option>
-                      {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                   </select>
+                <Filter className="absolute left-3 top-3 text-black h-4 w-4" />
+                <select
+                  className="w-full pl-9 pr-3 py-2 bg-white border rounded-lg text-sm text-black"
+                  value={outletFilter}
+                  onChange={e => setOutletFilter(e.target.value)}
+                >
+                  <option value="all">All Locations</option>
+                  {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
               </div>
+            </div>
           </div>
 
-          {/* Scrollable List */}
           <div className="flex-1 overflow-y-auto">
-              {loading ? (
-                  <div className="p-6 text-center text-gray-400 text-sm">Loading...</div>
-              ) : filteredEmployees.length === 0 ? (
-                  <div className="p-6 text-center text-gray-400 text-sm">No staff found.</div>
-              ) : (
-                  <div className="divide-y divide-gray-100">
-                      {filteredEmployees.map(emp => {
-                          const isSelected = selectedEmployee?.id === emp.id;
-                          const rev = todaySalesMap[emp.name] || 0;
-                          return (
-                              <div 
-                                  key={emp.id}
-                                  onClick={() => setSelectedEmployee(emp)}
-                                  className={`p-4 cursor-pointer hover:bg-gray-50 transition-all ${isSelected ? 'bg-blue-50 border-l-4 border-blue-600' : 'border-l-4 border-transparent'}`}
-                              >
-                                  <div className="flex justify-between items-start">
-                                      <div>
-                                          <div className="font-semibold text-gray-900">{emp.name}</div>
-                                          <div className="flex items-center gap-2 mt-1">
-                                              {getRoleBadge(emp.role)}
-                                              <span className="text-xs text-gray-500 flex items-center gap-0.5"><MapPin size={10}/> {emp.outlet_name}</span>
-                                          </div>
-                                      </div>
-                                      <div className="text-right">
-                                          {rev > 0 && <div className="text-xs font-bold text-green-600">₹{rev/100}</div>}
-                                          <div className="text-[10px] text-gray-400 mt-1">Details &rarr;</div>
-                                      </div>
-                                  </div>
-                              </div>
-                          )
-                      })}
-                  </div>
-              )}
+            {loading ? (
+              <div className="p-6 text-center text-black">Loading...</div>
+            ) : filteredEmployees.length === 0 ? (
+              <div className="p-6 text-center text-black">No staff found.</div>
+            ) : (
+              <div className="divide-y">
+                {filteredEmployees.map(emp => {
+                  const isSelected = selectedEmployee?.id === emp.id;
+                  const rev = todaySalesMap[emp.name] || 0;
+                  return (
+                    <div
+                      key={emp.id}
+                      onClick={() => setSelectedEmployee(emp)}
+                      className={`p-4 cursor-pointer hover:bg-gray-50 ${isSelected ? 'bg-blue-50 border-l-4 border-blue-600' : ''}`}
+                    >
+                      <div className="flex justify-between">
+                        <div>
+                          <div className="font-semibold text-black">{emp.name}</div>
+                          <div className="flex items-center gap-2 mt-1 text-xs text-black">
+                            {getRoleBadge(emp.role)}
+                            <span className="flex items-center gap-1 text-black"><MapPin size={12}/> {emp.outlet_name}</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          {rev > 0 && <div className="text-xs font-bold text-black">{formatCurrency(rev)}</div>}
+                          <div className="text-[10px] text-black mt-1">Details →</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* --- RIGHT PANEL (Details) --- */}
-        <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden relative">
+        {/* RIGHT: Details */}
+        <div className="flex-1 flex flex-col bg-white overflow-hidden relative">
           {selectedEmployee ? (
-              <>
-                  {/* Detail Header */}
-                  <div className="bg-white border-b border-gray-200 p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm z-10">
-                      <div className="flex items-center gap-4">
-                          <div className="h-14 w-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-xl font-bold shadow-md">
-                              {selectedEmployee.name.charAt(0)}
-                          </div>
-                          <div>
-                              <h1 className="text-2xl font-bold text-gray-900">{selectedEmployee.name}</h1>
-                              <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
-                                  <span className="flex items-center gap-1"><Briefcase size={14} /> {selectedEmployee.role}</span>
-                                  <span className="flex items-center gap-1"><Phone size={14} /> {selectedEmployee.mobile || 'N/A'}</span>
-                                  <span className="flex items-center gap-1"><MapPin size={14} /> {selectedEmployee.outlet_name}</span>
-                              </div>
-                          </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-lg border border-gray-200">
-                          <input 
-                              type="date" 
-                              value={startDate} 
-                              onChange={e => setStartDate(e.target.value)}
-                              className="bg-white border border-gray-300 rounded px-2 py-1 text-sm text-gray-700 outline-none focus:border-blue-500"
-                          />
-                          <span className="text-gray-400 text-sm">to</span>
-                          <input 
-                              type="date" 
-                              value={endDate} 
-                              onChange={e => setEndDate(e.target.value)}
-                              className="bg-white border border-gray-300 rounded px-2 py-1 text-sm text-gray-700 outline-none focus:border-blue-500"
-                          />
-                      </div>
+            <>
+              <div className="bg-white border-b p-6 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="h-14 w-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-xl font-bold">
+                    {selectedEmployee.name.charAt(0)}
                   </div>
+                  <div>
+                    <h1 className="text-2xl font-bold text-black">{selectedEmployee.name}</h1>
+                    <div className="flex items-center gap-4 text-sm text-black mt-1">
+                      <span className="flex items-center gap-1"><Briefcase size={14} /> {selectedEmployee.role}</span>
+                      <span className="flex items-center gap-1"><Phone size={14} /> {selectedEmployee.mobile || 'N/A'}</span>
+                      <span className="flex items-center gap-1"><MapPin size={14} /> {selectedEmployee.outlet_name}</span>
+                    </div>
+                  </div>
+                </div>
 
-                  {/* Stats Cards */}
-                  <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-                       <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
-                          <div className="p-3 bg-green-50 text-green-600 rounded-lg"><TrendingUp size={24}/></div>
-                          <div>
-                              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total Revenue</p>
-                              <p className="text-2xl font-bold text-gray-900">{formatCurrency(totalRevenue)}</p>
-                          </div>
-                       </div>
-                       <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
-                          <div className="p-3 bg-purple-50 text-purple-600 rounded-lg"><Briefcase size={24}/></div>
-                          <div>
-                              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Services Done</p>
-                              <p className="text-2xl font-bold text-gray-900">{history.filter(h => h.type === 'Service').length}</p>
-                          </div>
-                       </div>
-                       <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
-                          <div className="p-3 bg-orange-50 text-orange-600 rounded-lg"><User size={24}/></div>
-                          <div>
-                              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Packages Sold</p>
-                              <p className="text-2xl font-bold text-gray-900">{history.filter(h => h.type === 'Package Sold').length}</p>
-                          </div>
-                       </div>
-                  </div>
-
-                  {/* Activity Table */}
-                  <div className="flex-1 overflow-hidden flex flex-col px-6 pb-6">
-                      <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex-1 overflow-hidden flex flex-col">
-                          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50/50">
-                              <h3 className="font-semibold text-gray-800">Activity History</h3>
-                          </div>
-                          <div className="flex-1 overflow-y-auto">
-                              <table className="w-full text-left">
-                                  <thead className="bg-gray-50 sticky top-0 z-10">
-                                      <tr>
-                                          <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
-                                          <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                                          <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Details</th>
-                                          <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Revenue Credit</th>
-                                      </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-gray-100">
-                                      {statsLoading ? (
-                                          <tr><td colSpan={4} className="p-12 text-center text-gray-400">Loading data...</td></tr>
-                                      ) : history.length === 0 ? (
-                                          <tr><td colSpan={4} className="p-12 text-center text-gray-400">No records found.</td></tr>
-                                      ) : (
-                                          history.map(row => (
-                                              <tr key={row.id} className="hover:bg-gray-50">
-                                                  <td className="px-6 py-3 text-sm text-gray-500 whitespace-nowrap">
-                                                      {new Date(row.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                                                  </td>
-                                                  <td className="px-6 py-3 text-sm">
-                                                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${row.type === 'Service' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
-                                                          {row.type}
-                                                      </span>
-                                                  </td>
-                                                  <td className="px-6 py-3 text-sm text-gray-800">
-                                                      <div className="font-medium">{row.name}</div>
-                                                      <div className="text-xs text-gray-500">{row.treatment}</div>
-                                                  </td>
-                                                  <td className="px-6 py-3 text-sm font-bold text-gray-700 text-right">
-                                                      {formatCurrency(row.amount)}
-                                                  </td>
-                                              </tr>
-                                          ))
-                                      )}
-                                  </tbody>
-                              </table>
-                          </div>
-                      </div>
-                  </div>
-              </>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-gray-400 p-10">
-                <Briefcase size={48} className="mb-4 text-gray-300" />
-                <p>Select an employee from the list to view their performance stats.</p>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openEditModalFor(selectedEmployee)} className="flex items-center gap-2 px-3 py-2 bg-white border rounded hover:bg-gray-50">
+                    <Edit3 size={14} /> <span className="text-black">Edit</span>
+                  </button>
+                  <button onClick={() => setConfirmDeleteOpen(true)} className="flex items-center gap-2 px-3 py-2 bg-red-50 text-red-700 border rounded hover:bg-red-100">
+                    <Trash2 size={14} /> <span className="text-black">Delete</span>
+                  </button>
+                </div>
               </div>
-            )}
+              {/* Stat cards */}
+              <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-4 rounded-xl shadow-sm border">
+                  <div className="flex items-center gap-3">
+                    <TrendingUp size={20} />
+                    <div>
+                      <div className="text-xs text-black">Total Revenue</div>
+                      <div className="text-xl font-bold text-black">{formatCurrency(totalRevenue)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl shadow-sm border">
+                  <div className="flex items-center gap-3">
+                    <Briefcase size={20} />
+                    <div>
+                      <div className="text-xs text-black">Services Done</div>
+                      <div className="text-xl font-bold text-black">{history.filter(h => h.type === 'Service').length}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl shadow-sm border">
+                  <div className="flex items-center gap-3">
+                    <User size={20} />
+                    <div>
+                      <div className="text-xs text-black">Packages Sold</div>
+                      <div className="text-xl font-bold text-black">{history.filter(h => h.type === 'Package Sold').length}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Activity */}
+              <div className="flex-1 px-6 pb-6 overflow-auto">
+                <div className="bg-white rounded-xl shadow-sm border">
+                  <div className="px-6 py-4 border-b">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold text-black">Activity History</h3>
+                      <div className="flex items-center gap-2">
+                        <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="px-2 py-1 border rounded text-black" />
+                        <span className="text-black">to</span>
+                        <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="px-2 py-1 border rounded text-black" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-6 py-3 text-xs text-black">Date</th>
+                          <th className="px-6 py-3 text-xs text-black">Type</th>
+                          <th className="px-6 py-3 text-xs text-black">Details</th>
+                          <th className="px-6 py-3 text-xs text-black text-right">Revenue</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {statsLoading ? (
+                          <tr><td colSpan={4} className="p-8 text-center text-black">Loading...</td></tr>
+                        ) : history.length === 0 ? (
+                          <tr><td colSpan={4} className="p-8 text-center text-black">No records found.</td></tr>
+                        ) : (
+                          history.map(r => (
+                            <tr key={r.id} className="hover:bg-gray-50">
+                              <td className="px-6 py-3 text-sm text-black">
+                                {new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                              </td>
+                              <td className="px-6 py-3 text-sm text-black">{r.type}</td>
+                              <td className="px-6 py-3 text-sm text-black">
+                                <div className="font-medium text-black">{r.name}</div>
+                                <div className="text-xs text-black">{r.treatment}</div>
+                              </td>
+                              <td className="px-6 py-3 text-sm font-bold text-right text-black">{formatCurrency(r.amount)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="h-full flex items-center justify-center text-black">
+              <div className="text-center">
+                <Briefcase size={48} className="mx-auto text-black mb-4" />
+                <div className="text-black">Select an employee to view details</div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* --- Add Employee Modal --- */}
+      {/* Add Employee Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-                <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold text-gray-800">Add Employee</h2>
-                    <button onClick={() => setIsAddModalOpen(false)}><X className="text-gray-500" /></button>
-                </div>
-                <form onSubmit={handleAddEmployee} className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                        <input className="w-full p-2 border rounded text-black" value={newEmpName} onChange={e => setNewEmpName(e.target.value)} required />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Mobile</label>
-                        <input className="w-full p-2 border rounded text-black" value={newEmpMobile} onChange={e => setNewEmpMobile(e.target.value)} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-                            <select className="w-full p-2 border rounded bg-white text-black" value={newEmpRole} onChange={e => setNewEmpRole(e.target.value as any)}>
-                                <option value="therapist">Therapist</option>
-                                <option value="manager">Manager</option>
-                                <option value="housekeeping">Housekeeping</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Home Outlet</label>
-                            <select className="w-full p-2 border rounded bg-white text-black" value={newEmpOutlet} onChange={e => setNewEmpOutlet(e.target.value)}>
-                                {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                            </select>
-                        </div>
-                    </div>
-                    <button type="submit" disabled={isAdding} className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium disabled:opacity-50">
-                        {isAdding ? 'Saving...' : 'Add Employee'}
-                    </button>
-                </form>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-black">Add Employee</h2>
+              <button onClick={() => setIsAddModalOpen(false)}><X className="text-black" /></button>
             </div>
+            <form onSubmit={handleAddEmployee} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">Name</label>
+                <input className="w-full p-2 border rounded text-black" value={newEmpName} onChange={e => setNewEmpName(e.target.value)} required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">Mobile</label>
+                <input className="w-full p-2 border rounded text-black" value={newEmpMobile} onChange={e => setNewEmpMobile(e.target.value)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-black mb-1">Role</label>
+                  <select className="w-full p-2 border rounded text-black" value={newEmpRole} onChange={e => setNewEmpRole(e.target.value as any)}>
+                    <option value="therapist">Therapist</option>
+                    <option value="manager">Manager</option>
+                    <option value="housekeeping">Housekeeping</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-black mb-1">Home Outlet</label>
+                  <select className="w-full p-2 border rounded text-black" value={newEmpOutlet} onChange={e => setNewEmpOutlet(e.target.value)}>
+                    {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button type="submit" disabled={isAdding} className="flex-1 py-2 bg-blue-600 text-white rounded">
+                  {isAdding ? 'Saving...' : 'Add Employee'}
+                </button>
+                <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 py-2 border rounded text-black">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Employee Modal */}
+      {isEditModalOpen && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-black">Edit Employee</h2>
+              <button onClick={() => setIsEditModalOpen(false)}><X className="text-black" /></button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">Name</label>
+                <input className="w-full p-2 border rounded text-black" value={editName} onChange={e => setEditName(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-black mb-1">Mobile</label>
+                <input className="w-full p-2 border rounded text-black" value={editMobile} onChange={e => setEditMobile(e.target.value)} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-black mb-1">Role</label>
+                  <select className="w-full p-2 border rounded text-black" value={editRole} onChange={e => setEditRole(e.target.value as any)}>
+                    <option value="therapist">Therapist</option>
+                    <option value="manager">Manager</option>
+                    <option value="housekeeping">Housekeeping</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-black mb-1">Home Outlet</label>
+                  <select className="w-full p-2 border rounded text-black" value={editOutlet} onChange={e => setEditOutlet(e.target.value)}>
+                    {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button onClick={saveEdit} disabled={isSavingEdit} className="flex-1 py-2 bg-green-600 text-white rounded">
+                  {isSavingEdit ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button type="button" onClick={() => { setIsEditModalOpen(false); }} className="flex-1 py-2 border rounded text-black">Cancel</button>
+              </div>
+
+              <div className="border-t pt-3">
+                <button onClick={() => setConfirmDeleteOpen(true)} className="w-full py-2 bg-red-50 text-red-700 border rounded flex items-center justify-center gap-2">
+                  <Trash2 size={14} /> <span className="text-black">Delete Employee</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Delete Modal */}
+      {confirmDeleteOpen && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-semibold text-black mb-3">Confirm Delete</h3>
+            <p className="text-sm text-black mb-4">Are you sure you want to remove <strong>{selectedEmployee.name}</strong>? This will deactivate the employee and clear their references from activity records.</p>
+            <div className="flex gap-3">
+              <button onClick={deleteEmployee} disabled={isDeleting} className="flex-1 py-2 bg-red-600 text-white rounded">
+                {isDeleting ? 'Deleting...' : 'Yes, Delete'}
+              </button>
+              <button onClick={() => setConfirmDeleteOpen(false)} className="flex-1 py-2 border rounded text-black">Cancel</button>
+            </div>
+          </div>
         </div>
       )}
     </>
