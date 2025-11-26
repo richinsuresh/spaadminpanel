@@ -35,6 +35,7 @@ const formatDate = (dateString: string) => {
 const extractSaleIds = (text: string): string[] => {
   if (!text) return [];
   const ids = new Set<string>();
+  // allow patterns like "sale id: abc123", "sale: abc123", "id: abc123"
   const regex = /(?:sale[\s-_]*id|sale|id)\s*[:#-]?\s*([a-z0-9-]{6,80})/ig;
   let m;
   while ((m = regex.exec(text))) {
@@ -207,8 +208,10 @@ export default function ActivityPage() {
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   useEffect(() => {
+    // Subscribe to activity_logs INSERT (existing behavior) AND also listen for employees/customers changes
     const channel = supabase
       .channel('activity-monitor')
+      // activity log inserts
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'activity_logs' },
@@ -216,12 +219,29 @@ export default function ActivityPage() {
           fetchLogs().catch((e) => console.warn('Failed to refresh logs after insert', e));
         }
       )
+      // any change (insert/update/delete) to employees should refresh activity logs view
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'employees' },
+        (payload) => {
+          // optional: you can synthesize a log entry here, but simplest is to refresh logs
+          fetchLogs().catch((e) => console.warn('Failed to refresh logs after employees change', e));
+        }
+      )
+      // any change to customers (because employee page updates customers references) should refresh
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'customers' },
+        (payload) => {
+          fetchLogs().catch((e) => console.warn('Failed to refresh logs after customers change', e));
+        }
+      )
       .subscribe();
 
     return () => {
       try {
-        if ((channel as any).unsubscribe) (channel as any).unsubscribe();
-        else if ((supabase as any).removeChannel) (supabase as any).removeChannel(channel);
+        // removeChannel works with the channel object returned
+        (supabase as any).removeChannel(channel);
       } catch (e) {
         console.warn('Failed to remove realtime channel', e);
       }
