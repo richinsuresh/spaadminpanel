@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { Loader2, MapPin, User, LogIn, LogOut, CalendarX, Coffee, Clock, ChevronRight } from 'lucide-react';
@@ -13,6 +13,15 @@ type Employee = {
   current_attendance_id: string | null;
 };
 
+// Added fields to track the status of the current attendance record
+type CurrentAttendanceRecord = {
+    id: string;
+    check_out_time: string | null;
+    early_checkout_requested: boolean;
+    early_checkout_request_time: string | null;
+} | null;
+
+
 export default function EmployeeCheckInPage() {
   const [loading, setLoading] = useState(false);
   const [selectedOutlet, setSelectedOutlet] = useState('');
@@ -20,7 +29,25 @@ export default function EmployeeCheckInPage() {
   const [selectedEmpId, setSelectedEmpId] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  
+  // --- NEW STATE: Tracks the current attendance record details ---
+  const [currentAttendanceRecord, setCurrentAttendanceRecord] = useState<CurrentAttendanceRecord>(null);
 
+
+  // --- Helper to determine if it's after 7:30 PM IST (19:30) ---
+  const isAfterCutoffTime = (date: Date) => {
+      const cutoffHour = 19; // 7 PM
+      const cutoffMinute = 30; // 30 minutes
+
+      // Create a date object for 19:30 today
+      const cutoffTime = new Date(date);
+      cutoffTime.setHours(cutoffHour, cutoffMinute, 0, 0);
+
+      return date.getTime() >= cutoffTime.getTime();
+  };
+
+  
+  // --- Initialization and Real-time Time Update ---
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
 
@@ -40,8 +67,26 @@ export default function EmployeeCheckInPage() {
 
     return () => clearInterval(timer);
   }, []);
-
+  
   const selectedEmployee = employees.find(e => e.id === selectedEmpId);
+
+  // --- NEW useEffect: Fetch the current attendance record for status check ---
+  useEffect(() => {
+      if (selectedEmployee && selectedEmployee.is_checked_in && selectedEmployee.current_attendance_id) {
+          const fetchCurrentRecord = async () => {
+              const { data } = await supabase
+                  .from('attendance')
+                  .select(`id, check_out_time, early_checkout_requested, early_checkout_request_time`)
+                  .eq('id', selectedEmployee.current_attendance_id)
+                  .single();
+              setCurrentAttendanceRecord(data as CurrentAttendanceRecord);
+          };
+          fetchCurrentRecord();
+      } else {
+          setCurrentAttendanceRecord(null);
+      }
+  }, [selectedEmployee]); // Reruns when the selected employee changes
+
 
   const handleCheckIn = async () => {
     if (!selectedEmployee) {
@@ -68,7 +113,10 @@ export default function EmployeeCheckInPage() {
           outlet_id: selectedOutlet,
           outlet_name: outletObj?.name,
           check_in_time: checkInTime,
-          status: 'checked_in'
+          status: 'checked_in',
+          // Set new fields to default false/null
+          early_checkout_requested: false, 
+          early_checkout_request_time: null
         })
         .select('id')
         .single();
@@ -89,6 +137,15 @@ export default function EmployeeCheckInPage() {
           ? { ...e, is_checked_in: true, current_attendance_id: attData.id }
           : e
       ));
+      
+      // Update the current record state immediately
+      setCurrentAttendanceRecord({ 
+          id: attData.id, 
+          check_out_time: null, 
+          early_checkout_requested: false, 
+          early_checkout_request_time: null 
+      });
+
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || 'Check-in failed' });
     } finally {
@@ -96,52 +153,110 @@ export default function EmployeeCheckInPage() {
     }
   };
 
-  const handleCheckOut = async () => {
-    if (!selectedEmployee) {
-      setStatusMsg({ type: 'error', text: 'Please select your name.' });
-      return;
-    }
-    if (!selectedEmployee.current_attendance_id) {
-      setStatusMsg({ type: 'error', text: 'No active check-in found to log out from.' });
-      return;
-    }
+  // --- RENAMED: Performs the final, approved checkout ---
+  const performFinalCheckOut = async () => {
+      if (!selectedEmployee || !selectedEmployee.current_attendance_id) {
+          setStatusMsg({ type: 'error', text: 'No active check-in found to log out from.' });
+          return false;
+      }
 
-    setLoading(true);
-    setStatusMsg(null);
+      setLoading(true);
+      setStatusMsg(null);
 
-    const checkOutTime = new Date().toISOString();
+      const checkOutTime = new Date().toISOString();
 
-    try {
-      const { error: attError } = await supabase
-        .from('attendance')
-        .update({
-          check_out_time: checkOutTime,
-          status: 'checked_out'
-        })
-        .eq('id', selectedEmployee.current_attendance_id);
+      try {
+          const { error: attError } = await supabase
+              .from('attendance')
+              .update({
+                  check_out_time: checkOutTime,
+                  status: 'completed',
+                  early_checkout_requested: false, // Ensure request status is false on completion
+              })
+              .eq('id', selectedEmployee.current_attendance_id);
 
-      if (attError) throw attError;
+          if (attError) throw attError;
 
-      const { error: empError } = await supabase
-        .from('employees')
-        .update({ is_checked_in: false, current_attendance_id: null })
-        .eq('id', selectedEmployee.id);
+          const { error: empError } = await supabase
+              .from('employees')
+              .update({ is_checked_in: false, current_attendance_id: null })
+              .eq('id', selectedEmployee.id);
 
-      if (empError) throw empError;
+          if (empError) throw empError;
 
-      setStatusMsg({ type: 'success', text: `👋 Goodbye, ${selectedEmployee.name}! Logged out at ${new Date(checkOutTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}.` });
+          setStatusMsg({ type: 'success', text: `👋 Goodbye, ${selectedEmployee.name}! Logged out at ${new Date(checkOutTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}.` });
 
-      setEmployees(prev => prev.map(e =>
-        e.id === selectedEmployee.id
-          ? { ...e, is_checked_in: false, current_attendance_id: null }
-          : e
-      ));
-    } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || 'Check-out failed' });
-    } finally {
-      setLoading(false);
-    }
+          setEmployees(prev => prev.map(e =>
+              e.id === selectedEmployee.id
+                  ? { ...e, is_checked_in: false, current_attendance_id: null }
+                  : e
+          ));
+          setCurrentAttendanceRecord(null);
+          return true;
+      } catch (err: any) {
+          setStatusMsg({ type: 'error', text: err?.message || 'Check-out failed' });
+          return false;
+      } finally {
+          setLoading(false);
+      }
   };
+
+  // --- NEW: Function to submit an early request ---
+  const submitEarlyCheckoutRequest = async () => {
+      if (!selectedEmployee || !selectedEmployee.current_attendance_id) return;
+      
+      setLoading(true);
+      setStatusMsg(null);
+
+      try {
+          const requestTime = new Date().toISOString();
+          
+          const { error } = await supabase
+              .from('attendance')
+              .update({
+                  early_checkout_requested: true,
+                  early_checkout_request_time: requestTime,
+                  status: 'request_pending' // Helps admin see pending status
+              })
+              .eq('id', selectedEmployee.current_attendance_id);
+
+          if (error) throw error;
+          
+          // Manually update the local record state
+          setCurrentAttendanceRecord(prev => prev ? {...prev, early_checkout_requested: true, early_checkout_request_time: requestTime} : null);
+          setStatusMsg({ type: 'success', text: `⏳ Early checkout requested at ${new Date(requestTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}. Waiting for Admin approval.` });
+
+      } catch (err: any) {
+          setStatusMsg({ type: 'error', text: err?.message || 'Request failed.' });
+      } finally {
+          setLoading(false);
+      }
+  };
+
+
+  // --- NEW: Main handler for Log Out button click (checks time) ---
+  const handleAttemptCheckOut = () => {
+      if (!selectedEmployee) {
+          setStatusMsg({ type: 'error', text: 'Please select your name.' });
+          return;
+      }
+
+      const now = new Date();
+      
+      // 1. If it's after 7:30 PM, allow normal checkout
+      if (isAfterCutoffTime(now)) {
+          performFinalCheckOut();
+          return;
+      }
+
+      // 2. If it's before 7:30 PM, prompt for request
+      if (confirm(`The required minimum shift time is until 7:30 PM. Would you like to submit a request for an early log out?`)) {
+          submitEarlyCheckoutRequest();
+      } else {
+          setStatusMsg({ type: 'error', text: 'Checkout cancelled. Please log out after 7:30 PM, or submit a request.' });
+      }
+  };
+
 
   const handleMarkStatus = async (status: 'leave' | 'off') => {
     if (!selectedEmployee) {
@@ -241,7 +356,7 @@ export default function EmployeeCheckInPage() {
             {/* Outlet Select (only when logging in) */}
             {selectedEmployee && !selectedEmployee.is_checked_in && (
               <div className="space-y-2 animate-in fade-in slide-in-from-top-4 duration-300">
-                <label className="text-sm font-semibold text-gray-700">Where are you today?</label>
+                <label className="block text-sm font-semibold text-gray-700">Where are you today?</label>
                 <div className="relative">
                   <select
                     value={selectedOutlet}
@@ -261,7 +376,7 @@ export default function EmployeeCheckInPage() {
             {/* Display current action time (read-only) */}
             {selectedEmployee && (
               <div className="space-y-2 animate-in fade-in slide-in-from-top-4 duration-300">
-                <label className="text-sm font-semibold text-gray-700">
+                <label className="block text-sm font-semibold text-gray-700">
                   {selectedEmployee.is_checked_in ? 'Time of Departure' : 'Time of Arrival'}
                 </label>
                 <div className="relative">
@@ -277,14 +392,29 @@ export default function EmployeeCheckInPage() {
             {selectedEmployee && (
               <div className="pt-4 space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 {selectedEmployee.is_checked_in ? (
-                  <button
-                    onClick={handleCheckOut}
-                    disabled={loading}
-                    className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loading ? <Loader2 className="animate-spin" /> : <><LogOut size={20} /> Log Out Now</>}
-                  </button>
+                    // --- LOGOUT ACTIONS (UPDATED) ---
+                    <>
+                        {/* 1. Show PENDING status if request is active */}
+                        {currentAttendanceRecord?.early_checkout_requested ? (
+                            <button
+                                disabled
+                                className="w-full py-4 bg-yellow-500 text-white rounded-xl font-bold text-lg shadow-lg shadow-yellow-200 flex items-center justify-center gap-2 disabled:opacity-80 disabled:cursor-wait"
+                            >
+                                <Loader2 className="animate-spin" /> Early Checkout Request Pending...
+                            </button>
+                        ) : (
+                            // 2. Default Log Out button, which uses the time check logic
+                            <button
+                                onClick={handleAttemptCheckOut} // <--- NEW ENTRY POINT
+                                disabled={loading}
+                                className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {loading ? <Loader2 className="animate-spin" /> : <><LogOut size={20} /> Log Out</>}
+                            </button>
+                        )}
+                    </>
                 ) : (
+                  // --- LOGIN ACTIONS (UNCHANGED) ---
                   <div className="space-y-3">
                     <button
                       onClick={handleCheckIn}
