@@ -1,3 +1,4 @@
+// src/app/client-success/page.tsx
 'use client';
 
 import { useEffect, useState, Suspense } from 'react';
@@ -11,22 +12,44 @@ function SuccessContent() {
   const searchParams = useSearchParams();
   const outletId = searchParams.get('outletId');
   
+  // Set default button text to handle cases where outletId is missing
   const [outletName, setOutletName] = useState('Home');
+  const [redirectPath, setRedirectPath] = useState('/');
 
   useEffect(() => {
+    let path = '/';
+    let name = 'Client Form';
+
     if (outletId) {
+      // 1. Find the outlet name for the button text (and clean up the name if needed)
       const found = OUTLETS.find(o => o.id === outletId);
-      if (found) setOutletName(found.name);
+      if (found) {
+        // Assuming the full name is like "Berry Spa - Location", we display only "Location"
+        name = found.name.replace('Berry Spa - ', '');
+      }
+      
+      // 2. Set the correct redirection path to the client form
+      path = `/client-form/${outletId}`;
+      setOutletName(name);
     }
-  }, [outletId]);
+    
+    setRedirectPath(path);
+
+    // --- AUTOMATIC REDIRECT ---
+    const timer = setTimeout(() => {
+        router.push(path);
+    }, 5000);
+
+    return () => clearTimeout(timer); // Cleanup timer on component unmount
+  }, [outletId, router]);
 
   const handleGoBack = () => {
-    if (outletId) {
-      router.push(`/client-form/${outletId}`);
-    } else {
-      router.push('/');
-    }
+    // This button redirects to the dynamically set path (client form or default home)
+    router.push(redirectPath);
   };
+
+  // Determine the final button text
+  const buttonText = outletId ? `Back to ${outletName} Form` : 'Back to Home';
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 text-center">
@@ -47,7 +70,7 @@ function SuccessContent() {
             className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-blue-500/30"
           >
             <ArrowLeft size={20} />
-            Back to {outletName}
+            {buttonText}
           </button>
         </div>
       </div>

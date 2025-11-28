@@ -1,3 +1,4 @@
+// src/app/ActivityPage.tsx
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -178,6 +179,7 @@ export default function ActivityPage() {
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
+      // Fetches ALL logs from the 'activity_logs' table (up to 500 records)
       const { data, error } = await supabase
         .from('activity_logs')
         .select('*')
@@ -208,15 +210,17 @@ export default function ActivityPage() {
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   useEffect(() => {
-    // Subscribe to activity_logs INSERT (existing behavior) AND also listen for employees/customers changes
+    if (isLoading) return; // Wait for user loading to complete before subscribing
+
     const channel = supabase
       .channel('activity-monitor')
-      // activity log inserts
+      // activity log changes - subscribing to '*' ensures we capture all activity
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'activity_logs' },
+        // FIX: Change event from 'INSERT' to '*' to capture all activity (Updates, Deletes, Inserts)
+        { event: '*', schema: 'public', table: 'activity_logs' }, 
         () => {
-          fetchLogs().catch((e) => console.warn('Failed to refresh logs after insert', e));
+          fetchLogs().catch((e) => console.warn('Failed to refresh logs after change', e));
         }
       )
       // any change (insert/update/delete) to employees should refresh activity logs view
@@ -224,7 +228,7 @@ export default function ActivityPage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'employees' },
         (payload) => {
-          // optional: you can synthesize a log entry here, but simplest is to refresh logs
+          // Refresh logs to update enriched data if an employee change indirectly affects a log display
           fetchLogs().catch((e) => console.warn('Failed to refresh logs after employees change', e));
         }
       )
@@ -246,7 +250,7 @@ export default function ActivityPage() {
         console.warn('Failed to remove realtime channel', e);
       }
     };
-  }, [fetchLogs]);
+  }, [fetchLogs, isLoading]); // Added isLoading to dependency array
 
   useEffect(() => {
     if (!searchTerm) {
@@ -298,7 +302,7 @@ export default function ActivityPage() {
       <div className="flex flex-col items-center justify-center h-[60vh] text-gray-500">
         <ShieldAlert className="h-16 w-16 text-red-500 mb-4" />
         <h2 className="text-2xl font-bold text-gray-800">Access Denied</h2>
-        <p>Only the Developer can view the Activity Logs.</p>
+        <p>Only the Developer can view the **Activity Logs**.</p>
       </div>
     );
   }
@@ -328,7 +332,7 @@ export default function ActivityPage() {
             onClick={handleExport}
             className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium"
           >
-            <FileText size={16} /> Export
+            <FileText size={16} /> **Export**
           </button>
         </div>
       </div>

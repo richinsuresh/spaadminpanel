@@ -1,3 +1,4 @@
+// src/app/client-form/[outletId]/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -425,7 +426,9 @@ export default function ClientCheckinForm() {
         setSuccess('Registration complete. Redirecting to payment QR...');
         const amountInRupees = data.finalAmountInPaise / 100;
         setTimeout(() => {
-          router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}`);
+          // FIX: Pass outletId explicitly in the query string 
+          // to ensure the back button on the UPI page redirects correctly.
+          router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}&outletId=${data.outlet_id}`);
         }, 1500);
       } 
       else {

@@ -1,9 +1,10 @@
+// src/app/(protected)/dashboard/outlets/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
-import { Trash2, AlertTriangle, Loader2, X, Clock } from 'lucide-react'; // Added Clock icon
+import { Trash2, AlertTriangle, Loader2, X, Clock } from 'lucide-react';
 
 type Employee = {
   id: string;
@@ -11,7 +12,6 @@ type Employee = {
   role: string;
 };
 
-// --- UPDATED TYPE ---
 type AttendanceRecord = {
   id: string; 
   date: string;
@@ -22,10 +22,32 @@ type AttendanceRecord = {
   check_in_time: string | null;
   check_out_time: string | null;
   status: string; 
-  // NEW FIELDS FOR REQUEST
-  early_checkout_requested: boolean; // True if employee requested early checkout
-  early_checkout_request_time: string | null; // Time of request
+  early_checkout_requested: boolean;
+  early_checkout_request_time: string | null;
 };
+
+// --- DATE HELPERS FOR IST ---
+// India Standard Time (IST) is UTC + 5:30.
+const IST_OFFSET_MINUTES = 5.5 * 60; 
+
+// Gets the current date string (YYYY-MM-DD) based on IST
+const getISTDateString = (date?: Date): string => {
+    const now = date || new Date();
+    const localOffset = now.getTimezoneOffset(); 
+    // Calculate time adjusted to IST
+    const istTime = new Date(now.getTime() + (IST_OFFSET_MINUTES + localOffset) * 60 * 1000);
+    
+    return istTime.toISOString().split('T')[0];
+};
+
+// Gets the date string for the day *before* the current IST day
+const getYesterdayISTDateString = (todayString: string): string => {
+    const today = new Date(todayString);
+    today.setDate(today.getDate() - 1);
+    return getISTDateString(today);
+};
+// ----------------------------
+
 
 const getStatusBadge = (status: string, checkOutTime: string | null) => {
   if (status === 'leave') return <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-full">On Leave</span>;
@@ -36,29 +58,28 @@ const getStatusBadge = (status: string, checkOutTime: string | null) => {
 
 const formatTime = (dateStr: string | null) => {
   if (!dateStr) return '—';
-  // Use toLocaleTimeString for time formatting
-  return new Date(dateStr).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  // Formatting in IST for consistency
+  return new Date(dateStr).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 };
 
 export default function AttendancePage() {
+  const [currentISTDate] = useState(getISTDateString());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState(new Date().toISOString().split('T')[0]);
+  const [dateFilter, setDateFilter] = useState(currentISTDate); // Initialize with today's IST date
   const [outletFilter, setOutletFilter] = useState('all');
 
-  // --- Clear ALL History State (Unchanged) ---
+  // ... (Other state variables remain the same)
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
   const [clearError, setClearError] = useState('');
   const [isClearing, setIsClearing] = useState(false);
   
-  // --- Single Record Clear State (Unchanged) ---
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
   const [isSingleDeleting, setIsSingleDeleting] = useState(false);
   
-  // --- NEW: Early Checkout Approval State ---
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
   const [isApproving, setIsApproving] = useState(false);
@@ -71,12 +92,11 @@ export default function AttendancePage() {
 
   const fetchAttendance = useCallback(async () => {
     try {
-      // NOTE: We now select the new early_checkout fields
       let query = supabase
         .from('attendance')
         .select(`*, 
                 early_checkout_requested, 
-                early_checkout_request_time`) // Ensure these fields are fetched
+                early_checkout_request_time`)
         .eq('date', dateFilter);
 
       if (outletFilter !== 'all') {
@@ -93,13 +113,71 @@ export default function AttendancePage() {
     }
   }, [dateFilter, outletFilter]);
 
-  // Initial Load & Real-time Auto Refresh (Unchanged)
+  // --- NEW: Daily Reset/Force Logout Logic ---
+  const forceLogoutPreviousDay = useCallback(async () => {
+    // 11:59:59 PM IST of yesterday's date
+    const yesterday = getYesterdayISTDateString(currentISTDate);
+    const midnightOfYesterdayIST = `${yesterday}T23:59:59.000+05:30`; 
+
+    try {
+        // Find all records from a previous day that are still active (check_out_time is null)
+        const { data: oldRecords, error: fetchError } = await supabase
+            .from('attendance')
+            .select('id, employee_id')
+            .lt('date', currentISTDate) // Records from any day before today
+            .is('check_out_time', null);
+
+        if (fetchError) throw fetchError;
+
+        if (oldRecords && oldRecords.length > 0) {
+            console.log(`[Auto Logout] Found ${oldRecords.length} employees checked-in on previous days.`);
+
+            const recordIds = oldRecords.map(r => r.id);
+            const employeeIds = oldRecords.map(r => r.employee_id);
+
+            // 2. Force update attendance records: Set check_out_time to midnight of the previous day
+            const { error: updateRecordsError } = await supabase
+                .from('attendance')
+                .update({ 
+                    check_out_time: midnightOfYesterdayIST,
+                    status: 'Completed (Auto Logout)',
+                    early_checkout_requested: false,
+                })
+                .in('id', recordIds);
+            
+            if (updateRecordsError) throw updateRecordsError;
+
+            // 3. Reset employee status for all affected employees
+            const { error: updateEmployeesError } = await supabase
+                .from('employees')
+                .update({ is_checked_in: false, current_attendance_id: null })
+                .in('id', employeeIds);
+            
+            if (updateEmployeesError) throw updateEmployeesError;
+
+            console.log('[Auto Logout] Previous day attendance reset successful.');
+        }
+
+    } catch (err) {
+        console.error('[Auto Logout] Error during automatic reset:', err);
+    }
+  }, [currentISTDate]);
+  // ---------------------------------------------
+
+
+  // Initial Load & Daily Reset Trigger
   useEffect(() => {
     setLoading(true);
     fetchEmployees();
-    fetchAttendance();
-  }, [fetchEmployees, fetchAttendance]);
+    
+    // Check and perform auto-logout before fetching today's records
+    forceLogoutPreviousDay().then(() => {
+        fetchAttendance();
+    });
+    
+  }, [fetchEmployees, fetchAttendance, forceLogoutPreviousDay]);
 
+  // Real-time Auto Refresh (Unchanged)
   useEffect(() => {
     const channel = supabase
       .channel('admin-attendance-realtime')
@@ -131,17 +209,22 @@ export default function AttendancePage() {
 
     setIsClearing(true);
     try {
-      const { error } = await supabase
+      // 1. Delete all attendance records
+      const { error: deleteError } = await supabase
         .from('attendance')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
 
-      if (error) throw error;
+      if (deleteError) throw deleteError;
 
-      await supabase
+      // 2. Reset employee status
+      const { error: employeeResetError } = await supabase
         .from('employees')
         .update({ is_checked_in: false, current_attendance_id: null })
         .neq('id', '00000000-0000-0000-0000-000000000000');
+        
+      if (employeeResetError) throw employeeResetError;
+
 
       alert('Attendance history cleared successfully.');
       setIsClearModalOpen(false);
@@ -162,17 +245,15 @@ export default function AttendancePage() {
     
     try {
       // 1. Check if the deleted record is the employee's current check-in record
-      const isCurrentRecord = records.some(r => 
-        r.employee_id === recordToDelete.employee_id && 
-        r.id === recordToDelete.id && 
-        !r.check_out_time
-      );
+      // This is necessary because we are deleting a record that might have been force-logged out by the new logic.
+      const employeeData = await supabase.from('employees').select('current_attendance_id').eq('id', recordToDelete.employee_id).single();
+      const isCurrentRecord = employeeData.data?.current_attendance_id === recordToDelete.id;
 
       // 2. Delete the specific attendance record
       const { error: deleteError } = await supabase
         .from('attendance')
         .delete()
-        .eq('id', recordToDelete.id); // <-- Targets the single record by its ID
+        .eq('id', recordToDelete.id); 
 
       if (deleteError) throw deleteError;
 
@@ -186,7 +267,6 @@ export default function AttendancePage() {
 
       alert(`Attendance record for ${recordToDelete.employee_name} on ${recordToDelete.date} deleted.`);
       
-      // Close modal and clear state
       setRecordToDelete(null);
       setIsSingleDeleteModalOpen(false);
     } catch (err: any) {
@@ -198,21 +278,20 @@ export default function AttendancePage() {
   };
 
 
-  // --- NEW: Handle Approve Early Checkout ---
+  // --- Handle Approve Early Checkout (Unchanged from your logic) ---
   const handleApproveEarlyCheckout = async () => {
       if (!requestToApprove || !requestToApprove.early_checkout_request_time) return;
 
       setIsApproving(true);
 
       try {
-          // Use the time the request was made as the check out time to accurately record shift duration
-          const checkOutTime = requestToApprove.early_checkout_request_time; 
+          const checkOutTime = new Date().toISOString(); // Use current time of approval as checkout time
           
           // 1. Update the Attendance record: Set check_out_time and remove the request flag
           const { error: recordError } = await supabase
               .from('attendance')
               .update({
-                  check_out_time: checkOutTime, // Use request time
+                  check_out_time: checkOutTime, 
                   early_checkout_requested: false,
                   status: 'Completed' 
               })
@@ -239,6 +318,35 @@ export default function AttendancePage() {
       }
   };
 
+  // --- NEW: Handle Deny Early Checkout ---
+  const handleDenyEarlyCheckout = async () => {
+      if (!requestToApprove) return;
+
+      setIsApproving(true); // Reusing this state for UI feedback
+
+      try {
+          // 1. Update the Attendance record: Reset the request flag to false
+          const { error: recordError } = await supabase
+              .from('attendance')
+              .update({
+                  early_checkout_requested: false,
+                  // Do NOT change check_out_time or status. Employee remains Checked In.
+              })
+              .eq('id', requestToApprove.id);
+
+          if (recordError) throw recordError;
+
+          alert(`Early checkout request for ${requestToApprove.employee_name} denied. Employee remains checked in.`);
+          setRequestToApprove(null);
+          setIsApprovalModalOpen(false);
+      } catch (err: any) {
+          console.error('Deny Error:', err);
+          alert(`Failed to deny request: ${err.message}`);
+      } finally {
+          setIsApproving(false);
+      }
+  };
+
 
   const combinedData = employees.map(emp => {
     const record = records.find(r => r.employee_id === emp.id);
@@ -252,7 +360,7 @@ export default function AttendancePage() {
     ? combinedData 
     : combinedData.filter(item => item.record?.outlet_id === outletFilter);
 
-  // --- Function to open single delete modal (Unchanged) ---
+
   const openSingleDeleteModal = (record: AttendanceRecord) => {
     setRecordToDelete(record);
     setIsSingleDeleteModalOpen(true);
@@ -266,7 +374,6 @@ export default function AttendancePage() {
         <h1 className="text-2xl font-bold text-gray-800">Staff Attendance</h1>
         
         <div className="flex gap-4 items-center">
-          {/* Clear History Button (Optional, can be removed if not needed) */}
           <button 
             onClick={() => setIsClearModalOpen(true)}
             className="p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
@@ -290,7 +397,7 @@ export default function AttendancePage() {
             </select>
           </div>
 
-          {/* Date Filter */}
+          {/* Date Filter: Now allows checking history */}
           <div>
              <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
              <input 
@@ -298,6 +405,8 @@ export default function AttendancePage() {
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
               className="p-2 border rounded-lg text-sm text-gray-800 bg-white outline-none"
+              // Max date is the calculated IST date to prevent querying future dates
+              max={currentISTDate}
             />
           </div>
         </div>
@@ -333,7 +442,7 @@ export default function AttendancePage() {
                     statusDisplay = getStatusBadge(record.status, record.check_out_time);
                   }
                   
-                  // --- NEW: Action Element Logic ---
+                  // Action Element Logic
                   let actionElement = null;
                   
                   if (record && record.early_checkout_requested) {
@@ -344,7 +453,7 @@ export default function AttendancePage() {
                                   setIsApprovalModalOpen(true);
                               }}
                               className="flex items-center gap-1 px-3 py-1 text-xs font-medium bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition"
-                              title={`Approve early checkout request from ${record.employee_name}`}
+                              title={`Review early checkout request from ${record.employee_name}`}
                           >
                               <Clock size={14} /> Review Request
                           </button>
@@ -369,7 +478,6 @@ export default function AttendancePage() {
                   return (
                     <tr key={employee.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {/* Employee Name */}
                         <div className="flex items-center">
                            <div>
                               <div className="text-sm font-medium text-gray-900">{employee.name}</div>
@@ -397,8 +505,8 @@ export default function AttendancePage() {
 
       {/* --- Clear ALL History Modal (Retained) --- */}
       {isClearModalOpen && (
-        // ... (Your existing clear all modal component)
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+           {/* ... (Modal content for Clear ALL History) */}
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
             <button 
               onClick={() => setIsClearModalOpen(false)} 
@@ -453,6 +561,7 @@ export default function AttendancePage() {
       {/* --- Single Record Delete Modal (Retained) --- */}
       {isSingleDeleteModalOpen && recordToDelete && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          {/* ... (Modal content for Single Record Delete) */}
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
             <button 
               onClick={() => setIsSingleDeleteModalOpen(false)} 
@@ -491,29 +600,32 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* --- NEW: Early Checkout Approval Modal --- */}
+      {/* --- Early Checkout Approval Modal (Fixed Deny) --- */}
       {isApprovalModalOpen && requestToApprove && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
                   <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                    <Clock className="text-yellow-500 h-6 w-6"/> Approve Early Checkout
+                    <Clock className="text-yellow-500 h-6 w-6"/> Review Early Checkout Request
                   </h2>
                   <p className="text-sm text-gray-700 mb-6">
                       **{requestToApprove.employee_name}** is requesting to check out early. 
                       The request was submitted at **{formatTime(requestToApprove.early_checkout_request_time)}**.
-                      <span className="font-semibold text-red-600 block mt-2">Approving this will set their official checkout time to the time of request.</span>
+                      <span className="font-semibold text-red-600 block mt-2">
+                          Approving logs them out now. Denying keeps them checked in.
+                      </span>
                   </p>
 
                   <div className="flex gap-3">
+                      {/* --- DENY / CLOSE Button calls the new DENY handler --- */}
                       <button 
-                          onClick={() => {
-                              setRequestToApprove(null);
-                              setIsApprovalModalOpen(false);
-                          }}
-                          className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
+                          onClick={handleDenyEarlyCheckout}
+                          disabled={isApproving}
+                          className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium disabled:opacity-50"
                       >
-                          Deny / Close
+                          {isApproving ? <Loader2 className="animate-spin h-4 w-4 mx-auto"/> : 'Deny Request'}
                       </button>
+                      {/* ---------------------------------------------------- */}
+
                       <button 
                           onClick={handleApproveEarlyCheckout}
                           disabled={isApproving}
