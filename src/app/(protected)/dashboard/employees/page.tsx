@@ -14,9 +14,11 @@ type Employee = {
   name: string;
   mobile?: string | null;
   role: 'therapist' | 'manager' | 'housekeeping';
-  outlet_name: string;
-  outlet_id: string;
+  outlet_name: string; // The employee's designated HOME outlet
+  outlet_id: string; // The employee's designated HOME outlet ID
   is_active?: boolean;
+  // NEW FIELD: Used to store the active outlet from the attendance page
+  current_outlet_name?: string | null; 
 };
 
 type StatRow = {
@@ -74,9 +76,10 @@ export default function EmployeesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      // Fetch the new current_outlet_name column
       const { data: empData } = await supabase
         .from('employees')
-        .select('*')
+        .select('*, current_outlet_name') // Include the new column
         .eq('is_active', true)
         .order('name', { ascending: true });
 
@@ -103,7 +106,8 @@ export default function EmployeesPage() {
         return prev.name === found.name &&
           prev.mobile === found.mobile &&
           prev.role === found.role &&
-          prev.outlet_id === found.outlet_id
+          prev.outlet_id === found.outlet_id &&
+          prev.current_outlet_name === found.current_outlet_name // Include new field check
           ? prev
           : found;
       });
@@ -132,6 +136,22 @@ export default function EmployeesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+  
+  // --- Real-time Subscription ---
+  useEffect(() => {
+    const channel = supabase
+      .channel('employees-page-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
+        // Refresh data whenever the employee table changes (including current_outlet_name)
+        fetchData(); 
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchData]);
+
 
   // --- Filtering UI reaction ---
   useEffect(() => {
@@ -235,6 +255,8 @@ export default function EmployeesPage() {
         outlet_id: newEmpOutlet,
         outlet_name: outletObj?.name || 'Unknown',
         is_active: true,
+        // Initialize current_outlet_name to null on creation
+        current_outlet_name: null, 
       });
 
       await fetchData();
@@ -277,11 +299,13 @@ export default function EmployeesPage() {
           role: editRole,
           outlet_id: editOutlet,
           outlet_name: outletObj?.name || editOutlet,
+          // NOTE: We do NOT update current_outlet_name here, as that is managed by AttendancePage
         })
         .eq('id', selectedEmployee.id);
 
       if (updErr) throw updErr;
 
+      // Update name references in customers table if name changed
       if (oldName !== newName) {
         const { error: c1 } = await supabase
           .from('customers')
@@ -297,7 +321,7 @@ export default function EmployeesPage() {
       }
 
       await fetchData();
-      const refreshed = (await supabase.from('employees').select('*').eq('id', selectedEmployee.id)).data?.[0] ?? null;
+      const refreshed = (await supabase.from('employees').select('*, current_outlet_name').eq('id', selectedEmployee.id)).data?.[0] ?? null;
       setSelectedEmployee(refreshed);
       setIsEditModalOpen(false);
     } catch (err: any) {
@@ -315,10 +339,17 @@ export default function EmployeesPage() {
     try {
       const { error: delErr } = await supabase
         .from('employees')
-        .update({ is_active: false })
+        .update({ 
+            is_active: false,
+            // Reset active status just in case
+            is_checked_in: false, 
+            current_attendance_id: null,
+            current_outlet_name: null // Clear active outlet upon deactivation
+        })
         .eq('id', selectedEmployee.id);
       if (delErr) throw delErr;
 
+      // Clear references in customers table
       const { error: c1 } = await supabase
         .from('customers')
         .update({ therapist_name: null })
@@ -349,6 +380,26 @@ export default function EmployeesPage() {
       case 'housekeeping': return <span className="px-2 py-0.5 rounded text-[10px] bg-gray-100 text-gray-600 font-semibold uppercase tracking-wide">HK</span>;
       default: return <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700 font-semibold uppercase tracking-wide">Therapist</span>;
     }
+  };
+  
+  // NEW HELPER: Determines the display outlet and status
+  const getOutletDisplay = (employee: Employee) => {
+      const activeOutlet = employee.current_outlet_name;
+      const homeOutlet = employee.outlet_name;
+
+      if (activeOutlet) {
+          return (
+              <span className="flex items-center gap-1 text-sm font-semibold text-green-700">
+                  <MapPin size={12}/> **{activeOutlet}** (Active)
+              </span>
+          );
+      }
+      
+      return (
+          <span className="flex items-center gap-1 text-xs text-black">
+              <MapPin size={12}/> {homeOutlet} (Home)
+          </span>
+      );
   };
 
   return (
@@ -410,7 +461,8 @@ export default function EmployeesPage() {
                           <div className="font-semibold text-black">{emp.name}</div>
                           <div className="flex items-center gap-2 mt-1 text-xs text-black">
                             {getRoleBadge(emp.role)}
-                            <span className="flex items-center gap-1 text-black"><MapPin size={12}/> {emp.outlet_name}</span>
+                            {/* Display the dynamically determined outlet */}
+                            {getOutletDisplay(emp)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -440,7 +492,16 @@ export default function EmployeesPage() {
                     <div className="flex items-center gap-4 text-sm text-black mt-1">
                       <span className="flex items-center gap-1"><Briefcase size={14} /> {selectedEmployee.role}</span>
                       <span className="flex items-center gap-1"><Phone size={14} /> {selectedEmployee.mobile || 'N/A'}</span>
-                      <span className="flex items-center gap-1"><MapPin size={14} /> {selectedEmployee.outlet_name}</span>
+                      {/* Detailed Outlet Display */}
+                      <span className="flex items-center gap-1">
+                         <MapPin size={14} /> 
+                         <span className={selectedEmployee.current_outlet_name ? 'font-bold text-green-700' : 'text-black'}>
+                             {selectedEmployee.current_outlet_name || selectedEmployee.outlet_name}
+                         </span>
+                         {selectedEmployee.current_outlet_name && 
+                            <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded-md font-semibold ml-1">Working Now</span>
+                         }
+                      </span>
                     </div>
                   </div>
                 </div>

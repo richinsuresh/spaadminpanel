@@ -81,29 +81,41 @@ export default function ClientCheckinForm() {
   }, [outletId]);
 
   /**
-   * fetchStaff (OUTLET-SPECIFIC)
+   * fetchStaff (OUTLET-SPECIFIC, DYNAMIC)
    * - Only therapists (role = 'therapist')
    * - Only currently checked-in (is_checked_in = true)
-   * - Only for the current outlet (outlet_id)
+   * - CRITICAL: Filters by current_outlet_name matching the current outlet's name.
    */
   const fetchStaff = useCallback(async () => {
     if (!outletId) {
       setEmployees([]);
       return;
     }
+    
+    // 1. Get the current outlet's name based on the URL ID
+    const currentOutletName = OUTLETS.find(o => o.id === outletId)?.name;
+    if (!currentOutletName) {
+      console.error('Outlet name not found for ID:', outletId);
+      setEmployees([]);
+      return;
+    }
 
     try {
+      // NOTE: Supabase selects 'current_outlet_name' implicitly if it's in the table, 
+      // even if not explicitly listed in .select() here, but we rely on the DB
+      // filter to ensure only employees checked into THIS outlet are returned.
       const { data, error } = await supabase
         .from('employees')
         .select('id, name, is_checked_in, role, outlet_id')
         .eq('is_active', true)
         .eq('role', 'therapist')           // only therapists
         .eq('is_checked_in', true)         // only currently checked-in
-        .eq('outlet_id', outletId)         // filter by current outlet
+        // *** CRITICAL CHANGE: Filter by the dynamic current_outlet_name ***
+        .eq('current_outlet_name', currentOutletName) 
         .order('name', { ascending: true });
 
       if (error) {
-        console.error('Error fetching therapists:', error);
+        console.error('Error fetching dynamic therapists:', error);
         setEmployees([]);
         return;
       }
@@ -118,7 +130,9 @@ export default function ClientCheckinForm() {
   /**
    * fetchOutletStaff
    * - Loads all active staff for this outlet (used for "Sold By" dropdown)
-   * - Doesn't require staff to be checked-in (business rule: anyone in outlet can sell)
+   * - We assume the "Sold By" staff must be based at the *home* outlet or currently checked-in
+   * - For simplicity and to match the original logic (which used home outlet), 
+   * we keep this filtering by static `outlet_id`.
    */
   const fetchOutletStaff = useCallback(async () => {
     if (!outletId) {
@@ -177,10 +191,13 @@ export default function ClientCheckinForm() {
 
     const channel = supabase
       .channel(`client-form-realtime-${outletId}`)
-      // listen only for employees changes for this outlet
+      
+      // *** MODIFIED: Remove outletId filter from 'employees' channel ***
+      // This is crucial: we must listen to ALL employee changes, because a staff member
+      // with a different home outlet_id could check in here (updating current_outlet_name).
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'employees', filter: `outlet_id=eq.${outletId}` },
+        { event: '*', schema: 'public', table: 'employees' }, // <-- NO FILTER
         () => {
           // Refresh both therapists and outlet staff on employees change (role/active/check-in may change)
           fetchStaff();
@@ -534,14 +551,11 @@ export default function ClientCheckinForm() {
                   required={true}
                 >
                   <option value="">-- Select Therapist 1 --</option>
-                  {employees.map((emp) => {
-                    const outletName = emp.outlet_id ? (OUTLETS.find(o => o.id === emp.outlet_id)?.name ?? emp.outlet_id) : '';
-                    return (
-                      <option key={emp.id} value={emp.name}>
-                        {emp.is_checked_in ? '🟢 ' : ''}{emp.name}{outletName ? ` — ${outletName}` : ''}
-                      </option>
-                    );
-                  })}
+                  {employees.map((emp) => ( // <-- employees list is now dynamically filtered
+                    <option key={emp.id} value={emp.name}>
+                        {emp.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -582,14 +596,11 @@ export default function ClientCheckinForm() {
                   disabled={loading}
                 >
                   <option value="">-- Select Therapist 2 (optional) --</option>
-                  {employees.map((emp) => {
-                    const outletName = emp.outlet_id ? (OUTLETS.find(o => o.id === emp.outlet_id)?.name ?? emp.outlet_id) : '';
-                    return (
-                      <option key={emp.id} value={emp.name}>
-                        {emp.is_checked_in ? '🟢 ' : ''}{emp.name}{outletName ? ` — ${outletName}` : ''}
-                      </option>
-                    );
-                  })}
+                  {employees.map((emp) => ( // <-- employees list is now dynamically filtered
+                    <option key={emp.id} value={emp.name}>
+                        {emp.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             )}

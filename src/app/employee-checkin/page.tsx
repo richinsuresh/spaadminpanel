@@ -53,6 +53,7 @@ export default function EmployeeCheckInPage() {
 
     const fetchStaff = async () => {
       try {
+        // Fetch all fields, including the static outlet_id and dynamic check-in status
         const { data } = await supabase
           .from('employees')
           .select('id, name, outlet_id, is_checked_in, current_attendance_id')
@@ -103,6 +104,9 @@ export default function EmployeeCheckInPage() {
 
     const outletObj = OUTLETS.find(o => o.id === selectedOutlet);
     const checkInTime = new Date().toISOString();
+    
+    // CRITICAL: Get the outlet name for the employee record
+    const currentOutletName = outletObj?.name || null;
 
     try {
       const { data: attData, error: attError } = await supabase
@@ -111,7 +115,7 @@ export default function EmployeeCheckInPage() {
           employee_id: selectedEmployee.id,
           employee_name: selectedEmployee.name,
           outlet_id: selectedOutlet,
-          outlet_name: outletObj?.name,
+          outlet_name: currentOutletName, // Used for the attendance record
           check_in_time: checkInTime,
           status: 'checked_in',
           // Set new fields to default false/null
@@ -123,9 +127,14 @@ export default function EmployeeCheckInPage() {
 
       if (attError) throw attError;
 
+      // --- CRITICAL UPDATE: Set current_outlet_name in the employees table ---
       const { error: empError } = await supabase
         .from('employees')
-        .update({ is_checked_in: true, current_attendance_id: attData.id })
+        .update({ 
+            is_checked_in: true, 
+            current_attendance_id: attData.id,
+            current_outlet_name: currentOutletName // <--- THIS IS THE MISSING FIELD
+        })
         .eq('id', selectedEmployee.id);
 
       if (empError) throw empError;
@@ -153,7 +162,7 @@ export default function EmployeeCheckInPage() {
     }
   };
 
-  // --- RENAMED: Performs the final, approved checkout ---
+  // --- RENAMED: Performs the final, approved checkout (UPDATED) ---
   const performFinalCheckOut = async () => {
       if (!selectedEmployee || !selectedEmployee.current_attendance_id) {
           setStatusMsg({ type: 'error', text: 'No active check-in found to log out from.' });
@@ -177,10 +186,16 @@ export default function EmployeeCheckInPage() {
 
           if (attError) throw attError;
 
+          // --- CRITICAL UPDATE: Clear check-in status and current_outlet_name ---
           const { error: empError } = await supabase
               .from('employees')
-              .update({ is_checked_in: false, current_attendance_id: null })
+              .update({ 
+                  is_checked_in: false, 
+                  current_attendance_id: null,
+                  current_outlet_name: null // <--- CLEAR THIS FIELD ON LOGOUT
+              })
               .eq('id', selectedEmployee.id);
+          // --- END CRITICAL UPDATE ---
 
           if (empError) throw empError;
 
