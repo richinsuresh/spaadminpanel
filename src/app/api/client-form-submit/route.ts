@@ -103,9 +103,6 @@ export async function POST(req: NextRequest) {
         
         
         // ★★★ RENEWAL LOGIC ★★★
-        // 1. Check for the single, currently active package that the new package should stack onto.
-        // We only check for an *active* package because a new package purchase should only extend
-        // the expiry date of an existing active one, or start a new active one.
         const { data: existingActivePackage, error: findActivePkgError } = await supabase
             .from('packages')
             .select('id, remaining_hours, expiry_date, total_hours, used_hours') 
@@ -126,7 +123,9 @@ export async function POST(req: NextRequest) {
             package_amount: packagePrice,
             package_sold_by: payload.packageSoldBy,
             outlet_id: payload.outlet_id,
-            outlet_name: payload.outlet, // Assume column exists now
+            // ★★★ FIX 1: ADD REQUIRED 'outlet' COLUMN ★★★
+            outlet: payload.outlet, 
+            outlet_name: payload.outlet, // Keeping existing outlet_name mapping
             payment_method: payload.paymentMethod, // Assume column exists now
             status: 'active',
         };
@@ -181,13 +180,15 @@ export async function POST(req: NextRequest) {
             packageDataToSave.total_hours = newTotalHours;
             packageDataToSave.used_hours = 0; // New package starts with 0 used hours
             packageDataToSave.expiry_date = newExpiryDateStr;
+            
+            // ★★★ FIX 2: ADD REQUIRED 'start_date' COLUMN (from previous error) ★★★
+            packageDataToSave.start_date = new Date().toISOString().split('T')[0]; 
 
 
             const { error: insertError } = await supabase
                 .from('packages')
                 .insert([packageDataToSave]);
 
-            // This INSERT should now succeed because the unique constraint on 'mobile' is dropped.
             if (insertError) {
                 console.error('Supabase new package insert error:', insertError);
                 throw new Error(`Error creating new package: ${insertError.message}`);
