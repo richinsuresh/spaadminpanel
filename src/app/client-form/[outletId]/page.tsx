@@ -587,15 +587,12 @@ export default function ClientCheckinForm() {
         return;
       }
       const amountInRupees = Number(formData.amountPaid) || 0;
-      if (amountInRupees <= 0) {
-          setError('Please enter a valid Amount for the treatment.');
-          setLoading(false);
-          return;
-      }
-      
-      const minAmount = outlet.minTreatmentAmount;
-      if (amountInRupees < minAmount) {
-          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${minAmount}. Redirecting...`);
+      // NOTE: Assuming outlet.minTreatmentAmount is 1500 for the check, 
+      // but using the user-requested static check for now.
+      const MIN_AMOUNT_RUPEES = 1500; 
+
+      if (amountInRupees < MIN_AMOUNT_RUPEES) {
+          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}. Redirecting...`);
           setLoading(true);
           setTimeout(() => {
               router.push(`/payment-declined?outletId=${outletId}&amount=${amountInRupees}`);
@@ -946,7 +943,8 @@ export default function ClientCheckinForm() {
                     <input
                       name="packageAmount"
                       type="number"
-                      step="100"
+                      // ★★★ FIX: step="1" ensures numbers ending in 0 are valid for a number input field ★★★
+                      step="1" 
                       min="1"
                       value={formData.packageAmount || ''}
                       onChange={handleChange}
@@ -1023,15 +1021,17 @@ export default function ClientCheckinForm() {
                   name="amountPaid"
                   type="number"
                   step="1"
-                  min="1"
+                  // ★★★ NEW: Set starting limit to 1500 ★★★
+                  min="1500" 
                   value={formData.amountPaid || ''}
                   onChange={handleChange}
                   required
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                  placeholder="Enter amount (e.g., 500)"
+                  placeholder="Enter amount (Min ₹1500)"
                   disabled={loading}
                 />
               </div>
+
               <div>
                 <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
                 <select
