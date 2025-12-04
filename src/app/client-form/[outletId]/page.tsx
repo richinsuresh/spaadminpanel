@@ -1027,7 +1027,7 @@ export default function ClientCheckinForm() {
                   onChange={handleChange}
                   required
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                  placeholder="Enter amount (Min ₹1500)"
+                  placeholder="Enter amount"
                   disabled={loading}
                 />
               </div>
