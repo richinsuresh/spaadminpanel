@@ -1,18 +1,25 @@
-// src/app/client-form/[outletId]/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
+import { Clock, Calendar, MapPin, User, Tag, ChevronDown, RefreshCcw, X, Info } from 'lucide-react';
 
 // --- Type Definitions ---
 type Treatment = { id: string; name: string; };
+
+// Extended ClientInfo type
 type ClientInfo = {
-  status: 'active' | 'expired';
+  status: 'active' | 'expired' | 'not_found';
   name: string;
   mobile: string;
   remainingHours: number;
+  expiryDate: string | null; // Added expiry date
+  packageId: string | null; // ID of the currently active package
+  // NEW FIELDS for progress bar
+  totalPackageHours: number; 
+  usedPackageHours: number; 
 };
 
 type Employee = {
@@ -23,6 +30,199 @@ type Employee = {
   outlet_id?: string | null;
   is_active?: boolean;
 };
+
+// New Type for Visit History
+type VisitHistory = {
+  id: string;
+  date: string;
+  sessionHours: number;
+  treatment: string;
+  outlet: string;
+  therapist_name: string; // Combined therapist name field
+  check_in_time: string;
+  isPackageUsed: boolean;
+};
+
+
+// --- Helper Functions ---
+const formatDuration = (hours: number): string => {
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0 && m === 0) return '0 mins';
+  const hourString = h > 0 ? `${h} hr` : '';
+  const minuteString = m > 0 ? `${m} mins` : '';
+  return `${hourString} ${minuteString}`.trim();
+};
+
+const formatDate = (isoString: string | null): string => {
+    if (!isoString) return 'N/A';
+    try {
+        return new Date(isoString).toLocaleDateString('en-IN', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+        });
+    } catch {
+        return 'Invalid Date';
+    }
+};
+
+// --- Package History Modal Component ---
+interface PackageHistoryModalProps {
+  clientInfo: ClientInfo;
+  mobile: string;
+  onClose: () => void;
+}
+
+const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, mobile, onClose }) => {
+  const [history, setHistory] = useState<VisitHistory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  
+  const packageHoursUsed = history.filter(v => v.isPackageUsed).reduce((sum, v) => sum + v.sessionHours, 0);
+  const totalVisits = history.length;
+  
+  const fetchPackageHistory = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      // 1. Fetch previous visits linked to this mobile number
+      // FIX: Query the 'customers' table instead of 'check_ins'
+      // FIX: Use snake_case column names from the database
+      const { data: visits, error: visitsError } = await supabase
+        .from('customers') // <--- FIXED TABLE NAME
+        .select(`
+          id, 
+          date, 
+          session_hours, 
+          treatment, 
+          outlet_name, 
+          therapist_name, 
+          check_in_time, 
+          is_package_customer
+        `) // <--- FIXED COLUMN NAMES
+        .eq('mobile', mobile)
+        .order('check_in_time', { ascending: false });
+
+      if (visitsError) throw visitsError;
+
+      const formattedHistory: VisitHistory[] = (visits || []).map((visit: any) => ({
+          id: visit.id,
+          date: formatDate(visit.check_in_time),
+          // FIX: Map database snake_case fields to frontend camelCase fields
+          sessionHours: visit.session_hours,         // Mapped from session_hours
+          treatment: visit.treatment,
+          outlet: visit.outlet_name,                 // Mapped from outlet_name
+          therapist_name: visit.therapist_name || 'Self/N/A',
+          check_in_time: visit.check_in_time,
+          isPackageUsed: visit.is_package_customer   // Mapped from is_package_customer
+      }));
+      
+      setHistory(formattedHistory);
+
+    } catch (err: any) {
+      console.error('Error fetching history:', err);
+      setError(err.message || 'Failed to fetch visit history.');
+      setHistory([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [mobile]);
+  
+  useEffect(() => {
+    fetchPackageHistory();
+  }, [fetchPackageHistory]);
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+      <div className="bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-red-500/50">
+        <div className="p-6 border-b border-gray-700 flex justify-between items-center">
+          <h2 className="text-xl font-bold text-red-500 flex items-center gap-2">
+            <Tag className='h-5 w-5' /> {clientInfo.name}'s Package History
+          </h2>
+          <button 
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors p-1 rounded-full bg-gray-800 hover:bg-gray-700"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        
+        {/* --- Summary Bar --- */}
+        <div className="grid grid-cols-3 gap-3 p-4 bg-gray-800 border-b border-gray-700">
+            <div className="bg-gray-700 p-3 rounded-lg text-center">
+                <p className="text-xs text-gray-400 uppercase font-medium">Remaining</p>
+                <p className={`text-lg font-bold ${clientInfo.remainingHours > 0 ? 'text-green-400' : 'text-yellow-400'}`}>
+                    {formatDuration(clientInfo.remainingHours)}
+                </p>
+            </div>
+            <div className="bg-gray-700 p-3 rounded-lg text-center">
+                <p className="text-xs text-gray-400 uppercase font-medium">Expiry Date</p>
+                <p className={`text-lg font-bold ${clientInfo.status === 'active' ? 'text-white' : 'text-red-400'}`}>
+                    {clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}
+                </p>
+            </div>
+            <div className="bg-gray-700 p-3 rounded-lg text-center">
+                <p className="text-xs text-gray-400 uppercase font-medium">Visits</p>
+                <p className="text-lg font-bold text-white">
+                    {totalVisits} Total ({history.filter(v => v.isPackageUsed).length} Used)
+                </p>
+            </div>
+        </div>
+        
+        {/* --- History List --- */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {loading ? (
+            <div className="text-center p-8 text-gray-400">
+              <RefreshCcw className="animate-spin h-5 w-5 mx-auto mb-2" />
+              Loading visits...
+            </div>
+          ) : error ? (
+            <div className="text-center p-4 text-red-400 bg-red-900/50 rounded-lg">{error}</div>
+          ) : history.length === 0 ? (
+            <div className="text-center p-8 text-gray-400">No previous visits recorded for this number.</div>
+          ) : (
+            history.map((visit, index) => (
+              <div key={index} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:border-red-500/50 transition duration-150">
+                <div className="flex justify-between items-start mb-2">
+                  <h3 className="text-md font-semibold text-white flex items-center gap-2">
+                    <Calendar className='h-4 w-4 text-gray-400'/> {visit.date}
+                  </h3>
+                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${visit.isPackageUsed ? 'bg-red-900 text-red-300' : 'bg-green-900 text-green-300'}`}>
+                    {visit.isPackageUsed ? 'Package Used' : 'Paid Session'}
+                  </span>
+                </div>
+                
+                <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
+                  <Clock className='h-4 w-4 text-gray-500'/> **Duration:** {formatDuration(visit.sessionHours)}
+                </p>
+                <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
+                  <Info className='h-4 w-4 text-gray-500'/> **Treatment:** {visit.treatment}
+                </p>
+                <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
+                  <User className='h-4 w-4 text-gray-500'/> **Therapist:** {visit.therapist_name}
+                </p>
+                <p className="text-sm text-gray-300 flex items-center gap-2">
+                  <MapPin className='h-4 w-4 text-gray-500'/> **Outlet:** {visit.outlet}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+        
+        <div className="p-4 border-t border-gray-700">
+          <button 
+            onClick={onClose}
+            className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
@@ -63,6 +263,10 @@ export default function ClientCheckinForm() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  
+  // --- NEW: Modal State ---
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+
 
   // --- Data Fetching Functions (Memoized for reuse) ---
   const fetchTreatments = useCallback(async () => {
@@ -82,9 +286,6 @@ export default function ClientCheckinForm() {
 
   /**
    * fetchStaff (OUTLET-SPECIFIC, DYNAMIC)
-   * - Only therapists (role = 'therapist')
-   * - Only currently checked-in (is_checked_in = true)
-   * - CRITICAL: Filters by current_outlet_name matching the current outlet's name.
    */
   const fetchStaff = useCallback(async () => {
     if (!outletId) {
@@ -101,9 +302,6 @@ export default function ClientCheckinForm() {
     }
 
     try {
-      // NOTE: Supabase selects 'current_outlet_name' implicitly if it's in the table, 
-      // even if not explicitly listed in .select() here, but we rely on the DB
-      // filter to ensure only employees checked into THIS outlet are returned.
       const { data, error } = await supabase
         .from('employees')
         .select('id, name, is_checked_in, role, outlet_id')
@@ -130,9 +328,6 @@ export default function ClientCheckinForm() {
   /**
    * fetchOutletStaff
    * - Loads all active staff for this outlet (used for "Sold By" dropdown)
-   * - We assume the "Sold By" staff must be based at the *home* outlet or currently checked-in
-   * - For simplicity and to match the original logic (which used home outlet), 
-   * we keep this filtering by static `outlet_id`.
    */
   const fetchOutletStaff = useCallback(async () => {
     if (!outletId) {
@@ -193,8 +388,6 @@ export default function ClientCheckinForm() {
       .channel(`client-form-realtime-${outletId}`)
       
       // *** MODIFIED: Remove outletId filter from 'employees' channel ***
-      // This is crucial: we must listen to ALL employee changes, because a staff member
-      // with a different home outlet_id could check in here (updating current_outlet_name).
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'employees' }, // <-- NO FILTER
@@ -227,24 +420,49 @@ export default function ClientCheckinForm() {
     };
   }, [fetchStaff, fetchTreatments, fetchOutletStaff, outletId]);
 
-  // --- Client lookup (same as before) ---
+  // --- Client lookup (same as before, now fetches more info) ---
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
       setError('');
+      // NOTE: We rely on the /api/client-lookup endpoint to be updated
+      // to return `remainingHours`, `expiryDate`, `packageId`, `totalPackageHours`, and `usedPackageHours`.
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
       if (!res.ok) {
-        setClientInfo(null);
+        setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
         setFormData(prev => ({ ...prev, name: '' }));
         return;
       }
-      const data: ClientInfo | null = await res.json();
-      setClientInfo(data);
       
-      if (data) {
+      const data: any | null = await res.json();
+      
+      // Ensure we set a default ClientInfo object even if API returns null/minimal data
+      const finalClientInfo: ClientInfo = data && data.status !== 'not_found' ? {
+          status: data.status, 
+          name: data.name, 
+          mobile: data.mobile, 
+          remainingHours: data.remainingHours || 0, 
+          expiryDate: data.expiryDate || null, 
+          packageId: data.packageId || null,
+          totalPackageHours: data.totalPackageHours || 0, // NEW: total hours
+          usedPackageHours: data.usedPackageHours || 0,   // NEW: used hours
+      } : { 
+          status: 'not_found', 
+          name: '', 
+          mobile, 
+          remainingHours: 0, 
+          expiryDate: null, 
+          packageId: null,
+          totalPackageHours: 0, 
+          usedPackageHours: 0 
+      };
+      
+      setClientInfo(finalClientInfo);
+      
+      if (finalClientInfo.status !== 'not_found') {
         setFormData(prev => ({
           ...prev,
-          name: data.name || '',
+          name: finalClientInfo.name || '',
         }));
       } else {
         setFormData(prev => ({
@@ -254,7 +472,7 @@ export default function ClientCheckinForm() {
       }
     } catch (e) {
       console.error('Client lookup error:', e);
-      setClientInfo(null);
+      setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
       setFormData(prev => ({ ...prev, name: '' }));
     }
   }, [mobile]);
@@ -398,6 +616,8 @@ export default function ClientCheckinForm() {
       // legacy-compatible combined string
       const therapistCombined = therapistPrimary && therapistSecondary ? `${therapistPrimary} & ${therapistSecondary}` : therapistPrimary || therapistSecondary || null;
 
+      const isPackageUsed = !formData.tookPackage && clientInfo?.status === 'active';
+
       const payload = {
           name: String(formData.name || '').trim(),
           mobile: mobile,
@@ -412,7 +632,10 @@ export default function ClientCheckinForm() {
           
           amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
           sessionHours: sessionHours, 
-          isPackageCustomer: false, 
+          // CRITICAL: isPackageCustomer must be true if an active package exists AND this session is NOT a new package purchase.
+          isPackageCustomer: isPackageUsed,
+          // CRITICAL FIX: Pass the packageId if a package is being used
+          packageId: isPackageUsed ? clientInfo?.packageId : null,
 
           outlet: outlet!.name,
           outlet_id: outlet!.id,
@@ -464,9 +687,25 @@ export default function ClientCheckinForm() {
 
   const showAmountField = !formData.tookPackage;
   const isSubmitDisabled = loading;
+  
+  // Conditionally render the button based on lookup status
+  const showHistoryButton = mobile.length === 10 && clientInfo && clientInfo.status !== 'not_found';
+  
+  const packageHours: { total: number, used: number, remaining: number, percentUsed: number } | null = 
+    (clientInfo && clientInfo.status !== 'not_found' && clientInfo.totalPackageHours > 0) 
+      ? {
+          total: clientInfo.totalPackageHours,
+          used: clientInfo.usedPackageHours,
+          remaining: clientInfo.remainingHours,
+          percentUsed: (clientInfo.usedPackageHours / clientInfo.totalPackageHours) * 100
+        }
+      : null;
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
+      {isHistoryModalOpen && clientInfo && <PackageHistoryModal clientInfo={clientInfo} mobile={mobile} onClose={() => setIsHistoryModalOpen(false)} />}
+
       <div className="max-w-lg w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
         <h1 className="text-2xl font-bold text-white text-center mb-2">Welcome to {outlet?.name || 'Your Spa'}</h1>
         <p className="text-center text-gray-400 mb-6">Client Check-in</p>
@@ -506,16 +745,57 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {clientInfo && clientInfo.status === 'active' && (
-            <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg text-sm text-center text-green-300">
-              <strong>Active package found.</strong> (Can buy another)
+          {/* --- Package Info, Progress Bar & History Button --- */}
+          {clientInfo && clientInfo.status !== 'not_found' && (
+            <div className="p-3 bg-gray-800 rounded-lg border border-gray-700 space-y-3">
+                
+                {/* Status Bar */}
+                <div className="flex flex-col sm:flex-row gap-3">
+                    <div className={`flex-1 p-3 rounded-lg text-sm text-center ${clientInfo.status === 'active' ? 'bg-green-900/50 border border-green-700 text-green-300' : 'bg-yellow-900/50 border border-yellow-700 text-yellow-300'}`}>
+                        <strong className='block'>Package Status: {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}</strong>
+                        <span className='block text-xs mt-1'>
+                            Expiry: **{clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}**
+                        </span>
+                    </div>
+                    {showHistoryButton && (
+                        <button
+                            type="button"
+                            onClick={() => setIsHistoryModalOpen(true)}
+                            className="w-full sm:w-auto px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                            disabled={loading}
+                        >
+                            <Calendar size={16} /> View History
+                        </button>
+                    )}
+                </div>
+
+                {/* Progress Bar */}
+                {packageHours && (
+                  <div className='pt-2'>
+                    <div className="flex justify-between text-xs font-medium text-gray-400 mb-1">
+                      <span>Total Hours: {formatDuration(packageHours.total)}</span>
+                      <span>Used: {formatDuration(packageHours.used)} ({packageHours.percentUsed.toFixed(1)}%)</span>
+                    </div>
+                    <div className="w-full bg-gray-700 rounded-full h-2.5">
+                      <div 
+                        className="bg-red-600 h-2.5 rounded-full transition-all duration-500 ease-out" 
+                        style={{ width: `${packageHours.percentUsed}%` }}
+                      ></div>
+                    </div>
+                    <div className="text-right text-sm font-semibold text-green-400 mt-1">
+                      Remaining: {formatDuration(packageHours.remaining)}
+                    </div>
+                  </div>
+                )}
             </div>
           )}
-           {clientInfo && clientInfo.status !== 'active' && (
-            <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
-              No active package found.
-            </div>
+          {clientInfo && clientInfo.status === 'not_found' && mobile.length === 10 && (
+             <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
+                No active package found.
+             </div>
           )}
+          {/* --- End Package Info, Progress Bar & History Button --- */}
+
 
           <div>
             <label htmlFor="treatment" className="block text-sm font-medium text-gray-300 mb-1">Select Treatment *</label>
@@ -592,11 +872,11 @@ export default function ClientCheckinForm() {
                   name="therapistSecondary"
                   value={formData.therapistSecondary}
                   onChange={handleChange}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
                   disabled={loading}
                 >
-                  <option value="">-- Select Therapist 2 (optional) --</option>
-                  {employees.map((emp) => ( // <-- employees list is now dynamically filtered
+                  <option value="">-- Select Therapist 2 --</option>
+                  {employees.filter(e => e.name !== formData.therapistPrimary).map((emp) => ( 
                     <option key={emp.id} value={emp.name}>
                         {emp.name}
                     </option>
@@ -607,66 +887,73 @@ export default function ClientCheckinForm() {
           </div>
           {/* --- End Therapist Inputs --- */}
 
+
+          {/* --- Session Duration --- */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              {formData.tookPackage ? 'First Session Duration (Optional)' : 'Session Duration *'}
-            </label>
-            <div className="flex space-x-2">
-              <div className="flex-1">
-                <input
-                  name="sessionHours"
-                  type="number" min="0" max="10" step="1"
-                  placeholder="Hours"
-                  value={formData.sessionHours || ''}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                  disabled={loading}
-                />
-              </div>
-              <div className="flex-1">
-                <input
-                  name="sessionMinutes"
-                  type="number" min="0" max="59" 
-                  step="1"
-                  placeholder="Mins"
-                  value={formData.sessionMinutes || ''}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg_gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                  disabled={loading}
-                />
-              </div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration *</label>
+            <div className="grid grid-cols-2 gap-4">
+              <input
+                name="sessionHours"
+                type="number"
+                step="1"
+                min="0"
+                value={formData.sessionHours}
+                onChange={handleChange}
+                required
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                placeholder="Hours"
+                disabled={loading}
+              />
+              <input
+                name="sessionMinutes"
+                type="number"
+                step="5"
+                min="0"
+                max="59"
+                value={formData.sessionMinutes}
+                onChange={handleChange}
+                required
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                placeholder="Mins (0, 5, 10, ...)"
+                disabled={loading}
+              />
             </div>
           </div>
+          {/* --- End Session Duration --- */}
 
-          <div className="pt-4 border-t border-gray-700 space-y-3">
-            <label className="flex items-center cursor-pointer p-2 rounded-md hover:bg-gray-800">
+
+          {/* --- New Package Checkbox and Fields --- */}
+          <div className="space-y-4 pt-2">
+            <label className="inline-flex items-center gap-2">
               <input
                 type="checkbox"
                 name="tookPackage"
                 checked={formData.tookPackage}
                 onChange={handleChange}
-                className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500 focus:ring-offset-gray-900"
+                className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                 disabled={loading}
               />
-              <span className="ml-2 text-sm text-gray-300">
-                Add new package
-              </span>
+              <span className="text-sm font-medium text-gray-300">Add new package</span>
             </label>
-            
+
             {formData.tookPackage && (
-              <div className="p-4 bg-gray-800 rounded-lg border border-gray-700 space-y-4">
-                <h3 className="text-md font-medium text-white">New Package Details</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-4 bg-gray-800 p-4 rounded-lg border border-red-700/50">
+                <h3 className="text-md font-semibold text-red-400">Package Details</h3>
+                
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1">Package Amount (₹) *</label>
                     <input
                       name="packageAmount"
                       type="number"
-                      min="0"
+                      step="100"
+                      min="1"
                       value={formData.packageAmount || ''}
                       onChange={handleChange}
                       required={formData.tookPackage}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                      placeholder="e.g., 5000"
+                      disabled={loading}
                     />
                   </div>
                   <div>
@@ -674,100 +961,91 @@ export default function ClientCheckinForm() {
                     <input
                       name="totalPackageHours"
                       type="number"
-                      min="0"
-                      step="0.1"
+                      step="0.5"
+                      min={getSessionDuration()}
                       value={formData.totalPackageHours || ''}
                       onChange={handleChange}
                       required={formData.tookPackage}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                      placeholder="e.g., 10"
+                      disabled={loading}
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Package Validity *</label>
-                  <select
-                    name="packageValidity"
-                    value={formData.packageValidity}
-                    onChange={handleChange}
-                    required={formData.tookPackage}
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                  >
-                    <option value="3 months">3 Months</option>
-                    <option value="6 months">6 Months</option>
-                    <option value="9 months">9 Months</option>
-                  </select>
-                </div>
-                {/* --- Sold By Dropdown (All Staff in outlet) --- */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Sold By (Staff Name) *</label>
-                  <select
-                    name="sold_by"
-                    value={formData.sold_by}
-                    onChange={handleChange}
-                    required={formData.tookPackage}
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                  >
-                     <option value="">-- Select Staff --</option>
-                     {outletStaff.map(emp => (
-                        <option key={emp.id} value={emp.name}>
-                           {emp.name}{emp.role ? ` — ${emp.role}` : ''}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Validity</label>
+                    <select
+                      name="packageValidity"
+                      value={formData.packageValidity}
+                      onChange={handleChange}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                      disabled={loading}
+                    >
+                      <option value="3 months">3 months</option>
+                      <option value="6 months">6 months</option>
+                      <option value="12 months">12 months</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Sold By *</label>
+                    <select
+                      name="sold_by"
+                      value={formData.sold_by}
+                      onChange={handleChange}
+                      required={formData.tookPackage}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                      disabled={loading}
+                    >
+                      <option value="">-- Select Staff --</option>
+                      {outletStaff.map((staff) => (
+                        <option key={staff.id} value={staff.name}>
+                            {staff.name} ({staff.role})
                         </option>
-                     ))}
-                  </select>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             )}
           </div>
+          {/* --- End New Package Checkbox and Fields --- */}
 
+
+          {/* --- Amount Paid & Payment Method --- */}
           {showAmountField && (
-            <div>
-              <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Amount for Treatment (₹) *</label>
-              <input
-                id="amountPaid"
-                name="amountPaid"
-                type="number"
-                min="0"
-                step="1"
-                value={formData.amountPaid || ''}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                placeholder="Enter amount (e.g., 500)"
-                disabled={loading}
-                required={!formData.tookPackage}
-              />
-            </div>
-          )}
-
-          {!formData.tookPackage && (
-            <div>
-              <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
-              <select
-                name="paymentMethod"
-                value={formData.paymentMethod}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                disabled={loading}
-              >
-                <option value="cash">Pay with Cash</option>
-                <option value="card">Pay with Card</option>
-                <option value="upi">Pay with UPI</option>
-              </select>
-            </div>
-          )}
-          {formData.tookPackage && (
-            <div>
-              <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
-              <select
-                name="paymentMethod"
-                value={formData.paymentMethod}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                disabled={loading}
-              >
-                <option value="cash">Pay with Cash</option>
-                <option value="card">Pay with Card</option>
-                <option value="upi">Pay with UPI</option>
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Amount for Treatment (₹) *</label>
+                <input
+                  id="amountPaid"
+                  name="amountPaid"
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={formData.amountPaid || ''}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                  placeholder="Enter amount (e.g., 500)"
+                  disabled={loading}
+                />
+              </div>
+              <div>
+                <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
+                <select
+                  name="paymentMethod"
+                  value={formData.paymentMethod}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                  disabled={loading}
+                >
+                  <option value="cash">Pay with Cash</option>
+                  <option value="card">Pay with Card</option>
+                  <option value="upi">Pay with UPI</option>
+                </select>
+              </div>
             </div>
           )}
 
