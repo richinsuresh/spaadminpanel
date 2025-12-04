@@ -15,6 +15,7 @@ type ClientInfo = {
   usedPackageHours: number;
   remainingHours: number;
   expiryDate: string;
+  packageId: string | null; // <--- FIX: ADDED packageId
 };
 
 type Employee = { id: string; name: string; role: string; };
@@ -95,6 +96,7 @@ export default function ClientForm() {
       const lookup = async () => {
         try {
           setInputError('');
+          // Assuming the lookup API now returns the packageId
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           if (!res.ok) {
             setClientInfo(null);
@@ -215,6 +217,10 @@ export default function ClientForm() {
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
         isPackageCustomer: formData.isPackageCustomer,
+        
+        // ★★★ FIX: ADD THE PACKAGE ID TO THE PAYLOAD ★★★
+        packageId: formData.isPackageCustomer ? (clientInfo?.packageId || null) : null,
+        
         tookPackage: formData.tookPackage,
         packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
         totalPackageHours: formData.tookPackage ? Number(formData.totalPackageHours) || 0 : 0,

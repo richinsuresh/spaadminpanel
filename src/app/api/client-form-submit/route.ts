@@ -48,17 +48,14 @@ export async function POST(req: NextRequest) {
     // --- 1. HANDLE PACKAGE LOGIC *FIRST* ---
 
     // 1A. Handle Package Redemption (Deduction of hours)
-    if (payload.isPackageCustomer) {
+    // Prevents error if isPackageCustomer is true but packageId is null/missing (e.g., expired package).
+    if (payload.isPackageCustomer && payload.packageId) {
       const hoursToDeduct = payload.sessionHours;
       
       if (!hoursToDeduct || hoursToDeduct <= 0) { 
         // Skip deduction if hours are 0, but allow check-in to proceed.
       } else {
           
-          if (!payload.packageId) {
-             throw new Error('Active package ID missing for package redemption.');
-          }
-
           const { data: activePackage, error: findError } = await supabase
             .from('packages')
             .select('id, remaining_hours, used_hours') 
@@ -69,27 +66,28 @@ export async function POST(req: NextRequest) {
             .single();
             
           if (findError || !activePackage) { 
-            throw new Error('No active package found for this client to redeem hours.'); 
-          }
+             console.warn(`Package ID ${payload.packageId} failed to redeem. Skipping package update.`);
+          } else {
           
-          const currentRemaining = parseFloat(activePackage.remaining_hours as any || '0');
-          const currentUsed = parseFloat(activePackage.used_hours as any || '0');
-          const newRemainingHours = currentRemaining - hoursToDeduct;
-          const newUsedHours = currentUsed + hoursToDeduct;
-          const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
+              const currentRemaining = parseFloat(activePackage.remaining_hours as any || '0');
+              const currentUsed = parseFloat(activePackage.used_hours as any || '0');
+              const newRemainingHours = currentRemaining - hoursToDeduct;
+              const newUsedHours = currentUsed + hoursToDeduct;
+              const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
-          const { error: updateError } = await supabase
-            .from('packages')
-            .update({
-              remaining_hours: newRemainingHours,
-              used_hours: newUsedHours,
-              status: newStatus,
-            })
-            .eq('id', payload.packageId); // Update by ID
+              const { error: updateError } = await supabase
+                .from('packages')
+                .update({
+                  remaining_hours: newRemainingHours,
+                  used_hours: newUsedHours,
+                  status: newStatus,
+                })
+                .eq('id', payload.packageId); // Update by ID
 
-          if (updateError) {
-            console.error('Supabase package update error:', updateError);
-            throw new Error(`Error updating package hours: ${updateError.message}`);
+              if (updateError) {
+                console.error('Supabase package update error:', updateError);
+                throw new Error(`Error updating package hours: ${updateError.message}`);
+              }
           }
       }
     }
@@ -100,6 +98,8 @@ export async function POST(req: NextRequest) {
         const newTotalHours = payload.totalPackageHours;
         const validityPeriod = payload.packageValidity; // e.g., '3 months'
         const packagePrice = payload.packageAmount;
+        // Retrieve session hours for immediate deduction
+        const sessionHours = payload.sessionHours || 0; 
         
         
         // ★★★ RENEWAL LOGIC ★★★
@@ -123,10 +123,9 @@ export async function POST(req: NextRequest) {
             package_amount: packagePrice,
             package_sold_by: payload.packageSoldBy,
             outlet_id: payload.outlet_id,
-            // ★★★ FIX 1: ADD REQUIRED 'outlet' COLUMN ★★★
-            outlet: payload.outlet, 
-            outlet_name: payload.outlet, // Keeping existing outlet_name mapping
-            payment_method: payload.paymentMethod, // Assume column exists now
+            outlet: payload.outlet, // FIX: ADDED required 'outlet' column
+            outlet_name: payload.outlet, 
+            payment_method: payload.paymentMethod, 
             status: 'active',
         };
         
@@ -143,10 +142,12 @@ export async function POST(req: NextRequest) {
             const currentTotal = parseFloat(existingActivePackage.total_hours as any || '0');
             const currentUsed = parseFloat(existingActivePackage.used_hours as any || '0');
             
-            // 1. Add new hours to old remaining hours
-            finalRemainingHours = currentRemaining + newTotalHours;
+            // 1. Calculate final hours with immediate session deduction
+            // New Remaining = Old Remaining + New Package Hours - Current Session Hours
+            finalRemainingHours = currentRemaining + newTotalHours - sessionHours; 
             finalTotalHours = currentTotal + newTotalHours;
-            finalUsedHours = currentUsed; // Used hours are preserved
+            // New Used = Old Used + Current Session Hours
+            finalUsedHours = currentUsed + sessionHours; 
             
             // 2. Calculate new expiry date based on existing expiry
             newExpiryDateStr = calculateNewExpiryDate(existingActivePackage.expiry_date, validityPeriod);
@@ -176,12 +177,14 @@ export async function POST(req: NextRequest) {
             newExpiryDateStr = calculateNewExpiryDate(null, validityPeriod);
             
             // Set insert data
-            packageDataToSave.remaining_hours = newTotalHours;
+            // Remaining = Total Hours - Current Session Hours
+            packageDataToSave.remaining_hours = newTotalHours - sessionHours;
             packageDataToSave.total_hours = newTotalHours;
-            packageDataToSave.used_hours = 0; // New package starts with 0 used hours
+            // Used = Current Session Hours
+            packageDataToSave.used_hours = sessionHours; 
             packageDataToSave.expiry_date = newExpiryDateStr;
             
-            // ★★★ FIX 2: ADD REQUIRED 'start_date' COLUMN (from previous error) ★★★
+            // FIX: ADDED required 'start_date' column
             packageDataToSave.start_date = new Date().toISOString().split('T')[0]; 
 
 
