@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS } from '@/lib/outlet';
-import { Trash2, AlertTriangle, Loader2, X, Clock } from 'lucide-react';
+import { OUTLETS, Outlet } from '@/lib/outlet';
+import { Trash2, AlertTriangle, Loader2, X, Clock, MapPin, Edit } from 'lucide-react';
 
 // --- Types ---
 type Employee = {
@@ -62,6 +62,9 @@ const formatTime = (dateStr: string | null) => {
   return new Date(dateStr).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 };
 
+// --- Admin Password (Change for production) ---
+const ADMIN_PASSWORD = 'attend123';
+
 export default function AttendancePage() {
   const [currentISTDate] = useState(getISTDateString());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -76,7 +79,7 @@ export default function AttendancePage() {
   const [clearError, setClearError] = useState('');
   const [isClearing, setIsClearing] = useState(false);
   
-  // Single Record Delete State (FOR INDIVIDUAL ATTENDANCE DELETE)
+  // Single Record Delete State
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
   const [isSingleDeleting, setIsSingleDeleting] = useState(false);
@@ -85,6 +88,14 @@ export default function AttendancePage() {
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
   const [isApproving, setIsApproving] = useState(false);
+  
+  // --- NEW: Change Outlet State ---
+  const [isOutletChangeModalOpen, setIsOutletChangeModalOpen] = useState(false);
+  const [recordToTransfer, setRecordToTransfer] = useState<AttendanceRecord | null>(null);
+  const [newOutletId, setNewOutletId] = useState('');
+  const [transferPassword, setTransferPassword] = useState('');
+  const [transferError, setTransferError] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
 
 
   const fetchEmployees = useCallback(async () => {
@@ -207,8 +218,8 @@ export default function AttendancePage() {
   const handleClearHistory = async () => {
     setClearError('');
     
-    // Simple admin password check (for production, use proper admin auth)
-    if (clearPassword !== 'attend123') {
+    // Simple admin password check
+    if (clearPassword !== ADMIN_PASSWORD) {
       setClearError('Incorrect password');
       return;
     }
@@ -249,7 +260,7 @@ export default function AttendancePage() {
     }
   };
 
-  // --- Handle Single Record Deletion (The Requested Functionality) ---
+  // --- Handle Single Record Deletion ---
   const handleSingleRecordDelete = async () => {
     if (!recordToDelete) return;
 
@@ -284,7 +295,6 @@ export default function AttendancePage() {
       
       setRecordToDelete(null);
       setIsSingleDeleteModalOpen(false);
-      // Fetch again to update the table immediately
       fetchAttendance(); 
     } catch (err: any) {
       console.error('Single delete error:', err);
@@ -369,9 +379,84 @@ export default function AttendancePage() {
           setIsApproving(false);
       }
   };
+  
+  // --- NEW: Handle Outlet Transfer ---
+  const handleOutletTransfer = async () => {
+      if (!recordToTransfer || !newOutletId) {
+          setTransferError('Please select a new outlet.');
+          return;
+      }
+      
+      setTransferError('');
+
+      // Admin password check
+      if (transferPassword !== ADMIN_PASSWORD) {
+        setTransferError('Incorrect password');
+        return;
+      }
+      
+      setIsTransferring(true);
+      const newOutlet = OUTLETS.find(o => o.id === newOutletId);
+      const newOutletName = newOutlet?.name || null;
+      
+      if (!newOutletName) {
+          setTransferError('Invalid new outlet selected.');
+          setIsTransferring(false);
+          return;
+      }
+
+      try {
+          // 1. Update the Attendance record (for historical accuracy)
+          const { error: recordError } = await supabase
+              .from('attendance')
+              .update({
+                  outlet_id: newOutletId,
+                  outlet_name: newOutletName,
+                  // Optionally log a note about the transfer
+                  status: `${recordToTransfer.status} (Transferred to ${newOutletName})`
+              })
+              .eq('id', recordToTransfer.id);
+          
+          if (recordError) throw recordError;
+
+          // 2. Update the Employee record (CRITICAL for client form dropdown)
+          const { error: employeeError } = await supabase
+              .from('employees')
+              .update({ 
+                  current_outlet_name: newOutletName,
+              })
+              .eq('id', recordToTransfer.employee_id);
+
+          if (employeeError) throw employeeError;
+
+          alert(`Successfully transferred ${recordToTransfer.employee_name} to ${newOutletName}.`);
+          
+          setRecordToTransfer(null);
+          setIsOutletChangeModalOpen(false);
+          setNewOutletId('');
+          setTransferPassword('');
+          fetchAttendance(); // Refresh to show the change
+      } catch (err: any) {
+          console.error('Transfer Error:', err);
+          setTransferError(err.message || 'Failed to transfer outlet.');
+      } finally {
+          setIsTransferring(false);
+      }
+  };
+  
+  // Helper to open the outlet change modal
+  const openOutletChangeModal = (record: AttendanceRecord) => {
+    setRecordToTransfer(record);
+    setNewOutletId(record.outlet_id); // Default to current outlet
+    setTransferError('');
+    setTransferPassword('');
+    setIsOutletChangeModalOpen(true);
+  };
+  // ------------------------------------
 
 
   const combinedData = employees.map(emp => {
+    // Find the record matching the filter date
     const record = records.find(r => r.employee_id === emp.id);
     return {
       employee: emp,
@@ -391,10 +476,10 @@ export default function AttendancePage() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
       {/* --- Header and Filters --- */}
       <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
-        <h1 className="text-2xl font-bold text-gray-800">Staff Attendance</h1>
+        <h1 className="text-2xl font-bold text-gray-800">Staff Attendance Admin Panel</h1>
         
         <div className="flex gap-4 items-center">
           <button 
@@ -466,9 +551,10 @@ export default function AttendancePage() {
                     statusDisplay = getStatusBadge(record.status, record.check_out_time);
                   }
                   
-                  // Action Element Logic: Show 'Review' for requests, 'Delete' for completed/old records
                   let actionElement = null;
+                  const isCheckedIn = record?.check_in_time && !record?.check_out_time;
                   
+                  // Action Element Logic
                   if (record && record.early_checkout_requested) {
                       actionElement = (
                           <button
@@ -479,17 +565,25 @@ export default function AttendancePage() {
                               className="flex items-center gap-1 px-3 py-1 text-xs font-medium bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition"
                               title={`Review early checkout request from ${record.employee_name}`}
                           >
-                              <Clock size={14} /> Review Request
+                              <Clock size={14} /> Review
                           </button>
                       );
-                  } else if (record && record.check_in_time && !record.check_out_time) {
-                      // Working but no request
-                      actionElement = <span className="text-xs text-gray-500">Awaiting Checkout</span>;
+                  } else if (isCheckedIn && record) {
+                      // Currently Working: Allow transfer
+                      actionElement = (
+                          <button
+                              onClick={() => openOutletChangeModal(record)} 
+                              className="flex items-center gap-1 text-blue-600 hover:text-blue-800 transition-colors p-1 rounded-md"
+                              title={`Change current outlet for ${employee.name}`}
+                          >
+                              <MapPin size={16} /> Change
+                          </button>
+                      );
                   } else if (record && record.id) {
-                      // Completed or old record, or if they were force-logged out (record.check_out_time exists)
+                      // Completed, old, or statutory leave: Allow delete
                       actionElement = (
                         <button
-                            onClick={() => openSingleDeleteModal(record)} // <-- DELETE TRIGGER
+                            onClick={() => openSingleDeleteModal(record)} 
                             className="text-red-600 hover:text-red-900 transition-colors p-1 rounded-md"
                             title={`Delete record for ${employee.name} on ${dateFilter}`}
                          >
@@ -581,7 +675,7 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* --- Single Record Delete Modal (The requested component) --- */}
+      {/* --- Single Record Delete Modal --- */}
       {isSingleDeleteModalOpen && recordToDelete && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
@@ -599,7 +693,6 @@ export default function AttendancePage() {
               <h2 className="text-xl font-bold text-gray-800">Delete Attendance Record?</h2>
               <p className="text-sm text-gray-500 mt-2">
                 You are about to permanently delete the attendance record for **{recordToDelete.employee_name}** on **{recordToDelete.date}**.
-                {/* Warning added for clarity: if they are still checked in, deletion resets their status */}
                 {recordToDelete.check_out_time === null && <span className="font-semibold text-red-700 block mt-2">Deleting this record will also mark the employee as **Checked Out** and reset their active outlet.</span>}
               </p>
             </div>
@@ -627,6 +720,12 @@ export default function AttendancePage() {
       {isApprovalModalOpen && requestToApprove && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
+                  <button 
+                      onClick={() => setIsApprovalModalOpen(false)} 
+                      className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+                  >
+                      <X size={20} />
+                  </button>
                   <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                     <Clock className="text-yellow-500 h-6 w-6"/> Review Early Checkout Request
                   </h2>
@@ -658,7 +757,72 @@ export default function AttendancePage() {
               </div>
           </div>
       )}
+      
+      {/* --- NEW: Change Outlet Modal --- */}
+      {isOutletChangeModalOpen && recordToTransfer && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
+                  <button 
+                      onClick={() => setIsOutletChangeModalOpen(false)} 
+                      className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+                  >
+                      <X size={20} />
+                  </button>
+                  
+                  <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <MapPin className="text-blue-500 h-6 w-6"/> Change Employee Outlet
+                  </h2>
+                  <p className="text-sm text-gray-700 mb-4">
+                      Transferring **{recordToTransfer.employee_name}** from **{recordToTransfer.outlet_name}**. This update will immediately change where they appear in the client check-in dropdowns.
+                  </p>
 
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">New Outlet *</label>
+                          <select
+                              value={newOutletId}
+                              onChange={(e) => setNewOutletId(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                              required
+                          >
+                              <option value="">Select a new outlet...</option>
+                              {OUTLETS.map(o => (
+                                  <option key={o.id} value={o.id}>{o.name}</option>
+                              ))}
+                          </select>
+                      </div>
+                      
+                      <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Admin Password</label>
+                          <input 
+                              type="password" 
+                              value={transferPassword}
+                              onChange={(e) => setTransferPassword(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
+                              placeholder="Enter password"
+                          />
+                          {transferError && <p className="text-xs text-red-600 mt-1">{transferError}</p>}
+                      </div>
+                      
+                      <div className="flex gap-3 pt-2">
+                          <button 
+                              onClick={() => setIsOutletChangeModalOpen(false)}
+                              className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
+                          >
+                              Cancel
+                          </button>
+                          <button 
+                              onClick={handleOutletTransfer}
+                              disabled={isTransferring || !newOutletId || !transferPassword}
+                              className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                          >
+                              {isTransferring ? <Loader2 className="animate-spin h-4 w-4"/> : 'Confirm Transfer'}
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }
