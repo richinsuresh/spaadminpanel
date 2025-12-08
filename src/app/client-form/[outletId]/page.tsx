@@ -13,7 +13,7 @@ import { OfflineClientPayload } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Type Definitions ---
-type Treatment = { id: string; name: string; };
+type Treatment = { id: string; name: string };
 
 // Extended ClientInfo type
 type ClientInfo = {
@@ -24,8 +24,8 @@ type ClientInfo = {
   expiryDate: string | null; // Added expiry date
   packageId: string | null; // ID of the currently active package
   // NEW FIELDS for progress bar
-  totalPackageHours: number; 
-  usedPackageHours: number; 
+  totalPackageHours: number;
+  usedPackageHours: number;
 };
 
 type Employee = {
@@ -49,7 +49,6 @@ type VisitHistory = {
   isPackageUsed: boolean;
 };
 
-
 // --- Helper Functions ---
 const formatDuration = (hours: number): string => {
   const h = Math.floor(hours);
@@ -61,16 +60,16 @@ const formatDuration = (hours: number): string => {
 };
 
 const formatDate = (isoString: string | null): string => {
-    if (!isoString) return 'N/A';
-    try {
-        return new Date(isoString).toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-        });
-    } catch {
-        return 'Invalid Date';
-    }
+  if (!isoString) return 'N/A';
+  try {
+    return new Date(isoString).toLocaleDateString('en-IN', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return 'Invalid Date';
+  }
 };
 
 // --- Package History Modal Component ---
@@ -80,14 +79,20 @@ interface PackageHistoryModalProps {
   onClose: () => void;
 }
 
-const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, mobile, onClose }) => {
+const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({
+  clientInfo,
+  mobile,
+  onClose,
+}) => {
   const [history, setHistory] = useState<VisitHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  
-  const packageHoursUsed = history.filter(v => v.isPackageUsed).reduce((sum, v) => sum + v.sessionHours, 0);
+
+  const packageHoursUsed = history
+    .filter((v) => v.isPackageUsed)
+    .reduce((sum, v) => sum + v.sessionHours, 0);
   const totalVisits = history.length;
-  
+
   const fetchPackageHistory = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -110,18 +115,17 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
       if (visitsError) throw visitsError;
 
       const formattedHistory: VisitHistory[] = (visits || []).map((visit: any) => ({
-          id: visit.id,
-          date: formatDate(visit.check_in_time),
-          sessionHours: visit.session_hours,
-          treatment: visit.treatment,
-          outlet: visit.outlet_name,
-          therapist_name: visit.therapist_name || 'Self/N/A',
-          check_in_time: visit.check_in_time,
-          isPackageUsed: visit.is_package_customer
+        id: visit.id,
+        date: formatDate(visit.check_in_time),
+        sessionHours: visit.session_hours,
+        treatment: visit.treatment,
+        outlet: visit.outlet_name,
+        therapist_name: visit.therapist_name || 'Self/N/A',
+        check_in_time: visit.check_in_time,
+        isPackageUsed: visit.is_package_customer,
       }));
-      
-      setHistory(formattedHistory);
 
+      setHistory(formattedHistory);
     } catch (err: any) {
       console.error('Error fetching history:', err);
       setError(err.message || 'Failed to fetch visit history.');
@@ -130,7 +134,7 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
       setLoading(false);
     }
   }, [mobile]);
-  
+
   useEffect(() => {
     fetchPackageHistory();
   }, [fetchPackageHistory]);
@@ -140,38 +144,46 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
       <div className="bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-red-500/50">
         <div className="p-6 border-b border-gray-700 flex justify-between items-center">
           <h2 className="text-xl font-bold text-red-500 flex items-center gap-2">
-            <Tag className='h-5 w-5' /> {clientInfo.name}'s Package History
+            <Tag className="h-5 w-5" /> {clientInfo.name}&apos;s Package History
           </h2>
-          <button 
+          <button
             onClick={onClose}
             className="text-gray-400 hover:text-white transition-colors p-1 rounded-full bg-gray-800 hover:bg-gray-700"
           >
             <X size={20} />
           </button>
         </div>
-        
+
         {/* --- Summary Bar --- */}
         <div className="grid grid-cols-3 gap-3 p-4 bg-gray-800 border-b border-gray-700">
-            <div className="bg-gray-700 p-3 rounded-lg text-center">
-                <p className="text-xs text-gray-400 uppercase font-medium">Remaining</p>
-                <p className={`text-lg font-bold ${clientInfo.remainingHours > 0 ? 'text-green-400' : 'text-yellow-400'}`}>
-                    {formatDuration(clientInfo.remainingHours)}
-                </p>
-            </div>
-            <div className="bg-gray-700 p-3 rounded-lg text-center">
-                <p className="text-xs text-gray-400 uppercase font-medium">Expiry Date</p>
-                <p className={`text-lg font-bold ${clientInfo.status === 'active' ? 'text-white' : 'text-red-400'}`}>
-                    {clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}
-                </p>
-            </div>
-            <div className="bg-gray-700 p-3 rounded-lg text-center">
-                <p className="text-xs text-gray-400 uppercase font-medium">Visits</p>
-                <p className="text-lg font-bold text-white">
-                    {totalVisits} Total ({history.filter(v => v.isPackageUsed).length} Used)
-                </p>
-            </div>
+          <div className="bg-gray-700 p-3 rounded-lg text-center">
+            <p className="text-xs text-gray-400 uppercase font-medium">Remaining</p>
+            <p
+              className={`text-lg font-bold ${
+                clientInfo.remainingHours > 0 ? 'text-green-400' : 'text-yellow-400'
+              }`}
+            >
+              {formatDuration(clientInfo.remainingHours)}
+            </p>
+          </div>
+          <div className="bg-gray-700 p-3 rounded-lg text-center">
+            <p className="text-xs text-gray-400 uppercase font-medium">Expiry Date</p>
+            <p
+              className={`text-lg font-bold ${
+                clientInfo.status === 'active' ? 'text-white' : 'text-red-400'
+              }`}
+            >
+              {clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}
+            </p>
+          </div>
+          <div className="bg-gray-700 p-3 rounded-lg text-center">
+            <p className="text-xs text-gray-400 uppercase font-medium">Visits</p>
+            <p className="text-lg font-bold text-white">
+              {totalVisits} Total ({history.filter((v) => v.isPackageUsed).length} Used)
+            </p>
+          </div>
         </div>
-        
+
         {/* --- History List --- */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {loading ? (
@@ -180,40 +192,57 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
               Loading visits...
             </div>
           ) : error ? (
-            <div className="text-center p-4 text-red-400 bg-red-900/50 rounded-lg">{error}</div>
+            <div className="text-center p-4 text-red-400 bg-red-900/50 rounded-lg">
+              {error}
+            </div>
           ) : history.length === 0 ? (
-            <div className="text-center p-8 text-gray-400">No previous visits recorded for this number.</div>
+            <div className="text-center p-8 text-gray-400">
+              No previous visits recorded for this number.
+            </div>
           ) : (
             history.map((visit, index) => (
-              <div key={index} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:border-red-500/50 transition duration-150">
+              <div
+                key={index}
+                className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:border-red-500/50 transition duration-150"
+              >
                 <div className="flex justify-between items-start mb-2">
                   <h3 className="text-md font-semibold text-white flex items-center gap-2">
-                    <Calendar className='h-4 w-4 text-gray-400'/> {visit.date}
+                    <Calendar className="h-4 w-4 text-gray-400" /> {visit.date}
                   </h3>
-                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${visit.isPackageUsed ? 'bg-red-900 text-red-300' : 'bg-green-900 text-green-300'}`}>
+                  <span
+                    className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                      visit.isPackageUsed
+                        ? 'bg-red-900 text-red-300'
+                        : 'bg-green-900 text-green-300'
+                    }`}
+                  >
                     {visit.isPackageUsed ? 'Package Used' : 'Paid Session'}
                   </span>
                 </div>
-                
+
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <Clock className='h-4 w-4 text-gray-500'/> <strong>Duration:</strong> {formatDuration(visit.sessionHours)}
+                  <Clock className="h-4 w-4 text-gray-500" /> <strong>Duration:</strong>{' '}
+                  {formatDuration(visit.sessionHours)}
                 </p>
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <Info className='h-4 w-4 text-gray-500'/> <strong>Treatment:</strong> {visit.treatment}
+                  <Info className="h-4 w-4 text-gray-500" /> <strong>Treatment:</strong>{' '}
+                  {visit.treatment}
                 </p>
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <User className='h-4 w-4 text-gray-500'/> <strong>Therapist:</strong> {visit.therapist_name}
+                  <User className="h-4 w-4 text-gray-500" /> <strong>Therapist:</strong>{' '}
+                  {visit.therapist_name}
                 </p>
                 <p className="text-sm text-gray-300 flex items-center gap-2">
-                  <MapPin className='h-4 w-4 text-gray-500'/> <strong>Outlet:</strong> {visit.outlet}
+                  <MapPin className="h-4 w-4 text-gray-500" /> <strong>Outlet:</strong>{' '}
+                  {visit.outlet}
                 </p>
               </div>
             ))
           )}
         </div>
-        
+
         <div className="p-4 border-t border-gray-700">
-          <button 
+          <button
             onClick={onClose}
             className="w-full py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition"
           >
@@ -224,7 +253,6 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
     </div>
   );
 };
-
 
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
@@ -237,7 +265,7 @@ export default function ClientCheckinForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
-  
+
   const [formData, setFormData] = useState({
     name: '',
     treatment: '',
@@ -250,10 +278,10 @@ export default function ClientCheckinForm() {
     totalPackageHours: 0,
     packageValidity: '3 months',
     sold_by: '',
-    therapistPrimary: '',         // primary therapist
-    therapistSecondary: '',       // secondary therapist (hidden by default)
-    showSecondaryTherapist: false,// reveal second therapist
-    room: '',          
+    therapistPrimary: '', // primary therapist
+    therapistSecondary: '', // secondary therapist (hidden by default)
+    showSecondaryTherapist: false, // reveal second therapist
+    room: '',
   });
 
   // --- State for employees list (therapists only, checked-in) ---
@@ -265,10 +293,9 @@ export default function ClientCheckinForm() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  
+
   // --- NEW: Modal State ---
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-
 
   // --- Data Fetching Functions (Memoized for reuse) ---
   const fetchTreatments = useCallback(async () => {
@@ -294,9 +321,9 @@ export default function ClientCheckinForm() {
       setEmployees([]);
       return;
     }
-    
+
     // 1. Get the current outlet's name based on the URL ID
-    const currentOutletName = OUTLETS.find(o => o.id === outletId)?.name;
+    const currentOutletName = OUTLETS.find((o) => o.id === outletId)?.name;
     if (!currentOutletName) {
       console.error('Outlet name not found for ID:', outletId);
       setEmployees([]);
@@ -308,10 +335,10 @@ export default function ClientCheckinForm() {
         .from('employees')
         .select('id, name, is_checked_in, role, outlet_id')
         .eq('is_active', true)
-        .eq('role', 'therapist')           // only therapists
-        .eq('is_checked_in', true)         // only currently checked-in
+        .eq('role', 'therapist') // only therapists
+        .eq('is_checked_in', true) // only currently checked-in
         // *** CRITICAL CHANGE: Filter by the dynamic current_outlet_name ***
-        .eq('current_outlet_name', currentOutletName) 
+        .eq('current_outlet_name', currentOutletName)
         .order('name', { ascending: true });
 
       if (error) {
@@ -367,19 +394,20 @@ export default function ClientCheckinForm() {
     }
     setLoading(true);
     setError('');
-    const outletInfo = OUTLETS.find(o => o.id === outletId);
+    const outletInfo = OUTLETS.find((o) => o.id === outletId);
     if (!outletInfo) {
       setError('Invalid Outlet ID.');
       setLoading(false);
       return;
     }
-    setOutlet(outletInfo); 
-    
-    // Initial data fetch
-    Promise.all([fetchTreatments(), fetchStaff(), fetchOutletStaff()]).then(() => {
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    setOutlet(outletInfo);
 
+    // Initial data fetch
+    Promise.all([fetchTreatments(), fetchStaff(), fetchOutletStaff()])
+      .then(() => {
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, [outletId, fetchTreatments, fetchStaff, fetchOutletStaff]);
 
   // --- Realtime listeners to keep staff/treatments fresh ---
@@ -388,7 +416,7 @@ export default function ClientCheckinForm() {
 
     const channel = supabase
       .channel(`client-form-realtime-${outletId}`)
-      
+
       // *** MODIFIED: Remove outletId filter from 'employees' channel ***
       .on(
         'postgres_changes',
@@ -397,19 +425,23 @@ export default function ClientCheckinForm() {
           // Refresh both therapists and outlet staff on employees change (role/active/check-in may change)
           fetchStaff();
           fetchOutletStaff();
-        }
+        },
       )
       // listen attendance changes for this outlet (if your attendance table has an outlet_id column)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attendance', filter: `outlet_id=eq.${outletId}` },
-        () => { fetchStaff(); }
+        () => {
+          fetchStaff();
+        },
       )
       // treatments changes for this outlet
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'treatments', filter: `outlet_id=eq.${outletId}` },
-        () => { fetchTreatments(); }
+        () => {
+          fetchTreatments();
+        },
       )
       .subscribe();
 
@@ -429,57 +461,78 @@ export default function ClientCheckinForm() {
       setError('');
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
       if (!res.ok) {
-        setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
-        setFormData(prev => ({ ...prev, name: '' }));
+        setClientInfo({
+          status: 'not_found',
+          name: '',
+          mobile,
+          remainingHours: 0,
+          expiryDate: null,
+          packageId: null,
+          totalPackageHours: 0,
+          usedPackageHours: 0,
+        });
+        setFormData((prev) => ({ ...prev, name: '' }));
         return;
       }
-      
+
       const data: any | null = await res.json();
-      
-      const finalClientInfo: ClientInfo = data && data.status !== 'not_found' ? {
-          status: data.status, 
-          name: data.name, 
-          mobile: data.mobile, 
-          remainingHours: data.remainingHours || 0, 
-          expiryDate: data.expiryDate || null, 
-          packageId: data.packageId || null,
-          totalPackageHours: data.totalPackageHours || 0,
-          usedPackageHours: data.usedPackageHours || 0,
-      } : { 
-          status: 'not_found', 
-          name: '', 
-          mobile, 
-          remainingHours: 0, 
-          expiryDate: null, 
-          packageId: null,
-          totalPackageHours: 0, 
-          usedPackageHours: 0 
-      };
-      
+
+      const finalClientInfo: ClientInfo =
+        data && data.status !== 'not_found'
+          ? {
+              status: data.status,
+              name: data.name,
+              mobile: data.mobile,
+              remainingHours: data.remainingHours || 0,
+              expiryDate: data.expiryDate || null,
+              packageId: data.packageId || null,
+              totalPackageHours: data.totalPackageHours || 0,
+              usedPackageHours: data.usedPackageHours || 0,
+            }
+          : {
+              status: 'not_found',
+              name: '',
+              mobile,
+              remainingHours: 0,
+              expiryDate: null,
+              packageId: null,
+              totalPackageHours: 0,
+              usedPackageHours: 0,
+            };
+
       setClientInfo(finalClientInfo);
-      
+
       if (finalClientInfo.status !== 'not_found') {
-        setFormData(prev => ({
+        setFormData((prev) => ({
           ...prev,
           name: finalClientInfo.name || '',
         }));
       } else {
-        setFormData(prev => ({
+        setFormData((prev) => ({
           ...prev,
           name: '',
         }));
       }
     } catch (e) {
       console.error('Client lookup error:', e);
-      setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
-      setFormData(prev => ({ ...prev, name: '' }));
+      setClientInfo({
+        status: 'not_found',
+        name: '',
+        mobile,
+        remainingHours: 0,
+        expiryDate: null,
+        packageId: null,
+        totalPackageHours: 0,
+        usedPackageHours: 0,
+      });
+      setFormData((prev) => ({ ...prev, name: '' }));
     }
   }, [mobile]);
 
   useEffect(() => {
     setClientInfo(null);
     if (mobile.length < 10) {
-        setFormData(prev => ({ ...prev, name: '' }));
+      setFormData((prev) => ({ ...prev, name: '' }));
     }
     if (lookupTimeout.current) {
       clearTimeout(lookupTimeout.current);
@@ -500,10 +553,10 @@ export default function ClientCheckinForm() {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
-    
+
     setError('');
-    
-    setFormData(prev => {
+
+    setFormData((prev) => {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
         updatedValue = checked ?? false;
@@ -530,7 +583,7 @@ export default function ClientCheckinForm() {
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
-    return hours + (minutes / 60);
+    return hours + minutes / 60;
   }, [formData.sessionHours, formData.sessionMinutes]);
 
   const getFinalAmountInPaise = useCallback(() => {
@@ -540,7 +593,7 @@ export default function ClientCheckinForm() {
     return (Number(formData.amountPaid) || 0) * 100;
   }, [formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
-
+  // --- UPDATED handleSubmit (uses local paymentMethod & outlet for redirect) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -556,15 +609,25 @@ export default function ClientCheckinForm() {
     const sessionHours = getSessionDuration();
     const totalPackageHours = Number(formData.totalPackageHours) || 0;
 
+    // ✅ Snapshot values we need for redirect logic
+    const paymentMethod = formData.paymentMethod;
+    const finalAmountInPaise = getFinalAmountInPaise();
+    const outletIdForRedirect = outlet.id;
+
     // --- Validation ---
-    if ((sessionHours > 0) && !String(formData.therapistPrimary || '').trim()) {
-       setError('Please select a Therapist (Primary).');
-       setLoading(false);
-       return;
+    if (sessionHours > 0 && !String(formData.therapistPrimary || '').trim()) {
+      setError('Please select a Therapist (Primary).');
+      setLoading(false);
+      return;
     }
 
     if (formData.tookPackage) {
-      if (!formData.packageAmount || formData.packageAmount <= 0 || !totalPackageHours || totalPackageHours <= 0) {
+      if (
+        !formData.packageAmount ||
+        formData.packageAmount <= 0 ||
+        !totalPackageHours ||
+        totalPackageHours <= 0
+      ) {
         setError('Please enter a valid Package Amount and Total Hours.');
         setLoading(false);
         return;
@@ -586,64 +649,70 @@ export default function ClientCheckinForm() {
         return;
       }
       const amountInRupees = Number(formData.amountPaid) || 0;
-      const MIN_AMOUNT_RUPEES = 1500; 
+      const MIN_AMOUNT_RUPEES = 1500;
 
       if (amountInRupees < MIN_AMOUNT_RUPEES) {
-          setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}. Redirecting...`);
-          setLoading(true);
-          setTimeout(() => {
-              router.push(`/payment-declined?outletId=${outletId}&amount=${amountInRupees}`);
-          }, 1500);
-          return; 
+        setError(
+          `Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}. Redirecting...`,
+        );
+        setLoading(true);
+        setTimeout(() => {
+          router.push(`/payment-declined?outletId=${outletId}&amount=${amountInRupees}`);
+        }, 1500);
+        return;
       }
     }
-    
+
     const treatmentName = formData.treatment;
-    const finalAmountInPaise = getFinalAmountInPaise();
-    
+
     // generate client_uuid here and attach to payload (helps idempotency)
-    const clientUuid = typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
+    const clientUuid =
+      typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
 
     try {
       const checkInTime: string | null = new Date().toISOString();
 
       // Build therapist info:
       const therapistPrimary = String(formData.therapistPrimary || '').trim() || null;
-      const therapistSecondary = formData.showSecondaryTherapist ? (String(formData.therapistSecondary || '').trim() || null) : null;
-      // legacy-compatible combined string
-      const therapistCombined = therapistPrimary && therapistSecondary ? `${therapistPrimary} & ${therapistSecondary}` : therapistPrimary || therapistSecondary || null;
+      const therapistSecondary = formData.showSecondaryTherapist
+        ? (String(formData.therapistSecondary || '').trim() || null)
+        : null;
+      const therapistCombined =
+        therapistPrimary && therapistSecondary
+          ? `${therapistPrimary} & ${therapistSecondary}`
+          : therapistPrimary || therapistSecondary || null;
 
       const isPackageUsed = !formData.tookPackage && clientInfo?.status === 'active';
 
       const payload = {
-          client_uuid: clientUuid,
-          name: String(formData.name || '').trim(),
-          mobile: mobile,
-          date: new Date().toISOString().split('T')[0],
-          treatment: treatmentName,
-          
-          tookPackage: formData.tookPackage,
-          packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
-          totalPackageHours: totalPackageHours, 
-          packageSoldBy: formData.tookPackage ? formData.sold_by.trim() : null,
-          packageValidity: formData.tookPackage ? formData.packageValidity : null,
-          
-          amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
-          sessionHours: sessionHours, 
-          isPackageCustomer: isPackageUsed,
-          packageId: isPackageUsed ? clientInfo?.packageId : null,
+        client_uuid: clientUuid,
+        name: String(formData.name || '').trim(),
+        mobile: mobile,
+        date: new Date().toISOString().split('T')[0],
+        treatment: treatmentName,
 
-          outlet: outlet!.name,
-          outlet_id: outlet!.id,
-          paymentMethod: formData.paymentMethod,
-          finalAmountInPaise: finalAmountInPaise, 
-          check_in_time: checkInTime,
+        tookPackage: formData.tookPackage,
+        packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+        totalPackageHours: totalPackageHours,
+        packageSoldBy: formData.tookPackage ? formData.sold_by.trim() : null,
+        packageValidity: formData.tookPackage ? formData.packageValidity : null,
 
-          therapist_name: therapistCombined,
-          therapist_primary: therapistPrimary,
-          therapist_secondary: therapistSecondary,
+        amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
+        sessionHours: sessionHours,
+        isPackageCustomer: isPackageUsed,
+        packageId: isPackageUsed ? clientInfo?.packageId : null,
 
-          room: formData.room || null,
+        outlet: outlet.name,
+        outlet_id: outlet.id,
+        paymentMethod: paymentMethod,
+        finalAmountInPaise: finalAmountInPaise,
+        check_in_time: checkInTime,
+
+        therapist_name: therapistCombined,
+        therapist_primary: therapistPrimary,
+        therapist_secondary: therapistSecondary,
+
+        room: formData.room || null,
       };
 
       const res = await fetch('/api/client-form-submit', {
@@ -654,21 +723,24 @@ export default function ClientCheckinForm() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || `Submission failed (${res.status})`);
+        throw new Error((data as any).error || `Submission failed (${res.status})`);
       }
 
-      // Server accepted – handle UPI redirect or success flow
-      if ((data as any).paymentMethod === 'upi') {
+      // ✅ Use local paymentMethod + outlet for redirect (no dependency on API response shape)
+      if (paymentMethod === 'upi') {
         setSuccess('Registration complete. Redirecting to payment QR...');
-        const amountInRupees = (data as any).finalAmountInPaise / 100;
+        const amountInRupees = finalAmountInPaise / 100;
         setTimeout(() => {
-          router.push(`/pay/qr/${(data as any).outlet_id}?amount=${amountInRupees}&outletId=${(data as any).outlet_id}`);
+          router.push(
+            `/pay/qr/${outletIdForRedirect}?amount=${amountInRupees}&outletId=${outletIdForRedirect}`,
+          );
         }, 1500);
       } else {
         setSuccess('Registration successful! Redirecting...');
-        setTimeout(() => { router.push(`/client-cash-success?outletId=${outletId}`); }, 1500);
+        setTimeout(() => {
+          router.push(`/client-cash-success?outletId=${outletIdForRedirect}`);
+        }, 1500);
       }
-
     } catch (err: any) {
       console.error('Submit error:', err);
 
@@ -688,24 +760,35 @@ export default function ClientCheckinForm() {
           amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
           sessionHours: getSessionDuration(),
           isPackageCustomer: !formData.tookPackage && clientInfo?.status === 'active',
-          packageId: (!formData.tookPackage && clientInfo?.status === 'active') ? clientInfo?.packageId ?? null : null,
-          outlet: outlet!.name,
-          outlet_id: outlet!.id,
-          paymentMethod: formData.paymentMethod,
+          packageId:
+            !formData.tookPackage && clientInfo?.status === 'active'
+              ? clientInfo?.packageId ?? null
+              : null,
+          outlet: outlet.name,
+          outlet_id: outlet.id,
+          paymentMethod: paymentMethod,
           finalAmountInPaise: finalAmountInPaise,
           check_in_time: new Date().toISOString(),
-          therapist_name: (formData.therapistPrimary || '') + (formData.showSecondaryTherapist ? ` & ${formData.therapistSecondary || ''}` : ''),
+          therapist_name:
+            (formData.therapistPrimary || '') +
+            (formData.showSecondaryTherapist
+              ? ` & ${formData.therapistSecondary || ''}`
+              : ''),
           therapist_primary: formData.therapistPrimary || null,
-          therapist_secondary: formData.showSecondaryTherapist ? formData.therapistSecondary || null : null,
+          therapist_secondary: formData.showSecondaryTherapist
+            ? formData.therapistSecondary || null
+            : null,
           room: formData.room || null,
           created_local_at: new Date().toISOString(),
           status: 'pending',
-          sync_error: String(err?.message || err)
+          sync_error: String(err?.message || err),
         };
 
         await offlineDb.pending_clients.add(localPayload);
 
-        setSuccess('Saved locally — server unreachable. Entry will sync automatically when server is back.');
+        setSuccess(
+          'Saved locally — server unreachable. Entry will sync automatically when server is back.',
+        );
         setLoading(false);
 
         // reset form for next entry
@@ -724,12 +807,11 @@ export default function ClientCheckinForm() {
           therapistPrimary: '',
           therapistSecondary: '',
           showSecondaryTherapist: false,
-          room: ''
+          room: '',
         });
 
         setMobile('');
         setClientInfo(null);
-
       } catch (dexErr) {
         console.error('Failed to save offline:', dexErr);
         setError(err?.message || 'An unknown error occurred and local save failed.');
@@ -740,36 +822,62 @@ export default function ClientCheckinForm() {
 
   const showAmountField = !formData.tookPackage;
   const isSubmitDisabled = loading;
-  
+
   // Conditionally render the button based on lookup status
-  const showHistoryButton = mobile.length === 10 && clientInfo && clientInfo.status !== 'not_found';
-  
-  const packageHours: { total: number, used: number, remaining: number, percentUsed: number } | null = 
-    (clientInfo && clientInfo.status !== 'not_found' && clientInfo.totalPackageHours > 0) 
+  const showHistoryButton =
+    mobile.length === 10 && clientInfo && clientInfo.status !== 'not_found';
+
+  const packageHours:
+    | { total: number; used: number; remaining: number; percentUsed: number }
+    | null =
+    clientInfo &&
+    clientInfo.status !== 'not_found' &&
+    clientInfo.totalPackageHours > 0
       ? {
           total: clientInfo.totalPackageHours,
           used: clientInfo.usedPackageHours,
           remaining: clientInfo.remainingHours,
-          percentUsed: (clientInfo.usedPackageHours / clientInfo.totalPackageHours) * 100
+          percentUsed:
+            (clientInfo.usedPackageHours / clientInfo.totalPackageHours) * 100,
         }
       : null;
 
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
-      {isHistoryModalOpen && clientInfo && <PackageHistoryModal clientInfo={clientInfo} mobile={mobile} onClose={() => setIsHistoryModalOpen(false)} />}
+      {isHistoryModalOpen && clientInfo && (
+        <PackageHistoryModal
+          clientInfo={clientInfo}
+          mobile={mobile}
+          onClose={() => setIsHistoryModalOpen(false)}
+        />
+      )}
 
       <div className="max-w-lg w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700">
-        <h1 className="text-2xl font-bold text-white text-center mb-2">Welcome to {outlet?.name || 'Your Spa'}</h1>
+        <h1 className="text-2xl font-bold text-white text-center mb-2">
+          Welcome to {outlet?.name || 'Your Spa'}
+        </h1>
         <p className="text-center text-gray-400 mb-6">Client Check-in</p>
 
-        {error && !success && <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700 text-sm">{error}</div>}
-        {success && <div className="mb-4 p-3 bg-green-900/50 text-green-300 rounded-lg border border-green-700 text-sm">{success}</div>}
+        {error && !success && (
+          <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700 text-sm">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="mb-4 p-3 bg-green-900/50 text-green-300 rounded-lg border border-green-700 text-sm">
+            {success}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="mobile" className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
+              <label
+                htmlFor="mobile"
+                className="block text-sm font-medium text-gray-300 mb-1"
+              >
+                Phone Number *
+              </label>
               <input
                 id="mobile"
                 type="tel"
@@ -783,7 +891,12 @@ export default function ClientCheckinForm() {
               />
             </div>
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-300 mb-1">Full Name *</label>
+              <label
+                htmlFor="name"
+                className="block text-sm font-medium text-gray-300 mb-1"
+              >
+                Full Name *
+              </label>
               <input
                 id="name"
                 name="name"
@@ -792,7 +905,7 @@ export default function ClientCheckinForm() {
                 onChange={handleChange}
                 required
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                placeholder="Client's full name"
+                placeholder="Client&apos;s full name"
                 disabled={loading}
               />
             </div>
@@ -801,57 +914,82 @@ export default function ClientCheckinForm() {
           {/* --- Package Info, Progress Bar & History Button --- */}
           {clientInfo && clientInfo.status !== 'not_found' && (
             <div className="p-3 bg-gray-800 rounded-lg border border-gray-700 space-y-3">
-                
-                {/* Status Bar */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                    <div className={`flex-1 p-3 rounded-lg text-sm text-center ${clientInfo.status === 'active' ? 'bg-green-900/50 border border-green-700 text-green-300' : 'bg-yellow-900/50 border border-yellow-700 text-yellow-300'}`}>
-                        <strong className='block'>Package Status: {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}</strong>
-                        <span className='block text-xs mt-1'>
-                            Expiry: <strong>{clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}</strong>
-                        </span>
-                    </div>
-                    {showHistoryButton && (
-                        <button
-                            type="button"
-                            onClick={() => setIsHistoryModalOpen(true)}
-                            className="w-full sm:w-auto px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
-                            disabled={loading}
-                        >
-                            <Calendar size={16} /> View History
-                        </button>
-                    )}
+              {/* Status Bar */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div
+                  className={`flex-1 p-3 rounded-lg text-sm text-center ${
+                    clientInfo.status === 'active'
+                      ? 'bg-green-900/50 border border-green-700 text-green-300'
+                      : 'bg-yellow-900/50 border border-yellow-700 text-yellow-300'
+                  }`}
+                >
+                  <strong className="block">
+                    Package Status:{' '}
+                    {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}
+                  </strong>
+                  <span className="block text-xs mt-1">
+                    Expiry:{' '}
+                    <strong>
+                      {clientInfo.expiryDate
+                        ? formatDate(clientInfo.expiryDate)
+                        : 'N/A'}
+                    </strong>
+                  </span>
                 </div>
-
-                {/* Progress Bar */}
-                {packageHours && (
-                  <div className='pt-2'>
-                    <div className="flex justify-between text-xs font-medium text-gray-400 mb-1">
-                      <span>Total Hours: {formatDuration(packageHours.total)}</span>
-                      <span>Used: {formatDuration(packageHours.used)} ({packageHours.percentUsed.toFixed(1)}%)</span>
-                    </div>
-                    <div className="w-full bg-gray-700 rounded-full h-2.5">
-                      <div 
-                        className="bg-red-600 h-2.5 rounded-full transition-all duration-500 ease-out" 
-                        style={{ width: `${Math.min(Math.max(packageHours.percentUsed, 0), 100)}%` }}
-                      ></div>
-                    </div>
-                    <div className="text-right text-sm font-semibold text-green-400 mt-1">
-                      Remaining: {formatDuration(packageHours.remaining)}
-                    </div>
-                  </div>
+                {showHistoryButton && (
+                  <button
+                    type="button"
+                    onClick={() => setIsHistoryModalOpen(true)}
+                    className="w-full sm:w-auto px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium text-sm transition flex items-center justify-center gap-2"
+                    disabled={loading}
+                  >
+                    <Calendar size={16} /> View History
+                  </button>
                 )}
+              </div>
+
+              {/* Progress Bar */}
+              {packageHours && (
+                <div className="pt-2">
+                  <div className="flex justify-between text-xs font-medium text-gray-400 mb-1">
+                    <span>Total Hours: {formatDuration(packageHours.total)}</span>
+                    <span>
+                      Used: {formatDuration(packageHours.used)} (
+                      {packageHours.percentUsed.toFixed(1)}%)
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2.5">
+                    <div
+                      className="bg-red-600 h-2.5 rounded-full transition-all duration-500 ease-out"
+                      style={{
+                        width: `${Math.min(
+                          Math.max(packageHours.percentUsed, 0),
+                          100,
+                        )}%`,
+                      }}
+                    ></div>
+                  </div>
+                  <div className="text-right text-sm font-semibold text-green-400 mt-1">
+                    Remaining: {formatDuration(packageHours.remaining)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {clientInfo && clientInfo.status === 'not_found' && mobile.length === 10 && (
-             <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
-                No active package found.
-             </div>
+            <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
+              No active package found.
+            </div>
           )}
           {/* --- End Package Info, Progress Bar & History Button --- */}
 
-
           <div>
-            <label htmlFor="treatment" className="block text-sm font-medium text-gray-300 mb-1">Select Treatment *</label>
+            <label
+              htmlFor="treatment"
+              className="block text-sm font-medium text-gray-300 mb-1"
+            >
+              Select Treatment *
+            </label>
             <select
               id="treatment"
               name="treatment"
@@ -862,7 +1000,7 @@ export default function ClientCheckinForm() {
               disabled={loading || treatments.length === 0}
             >
               <option value="">-- Select a Treatment --</option>
-              {treatments.map(t => (
+              {treatments.map((t) => (
                 <option key={t.id} value={t.name}>
                   {t.name}
                 </option>
@@ -874,26 +1012,30 @@ export default function ClientCheckinForm() {
           <div className="space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Therapist (Primary) *</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Therapist (Primary) *
+                </label>
                 <select
                   name="therapistPrimary"
                   value={formData.therapistPrimary}
                   onChange={handleChange}
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
                   disabled={loading}
-                  required={true}
+                  required
                 >
                   <option value="">-- Select Therapist 1 --</option>
                   {employees.map((emp) => (
                     <option key={emp.id} value={emp.name}>
-                        {emp.name}
+                      {emp.name}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Room Number</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Room Number
+                </label>
                 <input
                   name="room"
                   type="text"
@@ -920,7 +1062,10 @@ export default function ClientCheckinForm() {
 
             {formData.showSecondaryTherapist && (
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Therapist (Secondary) <span className="text-xs text-gray-400">(optional)</span></label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Therapist (Secondary){' '}
+                  <span className="text-xs text-gray-400">(optional)</span>
+                </label>
                 <select
                   name="therapistSecondary"
                   value={formData.therapistSecondary}
@@ -929,21 +1074,24 @@ export default function ClientCheckinForm() {
                   disabled={loading}
                 >
                   <option value="">-- Select Therapist 2 --</option>
-                  {employees.filter(e => e.name !== formData.therapistPrimary).map((emp) => ( 
-                    <option key={emp.id} value={emp.name}>
+                  {employees
+                    .filter((e) => e.name !== formData.therapistPrimary)
+                    .map((emp) => (
+                      <option key={emp.id} value={emp.name}>
                         {emp.name}
-                    </option>
-                  ))}
+                      </option>
+                    ))}
                 </select>
               </div>
             )}
           </div>
           {/* --- End Therapist Inputs --- */}
 
-
           {/* --- Session Duration --- */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration *</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Session Duration *
+            </label>
             <div className="grid grid-cols-2 gap-4">
               <input
                 name="sessionHours"
@@ -974,7 +1122,6 @@ export default function ClientCheckinForm() {
           </div>
           {/* --- End Session Duration --- */}
 
-
           {/* --- New Package Checkbox and Fields --- */}
           <div className="space-y-4 pt-2">
             <label className="inline-flex items-center gap-2">
@@ -986,20 +1133,22 @@ export default function ClientCheckinForm() {
                 className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                 disabled={loading}
               />
-              <span className="text-sm font-medium text-gray-300">Add new package</span>
             </label>
+            <span className="text-sm font-medium text-gray-300">Add new package</span>
 
             {formData.tookPackage && (
               <div className="space-y-4 bg-gray-800 p-4 rounded-lg border border-red-700/50">
                 <h3 className="text-md font-semibold text-red-400">Package Details</h3>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Package Amount (₹) *</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Package Amount (₹) *
+                    </label>
                     <input
                       name="packageAmount"
                       type="number"
-                      step="1" 
+                      step="1"
                       min="1"
                       value={formData.packageAmount || ''}
                       onChange={handleChange}
@@ -1010,7 +1159,9 @@ export default function ClientCheckinForm() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Total Hours *</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Total Hours *
+                    </label>
                     <input
                       name="totalPackageHours"
                       type="number"
@@ -1028,7 +1179,9 @@ export default function ClientCheckinForm() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Validity</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Validity
+                    </label>
                     <select
                       name="packageValidity"
                       value={formData.packageValidity}
@@ -1042,7 +1195,9 @@ export default function ClientCheckinForm() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Sold By *</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Sold By *
+                    </label>
                     <select
                       name="sold_by"
                       value={formData.sold_by}
@@ -1054,7 +1209,7 @@ export default function ClientCheckinForm() {
                       <option value="">-- Select Staff --</option>
                       {outletStaff.map((staff) => (
                         <option key={staff.id} value={staff.name}>
-                            {staff.name} ({staff.role})
+                          {staff.name} ({staff.role})
                         </option>
                       ))}
                     </select>
@@ -1065,12 +1220,16 @@ export default function ClientCheckinForm() {
           </div>
           {/* --- End New Package Checkbox and Fields --- */}
 
-
           {/* --- Amount Paid & Payment Method --- */}
           {showAmountField && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Amount for Treatment (₹) *</label>
+                <label
+                  htmlFor="amountPaid"
+                  className="block text-sm font-medium text-gray-300 mb-1"
+                >
+                  Amount for Treatment (₹) *
+                </label>
                 <input
                   id="amountPaid"
                   name="amountPaid"
@@ -1087,7 +1246,12 @@ export default function ClientCheckinForm() {
               </div>
 
               <div>
-                <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option</label>
+                <label
+                  htmlFor="paymentMethod"
+                  className="block text-sm font-medium text-gray-300 mb-1"
+                >
+                  Payment Option
+                </label>
                 <select
                   name="paymentMethod"
                   value={formData.paymentMethod}
@@ -1108,20 +1272,40 @@ export default function ClientCheckinForm() {
             disabled={isSubmitDisabled}
             className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {loading ? 'Processing...' :
-             formData.tookPackage ? 
-               (formData.paymentMethod === 'upi' ? 'Register Package & Pay UPI' : 
-                formData.paymentMethod === 'cash' ? 'Register Package & Accept Cash' : 'Register Package & Accept Card') :
-             formData.paymentMethod === 'upi' ? 'Proceed to UPI Payment' :
-              formData.paymentMethod === 'cash' ? 'Register & Accept Cash' : 'Register & Accept Card'
-            }
+            {loading
+              ? 'Processing...'
+              : formData.tookPackage
+              ? formData.paymentMethod === 'upi'
+                ? 'Register Package & Pay UPI'
+                : formData.paymentMethod === 'cash'
+                ? 'Register Package & Accept Cash'
+                : 'Register Package & Accept Card'
+              : formData.paymentMethod === 'upi'
+              ? 'Proceed to UPI Payment'
+              : formData.paymentMethod === 'cash'
+              ? 'Register & Accept Cash'
+              : 'Register & Accept Card'}
           </button>
         </form>
       </div>
 
       {/* Small indicator — local queue (optional, can be removed once OfflineSync is in layout) */}
-      <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 9999, background: 'rgba(0,0,0,0.7)', color: 'white', padding: 8, borderRadius: 8, fontSize: 12 }}>
-        <small>Local queue enabled — unsynced entries are stored locally if server is unreachable.</small>
+      <div
+        style={{
+          position: 'fixed',
+          right: 12,
+          bottom: 12,
+          zIndex: 9999,
+          background: 'rgba(0,0,0,0.7)',
+          color: 'white',
+          padding: 8,
+          borderRadius: 8,
+          fontSize: 12,
+        }}
+      >
+        <small>
+          Local queue enabled — unsynced entries are stored locally if server is unreachable.
+        </small>
       </div>
     </div>
   );
