@@ -1,7 +1,14 @@
 // src/app/api/customers/route.ts
-// Removing 'fs/promises', 'xlsx', and 'path' dependencies, relying solely on Supabase.
 import { supabase } from '@/lib/supabase';
 import { NextRequest, NextResponse } from 'next/server';
+
+/**
+ * Expected POST body:
+ * { bulk: [ { op: 'create'|'update'|'delete', client_uuid?: string, payload: { ... } }, ... ] }
+ *
+ * For idempotency we use client_uuid. For create operations, if client_uuid is present and already exists,
+ * the operation will be skipped and returned as already_synced.
+ */
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,7 +17,6 @@ export async function GET(request: NextRequest) {
 
     // --- Lookup by Mobile (for client form usage) ---
     if (mobile) {
-      // Fetch the latest package information directly from the 'packages' table
       const { data: pkg, error: pkgError } = await supabase
         .from('packages')
         .select('*')
@@ -18,12 +24,10 @@ export async function GET(request: NextRequest) {
         .single();
 
       if (pkgError && pkgError.code !== 'PGRST116') {
-         // PGRST116 means 'No rows found', which is fine. Other errors are not.
-         console.error('Package lookup error:', pkgError);
+        console.error('Package lookup error:', pkgError);
       }
 
       if (pkg) {
-        // Return structured data about the client's current package status
         return NextResponse.json({
           status: pkg.status,
           name: pkg.name,
@@ -35,26 +39,182 @@ export async function GET(request: NextRequest) {
           expiryDate: pkg.expiry_date,
         });
       }
-      
-      // If no active package, return null (handled correctly by client-lookup logic)
+
       return NextResponse.json(null);
     }
 
     // --- Return All Customers (for dashboard display) ---
     const { data: customers, error: customersError } = await supabase
       .from('customers')
-      // Fetch all customer session records
-      .select('id, name, mobile, date, treatment, session_hours, took_package, package_amount, total_package_hours, outlet, amount_paid')
-      .order('date', { ascending: false }); // Sort by latest visit
+      .select('id, name, mobile, date, treatment, session_hours, took_package, package_amount, total_package_hours, outlet, amount_paid, client_uuid')
+      .order('date', { ascending: false });
 
     if (customersError) throw customersError;
 
-    // Return the list of customer sessions
     return NextResponse.json(customers || []);
-
   } catch (error) {
     console.error('Error fetching customers from Supabase:', error);
-    // Respond with empty array on generic failure
     return NextResponse.json([], { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const bulk = Array.isArray(body?.bulk) ? body.bulk : (Array.isArray(body) ? body : null);
+
+    if (!bulk) {
+      return NextResponse.json({ error: 'Invalid payload. Expected { bulk: [...] }' }, { status: 400 });
+    }
+
+    const results: Array<any> = [];
+
+    // process items sequentially to avoid race conditions on the same client_uuid / package
+    for (const item of bulk) {
+      const op = (item.op || 'create').toLowerCase();
+      const client_uuid = item.client_uuid || item.payload?.client_uuid || null;
+      const payload = item.payload || {};
+
+      try {
+        if (op === 'create') {
+          // if client_uuid provided, check existence (idempotency)
+          if (client_uuid) {
+            const { data: existing, error: existingErr } = await supabase
+              .from('customers')
+              .select('id')
+              .eq('client_uuid', client_uuid)
+              .limit(1)
+              .maybeSingle();
+
+            if (!existingErr && existing && (existing as any).id) {
+              results.push({ op, client_uuid, status: 'skipped', reason: 'already_exists', customer_id: (existing as any).id });
+              continue;
+            }
+          }
+
+          // Insert row
+          const insertObj: any = {
+            name: payload.name,
+            mobile: payload.mobile,
+            date: payload.date,
+            treatment: payload.treatment,
+            amount_paid: payload.amountPaid,
+            session_hours: payload.sessionHours,
+            is_package_customer: payload.isPackageCustomer,
+            took_package: payload.tookPackage,
+            package_amount: payload.packageAmount,
+            total_package_hours: payload.totalPackageHours,
+            package_sold_by: payload.packageSoldBy,
+            outlet: payload.outlet,
+            outlet_id: payload.outlet_id,
+            payment_method: payload.paymentMethod,
+            check_in_time: payload.check_in_time || new Date().toISOString(),
+            therapist_name: payload.therapist_name,
+            therapist_primary: payload.therapist_primary,
+            therapist_secondary: payload.therapist_secondary,
+            room: payload.room,
+            client_uuid: client_uuid || null,
+          };
+
+          const { data: inserted, error: insertErr } = await supabase
+            .from('customers')
+            .insert([insertObj])
+            .select('id')
+            .single();
+
+          if (insertErr) {
+            // if unique-violation on client_uuid happens, return as skipped (already synced)
+            const lower = (insertErr.message || '').toLowerCase();
+            if (client_uuid && (lower.includes('unique') || lower.includes('duplicate') || lower.includes('client_uuid'))) {
+              const { data: existing2 } = await supabase
+                .from('customers')
+                .select('id')
+                .eq('client_uuid', client_uuid)
+                .limit(1)
+                .maybeSingle();
+              results.push({ op, client_uuid, status: 'skipped', reason: 'unique_violation', customer_id: existing2?.id ?? null });
+            } else {
+              results.push({ op, client_uuid, status: 'failed', error: insertErr.message || insertErr });
+            }
+            continue;
+          }
+
+          results.push({ op, client_uuid, status: 'created', customer_id: inserted?.id ?? null });
+          continue;
+        }
+
+        if (op === 'update') {
+          if (!client_uuid) {
+            results.push({ op, status: 'failed', error: 'Missing client_uuid for update' });
+            continue;
+          }
+          // Map incoming payload fields to DB column names (snake_case)
+          const updateObj: any = {};
+          if (payload.name !== undefined) updateObj.name = payload.name;
+          if (payload.mobile !== undefined) updateObj.mobile = payload.mobile;
+          if (payload.date !== undefined) updateObj.date = payload.date;
+          if (payload.treatment !== undefined) updateObj.treatment = payload.treatment;
+          if (payload.amountPaid !== undefined) updateObj.amount_paid = payload.amountPaid;
+          if (payload.sessionHours !== undefined) updateObj.session_hours = payload.sessionHours;
+          if (payload.isPackageCustomer !== undefined) updateObj.is_package_customer = payload.isPackageCustomer;
+          if (payload.tookPackage !== undefined) updateObj.took_package = payload.tookPackage;
+          if (payload.packageAmount !== undefined) updateObj.package_amount = payload.packageAmount;
+          if (payload.totalPackageHours !== undefined) updateObj.total_package_hours = payload.totalPackageHours;
+          if (payload.packageSoldBy !== undefined) updateObj.package_sold_by = payload.packageSoldBy;
+          if (payload.outlet !== undefined) updateObj.outlet = payload.outlet;
+          if (payload.outlet_id !== undefined) updateObj.outlet_id = payload.outlet_id;
+          if (payload.paymentMethod !== undefined) updateObj.payment_method = payload.paymentMethod;
+          if (payload.check_in_time !== undefined) updateObj.check_in_time = payload.check_in_time;
+          if (payload.therapist_name !== undefined) updateObj.therapist_name = payload.therapist_name;
+          if (payload.room !== undefined) updateObj.room = payload.room;
+
+          const { error: updateErr, data: updated } = await supabase
+            .from('customers')
+            .update(updateObj)
+            .eq('client_uuid', client_uuid)
+            .select('id');
+
+          if (updateErr) {
+            results.push({ op, client_uuid, status: 'failed', error: updateErr.message || updateErr });
+            continue;
+          }
+
+          results.push({ op, client_uuid, status: 'updated', customer_id: updated?.[0]?.id ?? null });
+          continue;
+        }
+
+        if (op === 'delete') {
+          if (!client_uuid) {
+            results.push({ op, status: 'failed', error: 'Missing client_uuid for delete' });
+            continue;
+          }
+
+          const { error: deleteErr } = await supabase
+            .from('customers')
+            .delete()
+            .eq('client_uuid', client_uuid);
+
+          if (deleteErr) {
+            results.push({ op, client_uuid, status: 'failed', error: deleteErr.message || deleteErr });
+            continue;
+          }
+
+          results.push({ op, client_uuid, status: 'deleted' });
+          continue;
+        }
+
+        // unknown op
+        results.push({ op: item.op, status: 'failed', error: 'Unknown operation' });
+      } catch (err: any) {
+        console.error('Error processing bulk item:', err);
+        results.push({ op: item.op, client_uuid: item.client_uuid || null, status: 'failed', error: err?.message || String(err) });
+      }
+    } // for each
+
+    return NextResponse.json({ ok: true, results });
+
+  } catch (err: any) {
+    console.error('Bulk customers handler error:', err);
+    return NextResponse.json({ error: err?.message || 'Unknown error' }, { status: 500 });
   }
 }

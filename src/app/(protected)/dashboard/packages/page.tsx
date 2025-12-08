@@ -1,3 +1,4 @@
+// src/app/(protected)/dashboard/packages/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, FormEvent } from 'react';
@@ -117,6 +118,51 @@ export default function PackagesPage() {
       } catch { /* ignore */ }
     };
   }, [fetchPackages]);
+
+  // === NEW: Listen for package-update events from other clients (BroadcastChannel + localStorage fallback)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let bc: BroadcastChannel | null = null;
+
+    try {
+      if ('BroadcastChannel' in window) {
+        bc = new BroadcastChannel('spa_events');
+        bc.onmessage = (ev) => {
+          try {
+            if (ev?.data?.type === 'packages-updated') {
+              console.log('[spa_events] packages-updated received — refreshing packages');
+              fetchPackages();
+            }
+          } catch (e) { /* ignore malformed event */ }
+        };
+      }
+    } catch (err) {
+      // BroadcastChannel creation may throw in some older environments — ignore
+      console.warn('BroadcastChannel unavailable', err);
+      bc = null;
+    }
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'spa_packages_update' && e.newValue) {
+        try {
+          const msg = JSON.parse(e.newValue);
+          if (msg?.type === 'packages-updated') {
+            console.log('[localStorage] spa_packages_update detected — refreshing packages');
+            fetchPackages();
+          }
+        } catch (err) { /* ignore */ }
+      }
+    };
+
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      try { if (bc) bc.close(); } catch {}
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [fetchPackages]);
+  // === END NEW BLOCK
 
   useEffect(() => {
     let result = [...packages];
@@ -251,6 +297,14 @@ export default function PackagesPage() {
 
       logActivity('edit_package', description);
 
+      // notify other open tabs/clients that packages changed (best-effort)
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try { new BroadcastChannel('spa_events').postMessage({ type: 'packages-updated' }); } catch {}
+        }
+        try { localStorage.setItem('spa_packages_update', JSON.stringify({ type: 'packages-updated', ts: Date.now() })); } catch {}
+      } catch (e) { /* ignore */ }
+
       await fetchPackages();
       handleCloseEditModal();
     } catch (err: any) {
@@ -284,6 +338,15 @@ export default function PackagesPage() {
       if (error) throw error;
 
       logActivity('delete_package', `Deleted package for ${selectedPackage.name}. Remark: ${deleteRemark}`);
+
+      // notify other open tabs/clients that packages changed (best-effort)
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try { new BroadcastChannel('spa_events').postMessage({ type: 'packages-updated' }); } catch {}
+        }
+        try { localStorage.setItem('spa_packages_update', JSON.stringify({ type: 'packages-updated', ts: Date.now() })); } catch {}
+      } catch (e) { /* ignore */ }
+
       await fetchPackages();
       handleCloseDeleteModal();
     } catch (err: any) { setDeleteError(err.message || 'Failed to delete package.'); } finally { setIsDeleting(false); }
@@ -465,7 +528,7 @@ export default function PackagesPage() {
             <h2 className="text-xl font-bold text-red-700">Delete Package</h2>
             <p className="text-sm text-gray-600">Deleting package for <strong>{selectedPackage.name}</strong>.</p>
             <div><label className="text-xs uppercase font-bold text-gray-500">Reason</label><textarea value={deleteRemark} onChange={e => setDeleteRemark(e.target.value)} className="w-full p-2 border rounded text-black" required/></div>
-            <div><label className="text-xs uppercase font-bold text-gray-500">Password</label><input type="password" value={deletePassword} onChange={e => setDeletePassword(e.target.value)} className="w-full p-2 border rounded text-black" placeholder="Enter admin123"/>{deleteError && <p className="text-red-600 text-xs">{deleteError}</p>}</div>
+            <div><label className="text-xs uppercase font-bold text-gray-500">Password</label><input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} className="w-full p-2 border rounded text-black" placeholder="Enter admin123"/>{deleteError && <p className="text-red-600 text-xs">{deleteError}</p>}</div>
             <div className="flex justify-end gap-2"><button type="button" onClick={handleCloseDeleteModal} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button><button type="submit" disabled={isDeleting} className="px-4 py-2 bg-red-600 text-white rounded">{isDeleting ? 'Deleting...' : 'Confirm'}</button></div>
           </form>
         </div>

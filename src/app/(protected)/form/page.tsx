@@ -1,3 +1,4 @@
+// src/app/(protected)/form/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -15,7 +16,7 @@ type ClientInfo = {
   usedPackageHours: number;
   remainingHours: number;
   expiryDate: string;
-  packageId: string | null; // <--- FIX: ADDED packageId
+  packageId: string | null;
 };
 
 type Employee = { id: string; name: string; role: string; };
@@ -67,24 +68,27 @@ export default function ClientForm() {
   // --- Fetch ALL active employees with Role ---
   useEffect(() => {
     const fetchStaff = async () => {
-      const { data } = await supabase
-        .from('employees')
-        .select('id, name, role')
-        .eq('is_active', true)
-        .order('name');
-      
-      setEmployees(data || []);
+      try {
+        const { data } = await supabase
+          .from('employees')
+          .select('id, name, role')
+          .eq('is_active', true)
+          .order('name');
+        
+        setEmployees(data || []);
+      } catch (e) {
+        console.error('Failed to fetch employees', e);
+        setEmployees([]);
+      }
     };
     fetchStaff();
   }, []);
 
   // --- Filter Lists ---
-  // Therapists only for the "Therapist" dropdown
   const therapistOptions = useMemo(() => 
     employees.filter(e => e.role === 'therapist'), 
   [employees]);
 
-  // All staff for the "Sold By" dropdown
   const allStaffOptions = employees;
 
   useEffect(() => {
@@ -96,7 +100,6 @@ export default function ClientForm() {
       const lookup = async () => {
         try {
           setInputError('');
-          // Assuming the lookup API now returns the packageId
           const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
           if (!res.ok) {
             setClientInfo(null);
@@ -154,7 +157,7 @@ export default function ClientForm() {
     return (Number(formData.amountPaid) || 0) * 100;
   }, [formData.isPackageCustomer, formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
-  
+  // --- UPDATED handleSubmit (robust server response handling) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -168,7 +171,7 @@ export default function ClientForm() {
     }
     
     // Validate Therapist Name if a session is happening
-    if ((sessionHours > 0 || formData.isPackageCustomer) && !formData.therapistName.trim()) {
+    if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
       setInputError("Please select a Therapist.");
       setIsSubmitting(false);
       return;
@@ -180,13 +183,14 @@ export default function ClientForm() {
         setIsSubmitting(false);
         return;
       }
-      if (!formData.sold_by.trim()) {
+      if (!String(formData.sold_by || '').trim()) {
         setInputError('Please enter the name of the person who sold the package.');
         setIsSubmitting(false);
         return;
       }
     }
-    if (!formData.isPackageCustomer && !formData.tookPackage && (formData.amountPaid <= 0 || !formData.amountPaid)) {
+
+    if (!formData.isPackageCustomer && !formData.tookPackage && (Number(formData.amountPaid) <= 0 || !formData.amountPaid)) {
         setInputError('Please enter a valid Amount for the treatment.');
         setIsSubmitting(false);
         return;
@@ -209,18 +213,16 @@ export default function ClientForm() {
         checkInTime = new Date().toISOString();
       }
       
-      const payload = {
-        name: formData.name.trim(),
+      const payload: any = {
+        name: String(formData.name || '').trim(),
         mobile: mobile,
         date: formData.date,
         treatment: formData.treatment,
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
         isPackageCustomer: formData.isPackageCustomer,
-        
-        // ★★★ FIX: ADD THE PACKAGE ID TO THE PAYLOAD ★★★
+        // packageId if using package credits
         packageId: formData.isPackageCustomer ? (clientInfo?.packageId || null) : null,
-        
         tookPackage: formData.tookPackage,
         packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
         totalPackageHours: formData.tookPackage ? Number(formData.totalPackageHours) || 0 : 0,
@@ -241,44 +243,90 @@ export default function ClientForm() {
         body: JSON.stringify(payload)
       });
 
-      const data = await response.json();
+      // robust body read
+      const text = await response.text();
+      let data: any = null;
+      try { data = text ? JSON.parse(text) : null; } catch (parseErr) {
+        console.warn('client-form-submit: response not JSON:', text);
+      }
 
-      if (response.ok && data.success) {
+      console.log('[client-form-submit] response', response.status, data ?? text);
+
+      // server sends { ok: true, result } on success, { ok: false, error } on failure
+      if (response.ok) {
+        if (data && typeof data.ok !== 'undefined') {
+          if (data.ok) {
+            setSuccess(true);
+            setIsSubmitting(false);
+            setTimeout(() => {
+              router.refresh();
+              router.push('/dashboard/sales');
+            }, 900);
+
+            setMobile('');
+            setClientInfo(null);
+            setFormData(prev => ({
+              ...prev,
+              name: '',
+              treatment: '',
+              amountPaid: 0,
+              sessionHours: 0,
+              sessionMinutes: 0,
+              tookPackage: false,
+              isPackageCustomer: false,
+              packageAmount: 0,
+              totalPackageHours: 0,
+              sold_by: '',
+              packageValidity: '3 months',
+              therapistName: '', 
+              room: '', 
+              paymentMethod: 'cash',
+            }));
+            return;
+          } else {
+            const err = data.error || data.message || 'Server rejected the request';
+            console.error('Submission failed (api):', err, data);
+            setInputError(String(err));
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
+        // fallback: accept 200 as success if server didn't use ok flag
         setSuccess(true);
+        setIsSubmitting(false);
         setTimeout(() => {
           router.refresh();
           router.push('/dashboard/sales');
         }, 900);
-
-        setMobile('');
-        setClientInfo(null);
-        setFormData(prev => ({
-          ...prev,
-          name: '',
-          treatment: '',
-          amountPaid: 0,
-          sessionHours: 0,
-          sessionMinutes: 0,
-          tookPackage: false,
-          isPackageCustomer: false,
-          packageAmount: 0,
-          totalPackageHours: 0,
-          sold_by: '',
-          packageValidity: '3 months',
-          therapistName: '', 
-          room: '', 
-          paymentMethod: 'cash',
-        }));
-      } else {
-        const err = data.error || 'Unknown error';
-        console.error('Submission failed:', err);
-        setInputError(err);
-        setIsSubmitting(false);
+        return;
       }
+
+      // non-2xx
+      const serverMsg = data?.error ?? data?.message ?? text ?? `${response.status} ${response.statusText}`;
+      console.error('Submission failed (non-2xx):', serverMsg, data);
+      setInputError(String(serverMsg));
+      setIsSubmitting(false);
+
+      // OPTIONAL: save payload offline for later sync if you have offlineDb
+      // try {
+      //   await offlineDb.pending_clients.add({ ...payload, status: 'pending', created_local_at: new Date().toISOString() });
+      //   console.info('Saved submission locally for later sync');
+      // } catch (dbErr) {
+      //   console.warn('Failed to save submission locally', dbErr);
+      // }
+
     } catch (err: any) {
       console.error('Error saving record:', err);
       setInputError('An unexpected error occurred.');
       setIsSubmitting(false);
+
+      // OPTIONAL: save payload offline for later sync if you have offlineDb
+      // try {
+      //   await offlineDb.pending_clients.add({ ...payload, status: 'pending', created_local_at: new Date().toISOString() });
+      // } catch (dbErr) {
+      //   console.warn('Failed to save pending locally', dbErr);
+      // }
     }
   };
   
@@ -381,7 +429,6 @@ export default function ClientForm() {
             />
           </div>
 
-          {/* --- Therapist Dropdown (Filtered for Therapists only) --- */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name</label>
             <select
@@ -408,8 +455,6 @@ export default function ClientForm() {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
             />
           </div>
-          {/* --- End New Inputs --- */}
-
 
           {showAmountField && (
             <div>
@@ -543,7 +588,6 @@ export default function ClientForm() {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-              {/* --- Sold By Dropdown (All Staff) --- */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Sold By (Staff Name) *</label>
                 <select

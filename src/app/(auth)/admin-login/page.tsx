@@ -2,72 +2,121 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { useUser } from '@/context/UserContext'; 
+import { useUser } from '@/context/UserContext';
 import { Lock, User, Loader2, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+
+// Offline auth helpers (you already had these)
+import { saveLocalAdminHash, verifyLocalAdminPassword } from '@/lib/offlineAuth';
 
 export default function AdminLoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  
+
   const router = useRouter();
   const { login } = useUser();
+
+  const goToDashboard = () => {
+    router.push('/dashboard');
+  };
+
+  const handleServerAuth = async (uname: string, pwd: string) => {
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: uname, password: pwd }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: body?.error || `Auth failed (${res.status})` };
+      }
+      return { ok: true, body };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    try {
-      // 1. Verify credentials in DB
-      const { data, error } = await supabase
-        .from('app_users')
-        .select('username, role')
-        .eq('username', username.trim())
-        .eq('password', password.trim())
-        .single();
+    const uname = username.trim();
+    const pwd = password.trim();
 
-      if (error || !data) {
-        setError('Invalid username or password');
+    if (!uname || !pwd) {
+      setError('Please enter username and password.');
+      setLoading(false);
+      return;
+    }
+
+    // Prefer server auth when online
+    if (navigator.onLine) {
+      const server = await handleServerAuth(uname, pwd);
+
+      if (server.ok) {
+        // Use returned role (admin | developer | staff)
+        const role = server.body?.role ?? 'admin';
+
+        // Update app context
+        login({ username: uname, role });
+
+        // Save local salted hash for offline login (non-blocking)
+        try { await saveLocalAdminHash(pwd); } catch (err) { console.warn('saveLocalAdminHash failed', err); }
+
+        // Keep legacy cookie for compatibility (harmless)
+        document.cookie = 'admin_session=true; path=/; max-age=86400';
+
+        goToDashboard();
+        return;
+      }
+
+      // If server explicitly returned invalid credentials, stop and show message
+      if (!server.ok && server.error && !server.error.toLowerCase().includes('network')) {
+        setError(server.error || 'Authentication failed');
         setLoading(false);
         return;
       }
 
-      // 2. Login (Sets Context + LocalStorage)
-      login({ 
-        username: data.username, 
-        role: data.role as 'staff' | 'developer' 
-      });
-      
-      // 3. Set Cookie explicitly for layout protection
-      document.cookie = "admin_session=true; path=/; max-age=86400";
+      // If server failed due to network or unexpected issue, fall through to offline attempts
+    }
 
-      // 4. Small delay to ensure state propagation before redirect
-      setTimeout(() => {
-         router.push('/dashboard');
-      }, 500); // 500ms delay
-
-    } catch (err: any) {
-      console.error("Login error:", err);
-      setError('An unexpected error occurred');
+    // OFFLINE fallback
+    try {
+      const ok = await verifyLocalAdminPassword(pwd);
+      if (ok) {
+        login({ username: uname || 'admin', role: 'admin' });
+        document.cookie = 'admin_session=true; path=/; max-age=86400';
+        sessionStorage.setItem('offline_admin_logged_in', '1');
+        goToDashboard();
+        return;
+      } else {
+        setError('Offline login failed — wrong password or no cached credentials.');
+        setLoading(false);
+        return;
+      }
+    } catch (verifyErr: any) {
+      console.error('Offline verify error:', verifyErr);
+      setError('Offline login failed.');
       setLoading(false);
+      return;
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-700 relative">
-        
         <Link href="/login" className="absolute top-6 left-6 text-gray-400 hover:text-white transition-colors">
           <ArrowLeft size={24} />
         </Link>
 
         <div className="text-center mb-8 mt-2">
           <div className="inline-flex p-3 bg-red-900/30 rounded-full mb-4">
-             <Lock className="h-8 w-8 text-red-500" />
+            <Lock className="h-8 w-8 text-red-500" />
           </div>
           <h1 className="text-2xl font-bold text-white">Admin Sign In</h1>
           <p className="text-gray-400 mt-2 text-sm">Enter your secure credentials</p>

@@ -1,3 +1,4 @@
+// app/(protected)/client-entry/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -5,6 +6,11 @@ import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
 import { Clock, Calendar, MapPin, User, Tag, ChevronDown, RefreshCcw, X, Info } from 'lucide-react';
+
+// OFFLINE imports
+import { offlineDb } from '@/lib/offlineDb';
+import { OfflineClientPayload } from '@/lib/types';
+import { v4 as uuidv4 } from 'uuid';
 
 // --- Type Definitions ---
 type Treatment = { id: string; name: string; };
@@ -86,11 +92,8 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
     setLoading(true);
     setError('');
     try {
-      // 1. Fetch previous visits linked to this mobile number
-      // FIX: Query the 'customers' table instead of 'check_ins'
-      // FIX: Use snake_case column names from the database
       const { data: visits, error: visitsError } = await supabase
-        .from('customers') // <--- FIXED TABLE NAME
+        .from('customers')
         .select(`
           id, 
           date, 
@@ -100,7 +103,7 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
           therapist_name, 
           check_in_time, 
           is_package_customer
-        `) // <--- FIXED COLUMN NAMES
+        `)
         .eq('mobile', mobile)
         .order('check_in_time', { ascending: false });
 
@@ -109,13 +112,12 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
       const formattedHistory: VisitHistory[] = (visits || []).map((visit: any) => ({
           id: visit.id,
           date: formatDate(visit.check_in_time),
-          // FIX: Map database snake_case fields to frontend camelCase fields
-          sessionHours: visit.session_hours,         // Mapped from session_hours
+          sessionHours: visit.session_hours,
           treatment: visit.treatment,
-          outlet: visit.outlet_name,                 // Mapped from outlet_name
+          outlet: visit.outlet_name,
           therapist_name: visit.therapist_name || 'Self/N/A',
           check_in_time: visit.check_in_time,
-          isPackageUsed: visit.is_package_customer   // Mapped from is_package_customer
+          isPackageUsed: visit.is_package_customer
       }));
       
       setHistory(formattedHistory);
@@ -194,16 +196,16 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({ clientInfo, m
                 </div>
                 
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <Clock className='h-4 w-4 text-gray-500'/> **Duration:** {formatDuration(visit.sessionHours)}
+                  <Clock className='h-4 w-4 text-gray-500'/> <strong>Duration:</strong> {formatDuration(visit.sessionHours)}
                 </p>
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <Info className='h-4 w-4 text-gray-500'/> **Treatment:** {visit.treatment}
+                  <Info className='h-4 w-4 text-gray-500'/> <strong>Treatment:</strong> {visit.treatment}
                 </p>
                 <p className="text-sm text-gray-300 mb-1 flex items-center gap-2">
-                  <User className='h-4 w-4 text-gray-500'/> **Therapist:** {visit.therapist_name}
+                  <User className='h-4 w-4 text-gray-500'/> <strong>Therapist:</strong> {visit.therapist_name}
                 </p>
                 <p className="text-sm text-gray-300 flex items-center gap-2">
-                  <MapPin className='h-4 w-4 text-gray-500'/> **Outlet:** {visit.outlet}
+                  <MapPin className='h-4 w-4 text-gray-500'/> <strong>Outlet:</strong> {visit.outlet}
                 </p>
               </div>
             ))
@@ -425,8 +427,6 @@ export default function ClientCheckinForm() {
     if (mobile.length !== 10) return;
     try {
       setError('');
-      // NOTE: We rely on the /api/client-lookup endpoint to be updated
-      // to return `remainingHours`, `expiryDate`, `packageId`, `totalPackageHours`, and `usedPackageHours`.
       const res = await fetch(`/api/client-lookup?mobile=${encodeURIComponent(mobile)}`);
       if (!res.ok) {
         setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
@@ -436,7 +436,6 @@ export default function ClientCheckinForm() {
       
       const data: any | null = await res.json();
       
-      // Ensure we set a default ClientInfo object even if API returns null/minimal data
       const finalClientInfo: ClientInfo = data && data.status !== 'not_found' ? {
           status: data.status, 
           name: data.name, 
@@ -444,8 +443,8 @@ export default function ClientCheckinForm() {
           remainingHours: data.remainingHours || 0, 
           expiryDate: data.expiryDate || null, 
           packageId: data.packageId || null,
-          totalPackageHours: data.totalPackageHours || 0, // NEW: total hours
-          usedPackageHours: data.usedPackageHours || 0,   // NEW: used hours
+          totalPackageHours: data.totalPackageHours || 0,
+          usedPackageHours: data.usedPackageHours || 0,
       } : { 
           status: 'not_found', 
           name: '', 
@@ -587,8 +586,6 @@ export default function ClientCheckinForm() {
         return;
       }
       const amountInRupees = Number(formData.amountPaid) || 0;
-      // NOTE: Assuming outlet.minTreatmentAmount is 1500 for the check, 
-      // but using the user-requested static check for now.
       const MIN_AMOUNT_RUPEES = 1500; 
 
       if (amountInRupees < MIN_AMOUNT_RUPEES) {
@@ -604,6 +601,9 @@ export default function ClientCheckinForm() {
     const treatmentName = formData.treatment;
     const finalAmountInPaise = getFinalAmountInPaise();
     
+    // generate client_uuid here and attach to payload (helps idempotency)
+    const clientUuid = typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
+
     try {
       const checkInTime: string | null = new Date().toISOString();
 
@@ -616,6 +616,7 @@ export default function ClientCheckinForm() {
       const isPackageUsed = !formData.tookPackage && clientInfo?.status === 'active';
 
       const payload = {
+          client_uuid: clientUuid,
           name: String(formData.name || '').trim(),
           mobile: mobile,
           date: new Date().toISOString().split('T')[0],
@@ -629,9 +630,7 @@ export default function ClientCheckinForm() {
           
           amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
           sessionHours: sessionHours, 
-          // CRITICAL: isPackageCustomer must be true if an active package exists AND this session is NOT a new package purchase.
           isPackageCustomer: isPackageUsed,
-          // CRITICAL FIX: Pass the packageId if a package is being used
           packageId: isPackageUsed ? clientInfo?.packageId : null,
 
           outlet: outlet!.name,
@@ -640,7 +639,6 @@ export default function ClientCheckinForm() {
           finalAmountInPaise: finalAmountInPaise, 
           check_in_time: checkInTime,
 
-          // therapists: keep both discrete fields and combined legacy field
           therapist_name: therapistCombined,
           therapist_primary: therapistPrimary,
           therapist_secondary: therapistSecondary,
@@ -654,31 +652,89 @@ export default function ClientCheckinForm() {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Submission failed');
+        throw new Error(data.error || `Submission failed (${res.status})`);
       }
 
-      if (data.paymentMethod === 'upi') {
+      // Server accepted – handle UPI redirect or success flow
+      if ((data as any).paymentMethod === 'upi') {
         setSuccess('Registration complete. Redirecting to payment QR...');
-        const amountInRupees = data.finalAmountInPaise / 100;
+        const amountInRupees = (data as any).finalAmountInPaise / 100;
         setTimeout(() => {
-          // FIX: Pass outletId explicitly in the query string 
-          // to ensure the back button on the UPI page redirects correctly.
-          router.push(`/pay/qr/${data.outlet_id}?amount=${amountInRupees}&outletId=${data.outlet_id}`);
+          router.push(`/pay/qr/${(data as any).outlet_id}?amount=${amountInRupees}&outletId=${(data as any).outlet_id}`);
         }, 1500);
-      } 
-      else {
+      } else {
         setSuccess('Registration successful! Redirecting...');
-        setTimeout(() => {
-          router.push(`/client-cash-success?outletId=${outletId}`);
-        }, 1500);
+        setTimeout(() => { router.push(`/client-cash-success?outletId=${outletId}`); }, 1500);
       }
 
     } catch (err: any) {
       console.error('Submit error:', err);
-      setError(err.message || 'An unknown error occurred.');
-      setLoading(false);
+
+      // OFFLINE FALLBACK: save to IndexedDB so the receptionist can continue working
+      try {
+        const localPayload: OfflineClientPayload = {
+          client_uuid: clientUuid,
+          name: String(formData.name || '').trim(),
+          mobile,
+          date: new Date().toISOString().split('T')[0],
+          treatment: formData.treatment,
+          tookPackage: formData.tookPackage,
+          packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+          totalPackageHours: Number(formData.totalPackageHours) || 0,
+          packageSoldBy: formData.tookPackage ? formData.sold_by.trim() : null,
+          packageValidity: formData.tookPackage ? formData.packageValidity : null,
+          amountPaid: formData.tookPackage ? 0 : finalAmountInPaise,
+          sessionHours: getSessionDuration(),
+          isPackageCustomer: !formData.tookPackage && clientInfo?.status === 'active',
+          packageId: (!formData.tookPackage && clientInfo?.status === 'active') ? clientInfo?.packageId ?? null : null,
+          outlet: outlet!.name,
+          outlet_id: outlet!.id,
+          paymentMethod: formData.paymentMethod,
+          finalAmountInPaise: finalAmountInPaise,
+          check_in_time: new Date().toISOString(),
+          therapist_name: (formData.therapistPrimary || '') + (formData.showSecondaryTherapist ? ` & ${formData.therapistSecondary || ''}` : ''),
+          therapist_primary: formData.therapistPrimary || null,
+          therapist_secondary: formData.showSecondaryTherapist ? formData.therapistSecondary || null : null,
+          room: formData.room || null,
+          created_local_at: new Date().toISOString(),
+          status: 'pending',
+          sync_error: String(err?.message || err)
+        };
+
+        await offlineDb.pending_clients.add(localPayload);
+
+        setSuccess('Saved locally — server unreachable. Entry will sync automatically when server is back.');
+        setLoading(false);
+
+        // reset form for next entry
+        setFormData({
+          name: '',
+          treatment: '',
+          amountPaid: 0,
+          sessionHours: 0,
+          sessionMinutes: 0,
+          paymentMethod: 'cash',
+          tookPackage: false,
+          packageAmount: 0,
+          totalPackageHours: 0,
+          packageValidity: '3 months',
+          sold_by: '',
+          therapistPrimary: '',
+          therapistSecondary: '',
+          showSecondaryTherapist: false,
+          room: ''
+        });
+
+        setMobile('');
+        setClientInfo(null);
+
+      } catch (dexErr) {
+        console.error('Failed to save offline:', dexErr);
+        setError(err?.message || 'An unknown error occurred and local save failed.');
+        setLoading(false);
+      }
     }
   };
 
@@ -751,7 +807,7 @@ export default function ClientCheckinForm() {
                     <div className={`flex-1 p-3 rounded-lg text-sm text-center ${clientInfo.status === 'active' ? 'bg-green-900/50 border border-green-700 text-green-300' : 'bg-yellow-900/50 border border-yellow-700 text-yellow-300'}`}>
                         <strong className='block'>Package Status: {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}</strong>
                         <span className='block text-xs mt-1'>
-                            Expiry: **{clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}**
+                            Expiry: <strong>{clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}</strong>
                         </span>
                     </div>
                     {showHistoryButton && (
@@ -776,7 +832,7 @@ export default function ClientCheckinForm() {
                     <div className="w-full bg-gray-700 rounded-full h-2.5">
                       <div 
                         className="bg-red-600 h-2.5 rounded-full transition-all duration-500 ease-out" 
-                        style={{ width: `${packageHours.percentUsed}%` }}
+                        style={{ width: `${Math.min(Math.max(packageHours.percentUsed, 0), 100)}%` }}
                       ></div>
                     </div>
                     <div className="text-right text-sm font-semibold text-green-400 mt-1">
@@ -828,7 +884,7 @@ export default function ClientCheckinForm() {
                   required={true}
                 >
                   <option value="">-- Select Therapist 1 --</option>
-                  {employees.map((emp) => ( // <-- employees list is now dynamically filtered
+                  {employees.map((emp) => (
                     <option key={emp.id} value={emp.name}>
                         {emp.name}
                     </option>
@@ -943,7 +999,6 @@ export default function ClientCheckinForm() {
                     <input
                       name="packageAmount"
                       type="number"
-                      // ★★★ FIX: step="1" ensures numbers ending in 0 are valid for a number input field ★★★
                       step="1" 
                       min="1"
                       value={formData.packageAmount || ''}
@@ -1021,8 +1076,7 @@ export default function ClientCheckinForm() {
                   name="amountPaid"
                   type="number"
                   step="1"
-                  // ★★★ NEW: Set starting limit to 1500 ★★★
-                  min="1500" 
+                  min="1500"
                   value={formData.amountPaid || ''}
                   onChange={handleChange}
                   required
@@ -1063,6 +1117,11 @@ export default function ClientCheckinForm() {
             }
           </button>
         </form>
+      </div>
+
+      {/* Small indicator — local queue (optional, can be removed once OfflineSync is in layout) */}
+      <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 9999, background: 'rgba(0,0,0,0.7)', color: 'white', padding: 8, borderRadius: 8, fontSize: 12 }}>
+        <small>Local queue enabled — unsynced entries are stored locally if server is unreachable.</small>
       </div>
     </div>
   );

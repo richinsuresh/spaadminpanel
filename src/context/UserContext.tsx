@@ -1,52 +1,52 @@
-'use client';
+"use client";
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
+// src/context/UserContext.tsx
+import { createContext, useContext, useState, ReactNode } from 'react';
 
-export type AppUser = {
+type Role = 'admin' | 'developer' | 'staff';
+
+type User = {
   username: string;
-  role: 'staff' | 'developer';
+  role: Role;
 };
 
-interface UserContextType {
-  user: AppUser | null;
-  isLoading: boolean; // <--- This was likely missing
-  login: (user: AppUser) => void;
+type UserContextValue = {
+  user: User | null;
+  isLoading: boolean;
+  login: (u: User) => void;
   logout: () => void;
-}
+};
 
-const UserContext = createContext<UserContextType | undefined>(undefined);
+const UserContext = createContext<UserContextValue | undefined>(undefined);
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AppUser | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // <--- Initialize as true
-  const router = useRouter();
-
-  useEffect(() => {
-    // Check local storage on mount
-    const stored = localStorage.getItem('app_user');
-    if (stored) {
-      try {
-        setUser(JSON.parse(stored));
-      } catch (e) {
-        console.error("Failed to parse user session");
-      }
+  const [user, setUser] = useState<User | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('app_user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
     }
-    setIsLoading(false); // <--- Mark loading as done
-  }, []);
+  });
 
-  const login = (userData: AppUser) => {
-    setUser(userData);
-    localStorage.setItem('app_user', JSON.stringify(userData));
-    // Set a cookie as a backup for middleware/layouts
-    document.cookie = "admin_session=true; path=/; max-age=86400"; 
+  const [isLoading] = useState(false);
+
+  const login = (u: User) => {
+    setUser(u);
+    try {
+      localStorage.setItem('app_user', JSON.stringify(u));
+    } catch {}
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('app_user');
-    document.cookie = "admin_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
-    router.push('/login');
+    try {
+      localStorage.removeItem('app_user');
+      sessionStorage.removeItem('offline_admin_logged_in');
+      document.cookie = 'admin_session=; path=/; max-age=0';
+      document.cookie = 'auth_role=; path=/; max-age=0';
+    } catch {}
   };
 
   return (
@@ -57,9 +57,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
 }
 
 export function useUser() {
-  const context = useContext(UserContext);
-  if (!context) {
-    throw new Error('useUser must be used within UserProvider');
+  const ctx = useContext(UserContext);
+  if (!ctx) {
+    throw new Error("useUser must be used inside UserProvider");
   }
-  return context;
+  return ctx;
 }
