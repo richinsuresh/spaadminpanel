@@ -40,6 +40,7 @@ export default function OutletDashboardLayout({
   
   const navItems = [
     { name: 'Sales & Check-out', href: '/outlet/dashboard/sales', icon: '💰' },
+    { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: '💸' }, // ✅ NEW
     // { name: 'Customers', href: '/outlet/dashboard/customers', icon: '👥' },
     // { name: 'Packages', href: '/outlet/dashboard/packages', icon: '📦' },
   ];
@@ -47,16 +48,14 @@ export default function OutletDashboardLayout({
   const getLinkClass = (href: string) => {
     const isActive = pathname === href || pathname.startsWith(href);
     
-    // --- UPDATED THEME ---
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
-        isActive
-          ? 'bg-red-900/50 text-white border-r-4 border-red-500' // Active link
-          : 'text-gray-400 hover:bg-gray-800 hover:text-white' // Inactive link
-      }`;
+      isActive
+        ? 'bg-red-900/50 text-white border-r-4 border-red-500' // Active link
+        : 'text-gray-400 hover:bg-gray-800 hover:text-white'   // Inactive link
+    }`;
   };
 
   return (
-    // --- UPDATED THEME: Changed background to light gray ---
     <div className="flex min-h-screen bg-gray-100">
       
       {isSidebarOpen && (
@@ -66,7 +65,7 @@ export default function OutletDashboardLayout({
         ></div>
       )}
 
-      {/* --- UPDATED THEME: Sidebar is now dark --- */}
+      {/* Sidebar */}
       <div 
         className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl flex flex-col transform ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
@@ -79,7 +78,7 @@ export default function OutletDashboardLayout({
         </div>
         
         <nav className="flex-1 mt-6">
-           {navItems.map((item) => (
+          {navItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -103,10 +102,9 @@ export default function OutletDashboardLayout({
         </div>
       </div>
 
-      {/* --- UPDATED THEME: Main Content --- */}
+      {/* Main Content */}
       <div className="flex-1 flex flex-col md:ml-64">
-        
-        {/* --- UPDATED THEME: Mobile header is dark --- */}
+        {/* Mobile header */}
         <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-gray-900 p-4 shadow-sm">
           <button 
             onClick={() => setIsSidebarOpen(true)}
@@ -118,12 +116,10 @@ export default function OutletDashboardLayout({
             </svg>
           </button>
           <h1 className="text-lg font-bold text-red-600">{outletName}</h1>
-          <div></div> {/* Spacer */}
+          <div></div>
         </div>
         
-        {/* --- FIX: Removed padding from <main>, set background to white --- */}
         <main className="flex-1 bg-white">
-          {/* --- FIX: Added padding to this inner div instead --- */}
           <div className="max-w-7xl mx-auto p-6 md:p-10">
             {children}
           </div>

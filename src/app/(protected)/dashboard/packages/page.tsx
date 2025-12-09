@@ -8,6 +8,8 @@ import { exportToExcel } from '@/lib/exportToExcel';
 import { User } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 
+/* ===================== TYPES ===================== */
+
 type PackageCustomer = {
   id: string;
   name: string;
@@ -23,34 +25,122 @@ type PackageCustomer = {
   created_at?: string | null;
 };
 
+// Same structure idea as search page, but minimal for this page
+type HistoryRow = {
+  id: string;
+  date: string | null;
+  name: string | null;
+  mobile: string | null;
+  treatment: string | null;
+  session_hours: number | null;
+  amount_paid: number | null;
+  check_in_time: string | null;
+  check_out_time: string | null;
+  therapist_name: string | null;
+  outlet_name: string | null;
+  is_package_customer?: boolean | null;
+  _raw?: any;
+};
+
+/* ===================== HELPERS ===================== */
+
 const toInputDate = (dateString: string | null): string => {
   if (!dateString) return '';
-  try { return new Date(dateString).toISOString().split('T')[0]; } catch (e) { return ''; }
+  try {
+    return new Date(dateString).toISOString().split('T')[0];
+  } catch (e) {
+    return '';
+  }
 };
 
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
-  return new Date(dateString).toLocaleDateString('en-IN', { day: 'numeric', month: 'numeric', year: 'numeric' });
+  return new Date(dateString).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+  });
 };
+
+// helpers similar to search page
+const fmtDate = (iso: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Invalid';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const fmtTime = (iso: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+const fmtDuration = (h: number | null | undefined) => {
+  if (h === null || h === undefined) return '—';
+  const n = Number(h);
+  if (!Number.isFinite(n) || n === 0) return '—';
+  const m = Math.round(n * 60);
+  if (m < 60) return `${m}m`;
+  const hrs = Math.floor(m / 60);
+  const mins = m - hrs * 60;
+  return mins === 0 ? `${hrs}h` : `${hrs}h ${mins}m`;
+};
+
+const normalizeHistoryRow = (r: any): HistoryRow => {
+  const maybeStr = (v: any) =>
+    v === undefined || v === null ? null : String(v);
+  const toNum = (v: any) =>
+    v === undefined || v === null || v === ''
+      ? null
+      : Number.isFinite(Number(v))
+      ? Number(v)
+      : null;
+
+  return {
+    id: String(r.id ?? r._id ?? ''),
+    date: maybeStr(r.date ?? r.visit_date ?? r.created_at ?? null),
+    name: maybeStr(r.name ?? r.customer_name ?? null),
+    mobile: maybeStr(r.mobile ?? r.phone ?? r.customer_mobile ?? null),
+    treatment: maybeStr(r.treatment ?? r.service ?? null),
+    session_hours: toNum(r.session_hours ?? r.sessionHours ?? null),
+    amount_paid: toNum(r.amount_paid ?? r.amountPaid ?? null),
+    check_in_time: maybeStr(r.check_in_time ?? r.checkInTime ?? r.check_in ?? null),
+    check_out_time: maybeStr(r.check_out_time ?? r.checkOutTime ?? r.check_out ?? null),
+    therapist_name: maybeStr(r.therapist_name ?? r.therapist ?? null),
+    outlet_name: maybeStr(r.outlet_name ?? r.outlet ?? null),
+    is_package_customer: !!(r.is_package_customer ?? r.isPackageCustomer ?? r.package_redeemed ?? false),
+    _raw: r,
+  };
+};
+
+/* ===================== MAIN COMPONENT ===================== */
 
 export default function PackagesPage() {
   const { logActivity } = useActivityLog();
   const [packages, setPackages] = useState<PackageCustomer[]>([]);
   const [filteredPackages, setFilteredPackages] = useState<PackageCustomer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
+  const [statusFilter, setStatusFilter] =
+    useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const outlets = ['all', ...OUTLETS.map(o => o.name)];
+  const outlets = ['all', ...OUTLETS.map((o) => o.name)];
   const [outletFilter, setOutletFilter] = useState('all');
 
   // Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [selectedPackage, setSelectedPackage] = useState<PackageCustomer | null>(null);
+  const [selectedPackage, setSelectedPackage] =
+    useState<PackageCustomer | null>(null);
 
   // Form States
   const [editFormData, setEditFormData] = useState<any>({});
@@ -64,21 +154,35 @@ export default function PackagesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // NEW: history for the selected package client
+  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
   const normalizeRow = (row: any): PackageCustomer => {
-    const safeNumber = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-    const total_hours = safeNumber(row.total_hours ?? row.totalPackageHours ?? row.total_hours);
+    const safeNumber = (v: any) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const total_hours = safeNumber(
+      row.total_hours ?? row.totalPackageHours ?? row.total_hours
+    );
     const used_hours = safeNumber(row.used_hours ?? row.usedPackageHours ?? 0);
     return {
       id: String(row.id),
       name: row.name ?? '—',
       mobile: row.mobile ?? '—',
-      package_amount: safeNumber(row.package_amount ?? row.packageAmount ?? 0),
+      package_amount: safeNumber(
+        row.package_amount ?? row.packageAmount ?? 0
+      ),
       total_hours: total_hours,
       used_hours: used_hours,
-      remaining_hours: safeNumber(row.remaining_hours ?? (total_hours - used_hours)),
+      remaining_hours: safeNumber(
+        row.remaining_hours ?? total_hours - used_hours
+      ),
       start_date: row.start_date ?? null,
       expiry_date: row.expiry_date ?? null,
-      status: (row.status ?? 'active'),
+      status: row.status ?? 'active',
       outlet: row.outlet ?? '—',
       created_at: row.created_at ?? null,
     };
@@ -88,9 +192,15 @@ export default function PackagesPage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const { data, error } = await supabase.from('packages').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('packages')
+        .select('*')
+        .order('created_at', { ascending: false });
+
       if (error) {
-        const { data: fallbackData, error: fallbackErr } = await supabase.from('packages').select('*');
+        const { data: fallbackData, error: fallbackErr } = await supabase
+          .from('packages')
+          .select('*');
         if (fallbackErr) throw fallbackErr;
         setPackages((fallbackData ?? []).map(normalizeRow));
         return;
@@ -105,21 +215,31 @@ export default function PackagesPage() {
     }
   }, []);
 
-  useEffect(() => { fetchPackages(); }, [fetchPackages]);
+  useEffect(() => {
+    fetchPackages();
+  }, [fetchPackages]);
 
   useEffect(() => {
-    const channel = supabase.channel('packages-admin')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'packages' }, () => fetchPackages())
+    const channel = supabase
+      .channel('packages-admin')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'packages' },
+        () => fetchPackages()
+      )
       .subscribe();
     return () => {
       try {
         if ((channel as any).unsubscribe) (channel as any).unsubscribe();
-        else if ((supabase as any).removeChannel) (supabase as any).removeChannel(channel);
-      } catch { /* ignore */ }
+        else if ((supabase as any).removeChannel)
+          (supabase as any).removeChannel(channel);
+      } catch {
+        /* ignore */
+      }
     };
   }, [fetchPackages]);
 
-  // === NEW: Listen for package-update events from other clients (BroadcastChannel + localStorage fallback)
+  // === NEW: Listen for package-update events from other clients
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -131,14 +251,17 @@ export default function PackagesPage() {
         bc.onmessage = (ev) => {
           try {
             if (ev?.data?.type === 'packages-updated') {
-              console.log('[spa_events] packages-updated received — refreshing packages');
+              console.log(
+                '[spa_events] packages-updated received — refreshing packages'
+              );
               fetchPackages();
             }
-          } catch (e) { /* ignore malformed event */ }
+          } catch (e) {
+            /* ignore malformed event */
+          }
         };
       }
     } catch (err) {
-      // BroadcastChannel creation may throw in some older environments — ignore
       console.warn('BroadcastChannel unavailable', err);
       bc = null;
     }
@@ -148,17 +271,23 @@ export default function PackagesPage() {
         try {
           const msg = JSON.parse(e.newValue);
           if (msg?.type === 'packages-updated') {
-            console.log('[localStorage] spa_packages_update detected — refreshing packages');
+            console.log(
+              '[localStorage] spa_packages_update detected — refreshing packages'
+            );
             fetchPackages();
           }
-        } catch (err) { /* ignore */ }
+        } catch (err) {
+          /* ignore */
+        }
       }
     };
 
     window.addEventListener('storage', onStorage);
 
     return () => {
-      try { if (bc) bc.close(); } catch {}
+      try {
+        if (bc) bc.close();
+      } catch {}
       window.removeEventListener('storage', onStorage);
     };
   }, [fetchPackages]);
@@ -168,7 +297,11 @@ export default function PackagesPage() {
     let result = [...packages];
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
-      result = result.filter((p) => (p.name ?? '').toLowerCase().includes(term) || (p.mobile ?? '').includes(term));
+      result = result.filter(
+        (p) =>
+          (p.name ?? '').toLowerCase().includes(term) ||
+          (p.mobile ?? '').includes(term)
+      );
     }
     if (statusFilter === 'expiring_soon') {
       const today = new Date();
@@ -177,39 +310,61 @@ export default function PackagesPage() {
       today.setHours(0, 0, 0, 0);
       result = result.filter((p) => {
         if (p.status !== 'active' || !p.expiry_date) return false;
-        try { const expiryDate = new Date(p.expiry_date); return expiryDate >= today && expiryDate <= thirtyDaysFromNow; } catch (e) { return false; }
+        try {
+          const expiryDate = new Date(p.expiry_date);
+          return expiryDate >= today && expiryDate <= thirtyDaysFromNow;
+        } catch (e) {
+          return false;
+        }
       });
     } else if (statusFilter !== 'all') {
-      result = result.filter((p) => (p.status ?? '').toLowerCase() === statusFilter);
+      result = result.filter(
+        (p) => (p.status ?? '').toLowerCase() === statusFilter
+      );
     }
     if (outletFilter !== 'all') {
-      result = result.filter((p) => (p.outlet ?? '').toLowerCase() === outletFilter.toLowerCase());
+      result = result.filter(
+        (p) =>
+          (p.outlet ?? '').toLowerCase() === outletFilter.toLowerCase()
+      );
     }
     setFilteredPackages(result);
   }, [searchTerm, statusFilter, outletFilter, packages]);
 
-  const formatCurrency = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount / 100);
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 0,
+    }).format(amount / 100);
 
   const handleExport = () => {
     setIsExporting(true);
-    const dataToExport = filteredPackages.map(p => ({
-      'Name': p.name,
-      'Mobile': p.mobile,
-      'Outlet': p.outlet,
-      'Status': p.status,
+    const dataToExport = filteredPackages.map((p) => ({
+      Name: p.name,
+      Mobile: p.mobile,
+      Outlet: p.outlet,
+      Status: p.status,
       'Remaining Hours': p.remaining_hours.toFixed(1),
       'Total Hours': p.total_hours,
       'Used Hours': p.used_hours.toFixed(1),
       'Package Amount': p.package_amount / 100,
       'Expiry Date': formatDate(p.expiry_date),
     }));
-    if (dataToExport.length === 0) { alert('No data to export.'); setIsExporting(false); return; }
+    if (dataToExport.length === 0) {
+      alert('No data to export.');
+      setIsExporting(false);
+      return;
+    }
     exportToExcel(dataToExport, 'Package_Clients_Report.xlsx');
     setIsExporting(false);
     logActivity('export_packages', 'Downloaded Package Report');
   };
 
-  const handleOpenEditModal = (pkg: PackageCustomer, e: React.MouseEvent) => {
+  const handleOpenEditModal = (
+    pkg: PackageCustomer,
+    e: React.MouseEvent
+  ) => {
     e.stopPropagation();
     setSelectedPackage(pkg);
     setEditFormData({
@@ -244,7 +399,6 @@ export default function PackagesPage() {
     setIsSaving(true);
     setSaveError(null);
 
-    // password + remark required
     if (editPassword !== 'admin123') {
       setSaveError('Incorrect Admin Password');
       setIsSaving(false);
@@ -257,10 +411,8 @@ export default function PackagesPage() {
     }
 
     try {
-      // build before snapshot
       const before = { ...selectedPackage };
 
-      // prepare numeric conversions
       const total_hours = Number(editFormData.total_hours) || 0;
       const used_hours = Number(editFormData.used_hours) || 0;
       const remaining_hours = total_hours - used_hours;
@@ -268,7 +420,9 @@ export default function PackagesPage() {
       const updates: any = {
         name: editFormData.name,
         mobile: editFormData.mobile,
-        package_amount: Math.round(Number(editFormData.package_amount || 0) * 100),
+        package_amount: Math.round(
+          Number(editFormData.package_amount || 0) * 100
+        ),
         total_hours: total_hours,
         used_hours: used_hours,
         remaining_hours,
@@ -278,32 +432,43 @@ export default function PackagesPage() {
         outlet: editFormData.outlet,
       };
 
-      const { error } = await supabase.from('packages').update(updates).eq('id', selectedPackage.id);
+      const { error } = await supabase
+        .from('packages')
+        .update(updates)
+        .eq('id', selectedPackage.id);
 
       if (error) throw error;
 
-      // build after snapshot
       const after = {
         ...before,
         ...updates,
       };
 
-      // log structured JSON so ActivityPage can show changes
       const description = JSON.stringify({
         remark: editRemark,
         before,
-        after
+        after,
       });
 
       logActivity('edit_package', description);
 
-      // notify other open tabs/clients that packages changed (best-effort)
       try {
         if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-          try { new BroadcastChannel('spa_events').postMessage({ type: 'packages-updated' }); } catch {}
+          try {
+            new BroadcastChannel('spa_events').postMessage({
+              type: 'packages-updated',
+            });
+          } catch {}
         }
-        try { localStorage.setItem('spa_packages_update', JSON.stringify({ type: 'packages-updated', ts: Date.now() })); } catch {}
-      } catch (e) { /* ignore */ }
+        try {
+          localStorage.setItem(
+            'spa_packages_update',
+            JSON.stringify({ type: 'packages-updated', ts: Date.now() })
+          );
+        } catch {}
+      } catch (e) {
+        /* ignore */
+      }
 
       await fetchPackages();
       handleCloseEditModal();
@@ -315,7 +480,10 @@ export default function PackagesPage() {
     }
   };
 
-  const handleOpenDeleteModal = (pkg: PackageCustomer, e: React.MouseEvent) => {
+  const handleOpenDeleteModal = (
+    pkg: PackageCustomer,
+    e: React.MouseEvent
+  ) => {
     e.stopPropagation();
     setSelectedPackage(pkg);
     setDeletePassword('');
@@ -324,37 +492,110 @@ export default function PackagesPage() {
     setIsDeleteModalOpen(true);
   };
 
-  const handleCloseDeleteModal = () => { setIsDeleteModalOpen(false); setSelectedPackage(null); setIsDeleting(false); setDeleteError(null); };
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setSelectedPackage(null);
+    setIsDeleting(false);
+    setDeleteError(null);
+  };
 
   const handleDeleteConfirm = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedPackage) return;
-    if (deletePassword !== 'admin123') { setDeleteError('Incorrect password.'); return; }
-    if (!deleteRemark.trim()) { setDeleteError('Remark required.'); return; }
+    if (deletePassword !== 'admin123') {
+      setDeleteError('Incorrect password.');
+      return;
+    }
+    if (!deleteRemark.trim()) {
+      setDeleteError('Remark required.');
+      return;
+    }
 
     setIsDeleting(true);
     try {
-      const { error } = await supabase.from('packages').delete().eq('id', selectedPackage.id);
+      const { error } = await supabase
+        .from('packages')
+        .delete()
+        .eq('id', selectedPackage.id);
       if (error) throw error;
 
-      logActivity('delete_package', `Deleted package for ${selectedPackage.name}. Remark: ${deleteRemark}`);
+      logActivity(
+        'delete_package',
+        `Deleted package for ${selectedPackage.name}. Remark: ${deleteRemark}`
+      );
 
-      // notify other open tabs/clients that packages changed (best-effort)
       try {
         if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-          try { new BroadcastChannel('spa_events').postMessage({ type: 'packages-updated' }); } catch {}
+          try {
+            new BroadcastChannel('spa_events').postMessage({
+              type: 'packages-updated',
+            });
+          } catch {}
         }
-        try { localStorage.setItem('spa_packages_update', JSON.stringify({ type: 'packages-updated', ts: Date.now() })); } catch {}
-      } catch (e) { /* ignore */ }
+        try {
+          localStorage.setItem(
+            'spa_packages_update',
+            JSON.stringify({ type: 'packages-updated', ts: Date.now() })
+          );
+        } catch {}
+      } catch (e) {
+        /* ignore */
+      }
 
       await fetchPackages();
       handleCloseDeleteModal();
-    } catch (err: any) { setDeleteError(err.message || 'Failed to delete package.'); } finally { setIsDeleting(false); }
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete package.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  /* ========== NEW: FETCH HISTORY WHEN CLICKING A ROW ========== */
+
+  const fetchHistoryForMobile = async (mobile: string) => {
+    if (!mobile) return;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    setHistoryRows([]);
+
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('mobile', mobile)
+        .order('date', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching history:', error);
+        setHistoryError('Failed to load visit history');
+        setHistoryRows([]);
+        return;
+      }
+
+      const rows = (data ?? []).map(normalizeHistoryRow);
+      setHistoryRows(rows);
+    } catch (e: any) {
+      console.error('Unexpected history fetch error:', e);
+      setHistoryError('Unexpected error loading history');
+      setHistoryRows([]);
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   const handleRowClick = (pkg: PackageCustomer) => {
     setSelectedPackage(pkg);
     setIsDetailsModalOpen(true);
+    fetchHistoryForMobile(pkg.mobile);
+  };
+
+  const closeDetailsModal = () => {
+    setIsDetailsModalOpen(false);
+    setSelectedPackage(null);
+    setHistoryRows([]);
+    setHistoryLoading(false);
+    setHistoryError(null);
   };
 
   return (
@@ -363,10 +604,30 @@ export default function PackagesPage() {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-8 gap-4">
         <h1 className="text-2xl font-bold text-gray-800">All Package Clients</h1>
         <div className="flex flex-col sm:flex-row gap-3">
-          <button onClick={fetchPackages} disabled={loading} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center">{loading ? 'Refreshing...' : '🔄 Refresh Data'}</button>
-          <button onClick={handleExport} disabled={loading || isExporting || filteredPackages.length === 0} className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50">{isExporting ? 'Exporting...' : 'Export to Excel'}</button>
+          <button
+            onClick={fetchPackages}
+            disabled={loading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 flex items-center"
+          >
+            {loading ? 'Refreshing...' : '🔄 Refresh Data'}
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={
+              loading || isExporting || filteredPackages.length === 0
+            }
+            className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
+          >
+            {isExporting ? 'Exporting...' : 'Export to Excel'}
+          </button>
           <div className="relative">
-            <input type="text" placeholder="Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-black" />
+            <input
+              type="text"
+              placeholder="Search..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-black"
+            />
           </div>
         </div>
       </div>
@@ -374,8 +635,17 @@ export default function PackagesPage() {
       <div className="bg-white p-6 rounded-xl shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-            <select id="status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Status
+            </label>
+            <select
+              id="status"
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as any)
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white"
+            >
               <option value="all">All Statuses</option>
               <option value="active">Active</option>
               <option value="expiring_soon">Expiring Soon (30d)</option>
@@ -383,24 +653,58 @@ export default function PackagesPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Outlet Filter</label>
-            <select id="outlet" value={outletFilter} onChange={(e) => setOutletFilter(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white">
-              {outlets.map(outlet => <option key={outlet} value={outlet}>{outlet === 'all' ? 'All Outlets' : outlet}</option>)}
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Outlet Filter
+            </label>
+            <select
+              id="outlet"
+              value={outletFilter}
+              onChange={(e) => setOutletFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white"
+            >
+              {outlets.map((outlet) => (
+                <option key={outlet} value={outlet}>
+                  {outlet === 'all' ? 'All Outlets' : outlet}
+                </option>
+              ))}
             </select>
           </div>
         </div>
       </div>
 
       {/* Table */}
-      {loading ? <div className="bg-white shadow rounded-lg p-8 text-center">Loading...</div> :
-       filteredPackages.length === 0 ? <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">No clients found.</div> : (
+      {loading ? (
+        <div className="bg-white shadow rounded-lg p-8 text-center">
+          Loading...
+        </div>
+      ) : filteredPackages.length === 0 ? (
+        <div className="bg-white shadow rounded-lg p-8 text-center text-gray-500">
+          No clients found.
+        </div>
+      ) : (
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  {['Name', 'Mobile', 'Outlet', 'Package', 'Total Hours', 'Used Hours', 'Remaining', 'Expiry Date', 'Status', 'Actions'].map(h => (
-                     <th key={h} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{h}</th>
+                  {[
+                    'Name',
+                    'Mobile',
+                    'Outlet',
+                    'Package',
+                    'Total Hours',
+                    'Used Hours',
+                    'Remaining',
+                    'Expiry Date',
+                    'Status',
+                    'Actions',
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      {h}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -411,28 +715,90 @@ export default function PackagesPage() {
                     className="hover:bg-gray-50 cursor-pointer"
                     onClick={() => handleRowClick(customer)}
                   >
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{customer.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.mobile}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.outlet}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatCurrency(customer.package_amount)}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.total_hours} hrs</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{customer.used_hours.toFixed(1)} hrs</td>
-
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                       <div className="w-24">
-                         <div className="flex justify-between text-xs mb-1"><span className={customer.status === 'active' ? 'text-green-700' : 'text-red-700'}>{customer.remaining_hours.toFixed(1)} hrs</span></div>
-                         <div className="w-full bg-gray-200 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${customer.status === 'active' ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, (customer.remaining_hours / customer.total_hours) * 100)}%` }}></div></div>
-                       </div>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {customer.name}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {customer.mobile}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {customer.outlet}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatCurrency(customer.package_amount)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {customer.total_hours} hrs
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {customer.used_hours.toFixed(1)} hrs
                     </td>
 
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatDate(customer.expiry_date)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <div className="w-24">
+                        <div className="flex justify-between text-xs mb-1">
+                          <span
+                            className={
+                              customer.status === 'active'
+                                ? 'text-green-700'
+                                : 'text-red-700'
+                            }
+                          >
+                            {customer.remaining_hours.toFixed(1)} hrs
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full ${
+                              customer.status === 'active'
+                                ? 'bg-green-500'
+                                : 'bg-red-500'
+                            }`}
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                (customer.remaining_hours /
+                                  customer.total_hours) *
+                                  100
+                              )}%`,
+                            }}
+                          ></div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatDate(customer.expiry_date)}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${customer.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{String(customer.status).toUpperCase()}</span>
+                      <span
+                        className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          customer.status === 'active'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {String(customer.status).toUpperCase()}
+                      </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex gap-2">
-                        <button onClick={(e) => handleOpenEditModal(customer, e)} className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-md hover:bg-blue-200">Edit</button>
-                        <button onClick={(e) => handleOpenDeleteModal(customer, e)} className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-md hover:bg-red-200">Delete</button>
+                        <button
+                          onClick={(e) =>
+                            handleOpenEditModal(customer, e)
+                          }
+                          className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-md hover:bg-blue-200"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={(e) =>
+                            handleOpenDeleteModal(customer, e)
+                          }
+                          className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-md hover:bg-red-200"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -446,76 +812,231 @@ export default function PackagesPage() {
       {/* Edit Modal */}
       {isEditModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleEditSubmit} className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 space-y-4">
-            <h2 className="text-xl font-bold text-gray-800">Edit Package - {selectedPackage.name}</h2>
+          <form
+            onSubmit={handleEditSubmit}
+            className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 space-y-4"
+          >
+            <h2 className="text-xl font-bold text-gray-800">
+              Edit Package - {selectedPackage.name}
+            </h2>
 
-            {saveError && <div className="p-2 bg-red-100 text-red-700 rounded">{saveError}</div>}
+            {saveError && (
+              <div className="p-2 bg-red-100 text-red-700 rounded">
+                {saveError}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Client Name</label>
-                <input type="text" value={editFormData.name ?? ''} onChange={(e) => setEditFormData({...editFormData, name: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Client Name
+                </label>
+                <input
+                  type="text"
+                  value={editFormData.name ?? ''}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      name: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                  required
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Mobile</label>
-                <input type="text" value={editFormData.mobile ?? ''} onChange={(e) => setEditFormData({...editFormData, mobile: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Mobile
+                </label>
+                <input
+                  type="text"
+                  value={editFormData.mobile ?? ''}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      mobile: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                  required
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Outlet</label>
-                <select value={editFormData.outlet ?? OUTLETS[0]?.name ?? ''} onChange={(e) => setEditFormData({...editFormData, outlet: e.target.value})} className="w-full p-2 border rounded text-black">
-                  {OUTLETS.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Outlet
+                </label>
+                <select
+                  value={
+                    editFormData.outlet ?? OUTLETS[0]?.name ?? ''
+                  }
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      outlet: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                >
+                  {OUTLETS.map((o) => (
+                    <option key={o.id} value={o.name}>
+                      {o.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Status</label>
-                <select value={editFormData.status ?? 'active'} onChange={(e) => setEditFormData({...editFormData, status: e.target.value})} className="w-full p-2 border rounded text-black">
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Status
+                </label>
+                <select
+                  value={editFormData.status ?? 'active'}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      status: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                >
                   <option value="active">Active</option>
                   <option value="expired">Expired</option>
                 </select>
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Package Amount (₹)</label>
-                <input type="number" value={editFormData.package_amount ?? 0} onChange={(e) => setEditFormData({...editFormData, package_amount: e.target.value})} className="w-full p-2 border rounded text-black" required />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Package Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  value={editFormData.package_amount ?? 0}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      package_amount: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                  required
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Start Date</label>
-                <input type="date" value={editFormData.start_date ?? ''} onChange={(e) => setEditFormData({...editFormData, start_date: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  value={editFormData.start_date ?? ''}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      start_date: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Expiry Date</label>
-                <input type="date" value={editFormData.expiry_date ?? ''} onChange={(e) => setEditFormData({...editFormData, expiry_date: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Expiry Date
+                </label>
+                <input
+                  type="date"
+                  value={editFormData.expiry_date ?? ''}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      expiry_date: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Total Hours</label>
-                <input type="number" step="0.1" value={editFormData.total_hours ?? 0} onChange={(e) => setEditFormData({...editFormData, total_hours: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Total Hours
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={editFormData.total_hours ?? 0}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      total_hours: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                />
               </div>
 
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">Used Hours</label>
-                <input type="number" step="0.1" value={editFormData.used_hours ?? 0} onChange={(e) => setEditFormData({...editFormData, used_hours: e.target.value})} className="w-full p-2 border rounded text-black" />
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  Used Hours
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={editFormData.used_hours ?? 0}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      used_hours: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 border rounded text-black"
+                />
               </div>
             </div>
 
             <div>
-              <label className="text-xs uppercase font-bold text-gray-500">Remark (Required)</label>
-              <textarea value={editRemark} onChange={(e) => setEditRemark(e.target.value)} className="w-full p-2 border rounded text-black" rows={3} required />
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Remark (Required)
+              </label>
+              <textarea
+                value={editRemark}
+                onChange={(e) => setEditRemark(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                rows={3}
+                required
+              />
             </div>
 
             <div>
-              <label className="text-xs uppercase font-bold text-gray-500">Admin Password</label>
-              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} className="w-full p-2 border rounded text-black" placeholder="Enter admin123" required />
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Admin Password
+              </label>
+              <input
+                type="password"
+                value={editPassword}
+                onChange={(e) => setEditPassword(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                placeholder="Enter admin123"
+                required
+              />
             </div>
 
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={handleCloseEditModal} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
-              <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded">{isSaving ? 'Saving...' : 'Save Changes'}</button>
+              <button
+                type="button"
+                onClick={handleCloseEditModal}
+                className="px-4 py-2 bg-gray-200 rounded text-black"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="px-4 py-2 bg-blue-600 text-white rounded"
+              >
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </button>
             </div>
           </form>
         </div>
@@ -524,77 +1045,270 @@ export default function PackagesPage() {
       {/* Delete Modal */}
       {isDeleteModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleDeleteConfirm} className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4">
+          <form
+            onSubmit={handleDeleteConfirm}
+            className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4"
+          >
             <h2 className="text-xl font-bold text-red-700">Delete Package</h2>
-            <p className="text-sm text-gray-600">Deleting package for <strong>{selectedPackage.name}</strong>.</p>
-            <div><label className="text-xs uppercase font-bold text-gray-500">Reason</label><textarea value={deleteRemark} onChange={e => setDeleteRemark(e.target.value)} className="w-full p-2 border rounded text-black" required/></div>
-            <div><label className="text-xs uppercase font-bold text-gray-500">Password</label><input type="password" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} className="w-full p-2 border rounded text-black" placeholder="Enter admin123"/>{deleteError && <p className="text-red-600 text-xs">{deleteError}</p>}</div>
-            <div className="flex justify-end gap-2"><button type="button" onClick={handleCloseDeleteModal} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button><button type="submit" disabled={isDeleting} className="px-4 py-2 bg-red-600 text-white rounded">{isDeleting ? 'Deleting...' : 'Confirm'}</button></div>
+            <p className="text-sm text-gray-600">
+              Deleting package for <strong>{selectedPackage.name}</strong>.
+            </p>
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Reason
+              </label>
+              <textarea
+                value={deleteRemark}
+                onChange={(e) => setDeleteRemark(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                required
+              />
+            </div>
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Password
+              </label>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                placeholder="Enter admin123"
+              />
+              {deleteError && (
+                <p className="text-red-600 text-xs">{deleteError}</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleCloseDeleteModal}
+                className="px-4 py-2 bg-gray-200 rounded text-black"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isDeleting}
+                className="px-4 py-2 bg-red-600 text-white rounded"
+              >
+                {isDeleting ? 'Deleting...' : 'Confirm'}
+              </button>
+            </div>
           </form>
         </div>
       )}
 
-      {/* Details Modal */}
+      {/* Details Modal WITH FULL HISTORY */}
       {isDetailsModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 relative">
-            <button onClick={() => setIsDetailsModalOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">&times;</button>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl p-6 relative">
+            <button
+              onClick={closeDetailsModal}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            >
+              &times;
+            </button>
 
-            <div className="flex items-center gap-4 mb-6">
-               <div className={`p-3 rounded-full ${selectedPackage.status === 'active' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                 <User size={24} />
-               </div>
-               <div>
-                 <h2 className="text-xl font-bold text-gray-800">{selectedPackage.name}</h2>
-                 <p className="text-sm text-gray-500">{selectedPackage.mobile}</p>
-               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 mb-6">
-               <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-xs text-gray-500 uppercase">Status</p>
-                  <p className={`font-bold ${selectedPackage.status === 'active' ? 'text-green-600' : 'text-red-600'}`}>
-                    {String(selectedPackage.status).toUpperCase()}
+            {/* Header */}
+            <div className="flex items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-4">
+                <div
+                  className={`p-3 rounded-full ${
+                    selectedPackage.status === 'active'
+                      ? 'bg-green-100 text-green-600'
+                      : 'bg-red-100 text-red-600'
+                  }`}
+                >
+                  <User size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">
+                    {selectedPackage.name}
+                  </h2>
+                  <p className="text-sm text-gray-500">
+                    {selectedPackage.mobile}
                   </p>
-               </div>
-               <div className="p-4 bg-gray-50 rounded-lg">
-                  <p className="text-xs text-gray-500 uppercase">Expires</p>
-                  <p className="font-bold text-gray-800">{formatDate(selectedPackage.expiry_date)}</p>
-               </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Outlet: <span className="font-medium">{selectedPackage.outlet}</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <p className="text-xs text-gray-500 uppercase">Package Value</p>
+                <p className="font-bold text-gray-900 text-lg">
+                  ₹{(selectedPackage.package_amount / 100).toLocaleString()}
+                </p>
+                <p className="text-xs text-gray-500 mt-2 uppercase">
+                  Expires on
+                </p>
+                <p className="font-semibold text-gray-800">
+                  {formatDate(selectedPackage.expiry_date)}
+                </p>
+              </div>
             </div>
 
-            <div className="space-y-4">
-               <div>
-                 <div className="flex justify-between text-sm mb-1">
-                   <span className="text-gray-600">Usage Progress</span>
-                   <span className="font-medium text-gray-900">{selectedPackage.used_hours.toFixed(1)} / {selectedPackage.total_hours} Hours</span>
-                 </div>
-                 <div className="w-full bg-gray-200 rounded-full h-3">
-                    <div
-                      className="h-3 rounded-full bg-blue-600"
-                      style={{ width: `${Math.min(100, (selectedPackage.used_hours / selectedPackage.total_hours) * 100)}%` }}
-                    ></div>
-                 </div>
-               </div>
-
-               <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t">
-                  <div>
-                    <p className="text-gray-500">Package Value</p>
-                    <p className="font-medium text-gray-900">₹{(selectedPackage.package_amount / 100).toLocaleString()}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Outlet</p>
-                    <p className="font-medium text-gray-900">{selectedPackage.outlet}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Start Date</p>
-                    <p className="font-medium text-gray-900">{formatDate(selectedPackage.start_date)}</p>
-                  </div>
-               </div>
+            {/* Package summary */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">Status</p>
+                <p
+                  className={`font-bold ${
+                    selectedPackage.status === 'active'
+                      ? 'text-green-600'
+                      : 'text-red-600'
+                  }`}
+                >
+                  {String(selectedPackage.status).toUpperCase()}
+                </p>
+              </div>
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">Start Date</p>
+                <p className="font-bold text-gray-800">
+                  {formatDate(selectedPackage.start_date)}
+                </p>
+              </div>
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">
+                  Remaining Hours
+                </p>
+                <p className="font-bold text-gray-800">
+                  {selectedPackage.remaining_hours.toFixed(1)} hrs
+                </p>
+              </div>
             </div>
 
-            <div className="mt-8 flex justify-end">
-               <button onClick={() => setIsDetailsModalOpen(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Close</button>
+            <div className="space-y-4 mb-8">
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-600">Usage Progress</span>
+                  <span className="font-medium text-gray-900">
+                    {selectedPackage.used_hours.toFixed(1)} /{' '}
+                    {selectedPackage.total_hours} Hours
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    className="h-3 rounded-full bg-blue-600"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (selectedPackage.used_hours /
+                          (selectedPackage.total_hours || 1)) *
+                          100
+                      )}%`,
+                    }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            {/* NEW: CLIENT VISIT HISTORY SECTION */}
+            <div className="border-t pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold text-gray-800">
+                  Visit History
+                </h3>
+                <span className="text-xs text-gray-500">
+                  Mobile: {selectedPackage.mobile}
+                </span>
+              </div>
+
+              {historyLoading ? (
+                <div className="py-4 text-sm text-gray-600">
+                  Loading visit history…
+                </div>
+              ) : historyError ? (
+                <div className="py-4 text-sm text-red-600">
+                  {historyError}
+                </div>
+              ) : historyRows.length === 0 ? (
+                <div className="py-4 text-sm text-gray-600">
+                  No visit history found for this client.
+                </div>
+              ) : (
+                <div className="overflow-x-auto max-h-80 border rounded-lg">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          Date & Time
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          Treatment
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          Duration
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          Therapist
+                        </th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          Outlet
+                        </th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">
+                          Amount
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {historyRows.map((h, idx) => (
+                        <tr
+                          key={h.id || `${h.mobile}-${idx}`}
+                          className={
+                            h.is_package_customer
+                              ? 'bg-indigo-50/50'
+                              : 'hover:bg-gray-50'
+                          }
+                        >
+                          <td className="px-4 py-2 whitespace-nowrap">
+                            <div className="font-medium text-gray-900">
+                              {fmtDate(h.date)}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {fmtTime(h.check_in_time)}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className="text-gray-900">
+                              {h.treatment ?? '—'}
+                            </span>
+                            {h.is_package_customer && (
+                              <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
+                                Redeemed
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                            {fmtDuration(h.session_hours)}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                            {h.therapist_name ?? '—'}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                            {h.outlet_name ?? '—'}
+                          </td>
+                          <td className="px-4 py-2 whitespace-nowrap text-right text-gray-900">
+                            {h.amount_paid
+                              ? `₹${(h.amount_paid / 100).toLocaleString()}`
+                              : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={closeDetailsModal}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

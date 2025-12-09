@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'; // Added useMemo
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
-// Removed unused import: import { OUTLETS } from '@/lib/outlet';
 
 // --- Types ---
 type Sale = {
@@ -47,11 +46,8 @@ const formatCurrency = (amountInPaise: number) =>
 
 const formatTime = (dateString: string | null) => {
   if (!dateString) return '—';
-
   const date = new Date(dateString);
-
   if (isNaN(date.getTime())) return 'Invalid Date';
-  
   return date.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -78,21 +74,21 @@ const formatDuration = (hours: number | null) => {
 
 const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
   if (tookPackage) return 'Package';
-  if (method === 'card') return 'UPI / Card';
+  if (method === 'card') return 'Card';
+  if (method === 'upi') return 'UPI';
   if (method === 'cash') return 'Cash';
   if (!method) return 'N/A';
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
 
 // --- Add-on Modal ---
-function AddonModal({ sale, onClose, onConfirm }: AddonModalProps) { // Added type
+function AddonModal({ sale, onClose, onConfirm }: AddonModalProps) {
   const [minutes, setMinutes] = useState(30);
-  const [amount, setAmount] = useState(0); // Amount in Rupees
+  const [amount, setAmount] = useState(0);
 
   if (!sale) return null;
 
   const handleSubmit = () => {
-    // Pass extra amount in Rupees, will be converted to paise in handleConfirmAddon
     onConfirm(sale.id, minutes, amount, sale); 
   }
 
@@ -135,7 +131,7 @@ function AddonModal({ sale, onClose, onConfirm }: AddonModalProps) { // Added ty
 }
 
 // --- Checkout Modal ---
-function CheckoutConfirmModal({ sale, expectedTime, onClose, onCheckout, onAddon }: CheckoutConfirmModalProps) { // Added type
+function CheckoutConfirmModal({ sale, expectedTime, onClose, onCheckout, onAddon }: CheckoutConfirmModalProps) {
   if (!sale) return null;
 
   return (
@@ -149,7 +145,6 @@ function CheckoutConfirmModal({ sale, expectedTime, onClose, onCheckout, onAddon
 
         <div className="flex justify-end gap-3 pt-4">
           <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded-lg">No (Snooze)</button>
-          {/* Ensure onAddon is called with the sale object */}
           <button onClick={() => onAddon(sale)} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Add-on</button>
           <button onClick={() => onCheckout(sale.id)} className="px-4 py-2 bg-green-600 text-white rounded-lg">Checkout</button>
         </div>
@@ -164,12 +159,11 @@ export default function OutletSalesPage() {
   const [outletName, setOutletName] = useState('');
   const [outletId, setOutletId] = useState('');
   
-  // Use today's date for initial filter
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
   const [dateFilter, setDateFilter] = useState(today);
 
   const snoozedClients = useRef<Set<string>>(new Set());
-  const warningTimerRef = useRef<NodeJS.Timeout | null>(null); // Correct type for NodeJS timer
+  const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const [addonModalOpen, setAddonModalOpen] = useState(false);
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
@@ -178,7 +172,6 @@ export default function OutletSalesPage() {
   const [warningSale, setWarningSale] = useState<Sale | null>(null);
   const [warningExpectedTime, setWarningExpectedTime] = useState<string | null>(null);
 
-  // Check if the current filter is "Today"
   const isToday = dateFilter === today;
 
   // Fetch outlet info
@@ -191,7 +184,6 @@ export default function OutletSalesPage() {
           setOutletId(data.outletId);
           setOutletName(data.outletName);
         } else {
-          // Handle case where outlet info might be missing
           console.error("Outlet ID not found in session data.");
         }
       } catch (err) {
@@ -214,21 +206,19 @@ export default function OutletSalesPage() {
         .order('check_in_time', { ascending: false });
 
       if (dateFilter) {
-        // Enforce ISO date format for comparison, though the input type='date' handles it usually
         query = query.eq('date', dateFilter); 
       }
       
       const { data, error } = await query;
       if (error) throw error;
 
-      setSales(data as Sale[] || []); // Cast data to Sale[]
+      setSales(data as Sale[] || []);
     } catch (err) {
       console.error('Error fetching sales:', err);
-      // Optional: Add a state for showing an error message to the user
     } finally {
       setLoading(false);
     }
-  }, [dateFilter, outletId]); // Added dateFilter as a dependency
+  }, [dateFilter, outletId]);
 
   useEffect(() => {
     if (!outletId) return;
@@ -238,29 +228,22 @@ export default function OutletSalesPage() {
       .channel(`customers-${outletId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'customers', filter: `outlet_id=eq.${outletId}` },
         () => {
-          // Only refetch if the current filter is 'today' to keep the view reactive
-          // Or refetch if the new data might affect the current filtered view.
-          // For simplicity, refetching everything relevant to the outlet.
           fetchSales();
         }
       )
       .subscribe();
 
     return () => {
-      // Safely check if channel is subscribed before removing
       if (channel) {
         supabase.removeChannel(channel);
       }
     };
   }, [fetchSales, outletId]);
 
-  // handleCheckOut should be wrapped in useCallback if passed down to avoid unnecessary re-renders
   const handleCheckOut = useCallback(async (id: string) => {
     try {
       const { error } = await supabase.from('customers').update({ check_out_time: new Date().toISOString() }).eq('id', id);
       if (error) throw error;
-      // The `fetchSales` in the subscription handler will update the UI
-      // If the warning modal is open for this sale, close it
       if (warningSale && warningSale.id === id) {
         setWarningModalOpen(false);
         setWarningSale(null);
@@ -268,13 +251,11 @@ export default function OutletSalesPage() {
       }
     } catch (error) {
       console.error('Error checking out:', error);
-      // Use a proper notification system instead of alert
     }
-  }, [warningSale]); // Added warningSale dependency
+  }, [warningSale]);
 
   // Warning system
   useEffect(() => {
-    // Only run the warning system for TODAY's sales
     if (!isToday) {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
       return;
@@ -282,10 +263,8 @@ export default function OutletSalesPage() {
 
     const checkWarnings = () => {
       const now = new Date();
-
       if (warningModalOpen) return;
 
-      // Only check clients who have checked in, don't have a checkout time, and have session hours
       for (const sale of sales.filter(s => s.check_in_time && !s.check_out_time && s.session_hours)) {
         if (!snoozedClients.current.has(sale.id)) {
           const expected = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
@@ -293,26 +272,25 @@ export default function OutletSalesPage() {
             setWarningSale(sale);
             setWarningExpectedTime(formatTime(expected.toISOString()));
             setWarningModalOpen(true);
-            break; // Show one warning at a time
+            break;
           }
         }
       }
     };
 
     if (warningTimerRef.current) clearInterval(warningTimerRef.current);
-    warningTimerRef.current = setInterval(checkWarnings, 30000); // Check every 30 seconds
+    warningTimerRef.current = setInterval(checkWarnings, 30000);
 
     return () => {
       if (warningTimerRef.current) {
         clearInterval(warningTimerRef.current);
       }
     };
-  }, [sales, warningModalOpen, isToday]); // Added isToday dependency
+  }, [sales, warningModalOpen, isToday]);
 
   const handleWarningModalClose = () => {
     if (warningSale) {
       snoozedClients.current.add(warningSale.id);
-      // Snooze for 5 minutes (300,000 milliseconds)
       setTimeout(() => snoozedClients.current.delete(warningSale.id), 300000); 
     }
     setWarningModalOpen(false);
@@ -320,71 +298,74 @@ export default function OutletSalesPage() {
     setWarningExpectedTime(null);
   };
 
-  const handleOpenAddonModal = useCallback((sale: Sale) => { // Wrapped in useCallback
-    setWarningModalOpen(false); // Close warning modal if open
+  const handleOpenAddonModal = useCallback((sale: Sale) => {
+    setWarningModalOpen(false);
     setWarningSale(null);
     setWarningExpectedTime(null);
     setAddonModalOpen(true);
     setSelectedSale(sale);
   }, []);
 
-  const handleCloseAddonModal = useCallback(() => { // Wrapped in useCallback
+  const handleCloseAddonModal = useCallback(() => {
     setAddonModalOpen(false);
     setSelectedSale(null);
   }, []);
 
-  // Use useCallback for async function
   const handleConfirmAddon = useCallback(async (saleId: string, extraMinutes: number, extraAmount: number, currentSale: Sale) => {
     if (extraMinutes <= 0 && extraAmount <= 0) return handleCloseAddonModal();
 
     try {
       const extraHours = extraMinutes / 60;
       const newHours = (currentSale.session_hours || 0) + extraHours;
-      // Convert extraAmount (in Rupees) to paise/cents before adding
       const newAmount = (currentSale.amount_paid || 0) + extraAmount * 100;
 
       const { error } = await supabase.from('customers').update({
         session_hours: newHours,
         amount_paid: newAmount,
-        // Append addon details to the treatment string
         treatment: `${currentSale.treatment} (+${extraMinutes}m addon, ₹${extraAmount})` 
       }).eq('id', saleId);
 
       if (error) throw error;
-
-      // Use a proper notification system instead of alert
-      // alert('Add-on saved successfully.'); 
       console.log('Add-on saved successfully.');
-
-      // After a successful save, close the modal and rely on the subscription to update sales
       handleCloseAddonModal();
     } catch (err: any) {
-      // Use a proper notification system instead of alert
-      // alert(`Error saving add-on: ${err.message}`);
       console.error(`Error saving add-on: ${err.message}`);
     }
   }, [handleCloseAddonModal]);
 
 
-  // --- Computed Values ---
+  // --- Computed Values (Totals Breakdown) ---
   const completedSales = useMemo(() => 
     sales.filter(sale => sale.check_out_time), 
     [sales]
   );
   
-  const totalCompletedSalesAmount = useMemo(() => 
-    completedSales.reduce((sum, sale) => 
-      sum + (sale.took_package ? sale.package_amount : sale.amount_paid), 0
-    ), [completedSales]
+  const totalSales = useMemo(
+    () => completedSales.reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
+    [completedSales]
   );
 
-  const activeSalesCount = sales.filter(s => !s.check_out_time).length; // Corrected to count ACTIVE sales (not checked out)
+  const totalCashSales = useMemo(
+    () => completedSales.filter((s) => s.payment_method === 'cash').reduce((a, s) => a + s.amount_paid, 0),
+    [completedSales]
+  );
 
-  // NOTE: The previous code was calculating the total revenue from *completed* sales
-  // but labeling the count as "Total Active Sales". I've corrected the variable name 
-  // for the count but kept the amount calculation for completed sales, as that's 
-  // typical for "Total Sales".
-  // I've introduced `totalCompletedSalesAmount` for clarity.
+  const totalUpiSales = useMemo(
+    () => completedSales.filter((s) => s.payment_method === 'upi').reduce((a, s) => a + s.amount_paid, 0),
+    [completedSales]
+  );
+
+  const totalCardSales = useMemo(
+    () => completedSales.filter((s) => s.payment_method === 'card').reduce((a, s) => a + s.amount_paid, 0),
+    [completedSales]
+  );
+
+  const totalPackageSales = useMemo(
+    () => completedSales.filter((s) => s.took_package).reduce((a, s) => a + s.package_amount, 0),
+    [completedSales]
+  );
+
+  const activeSalesCount = sales.filter(s => !s.check_out_time).length;
 
   // --- Render ---
   return (
@@ -416,14 +397,32 @@ export default function OutletSalesPage() {
         </div>
       </div>
       
-      {/* Sales Summary */}
-      <div className="bg-white p-4 rounded-xl shadow-sm">
-        <h3 className="text-gray-600 text-sm font-medium">Total Revenue (Completed)</h3>
-        {/* Changed variable to the corrected total */}
-        <p className="text-2xl font-bold text-green-600 mt-2">{formatCurrency(totalCompletedSalesAmount)}</p> 
-        <p className="text-gray-600 text-sm">
-          **{completedSales.length}** completed transaction(s) | **{activeSalesCount}** active session(s)
-        </p>
+      {/* Sales Summary (Breakdown) */}
+      <div className="bg-white p-6 rounded-xl shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+          <div>
+            <h3 className="text-black text-sm">Total Completed Sales</h3>
+            <p className="text-2xl mt-2 font-bold text-green-600">{formatCurrency(totalSales)}</p>
+            <p className="text-xs text-black">{completedSales.length} sessions</p>
+            <p className="text-xs text-gray-500">{activeSalesCount} active</p>
+          </div>
+          <div>
+            <h3 className="text-black text-sm">Total Cash Sales</h3>
+            <p className="text-2xl mt-2 font-bold text-blue-600">{formatCurrency(totalCashSales)}</p>
+          </div>
+          <div>
+            <h3 className="text-black text-sm">Total UPI Sales</h3>
+            <p className="text-2xl mt-2 font-bold text-purple-600">{formatCurrency(totalUpiSales)}</p>
+          </div>
+          <div>
+            <h3 className="text-black text-sm">Total Card Sales</h3>
+            <p className="text-2xl mt-2 font-bold text-indigo-600">{formatCurrency(totalCardSales)}</p>
+          </div>
+          <div>
+            <h3 className="text-black text-sm">Total Package Value</h3>
+            <p className="text-2xl mt-2 font-bold text-black">{formatCurrency(totalPackageSales)}</p>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white shadow rounded-lg overflow-hidden">
@@ -474,7 +473,6 @@ export default function OutletSalesPage() {
 
                     {/* Amount */}
                     <td className="px-3 py-2 text-xs font-medium text-green-600 text-left">
-                      {/* Amount is in paise, so divide by 100 before passing to formatCurrency */}
                       {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)} 
                     </td>
 
