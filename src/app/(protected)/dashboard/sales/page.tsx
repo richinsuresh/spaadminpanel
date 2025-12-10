@@ -473,172 +473,140 @@ export default function AdminSalesPage() {
   /* ===================== EXPORT ===================== */
 
   const handleExport = async () => {
+    if (sales.length === 0) {
+      alert('No sales to export for the selected filters.');
+      return;
+    }
+
     setIsExporting(true);
-
     try {
-      // 1) Fetch ONLY filtered rows (respect outlet + date filters)
-      let query = supabase
-        .from('customers')
-        .select('*')
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .order('check_in_time', { ascending: false });
-
-      if (selectedOutletId !== 'all') {
-        query = query.eq('outlet_id', selectedOutletId);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-
-      const rows = (data || []) as Sale[];
-
-      // Use completed sales (with check_out_time) for export
-      const exportRows = rows.filter((s) => s.check_out_time);
-
-      type Totals = {
-        outletName: string;
-        totalSales: number;
-        cash: number;
-        upi: number;
-        card: number;
-        packageValue: number;
-      };
-
-      const perOutletTotals: Record<string, Totals> = {};
-      const grandTotals: Totals = {
-        outletName: 'All Outlets',
-        totalSales: 0,
-        cash: 0,
-        upi: 0,
-        card: 0,
-        packageValue: 0,
-      };
-
-      // outlet-wise sheet data
-      const outletSheets: Record<string, any[]> = {};
-
-      exportRows.forEach((sale) => {
-        const outletName = sale.outlet_name || 'Unknown Outlet';
-        const sheetKey = outletName;
-
-        if (!perOutletTotals[outletName]) {
-          perOutletTotals[outletName] = {
-            outletName,
-            totalSales: 0,
-            cash: 0,
-            upi: 0,
-            card: 0,
-            packageValue: 0,
-          };
-        }
-
-        if (!outletSheets[sheetKey]) {
-          outletSheets[sheetKey] = [];
-        }
-
-        // Amounts in rupees
-        const saleAmountPaise = sale.took_package
+      // Helper to build a flat row for Excel from a Sale
+      const buildRow = (sale: Sale) => {
+        const amountPaise = sale.took_package
           ? sale.package_amount
           : sale.amount_paid;
-        const saleAmount = saleAmountPaise / 100;
+        const amountRupees = amountPaise / 100;
 
-        // ---- Update totals ----
-        perOutletTotals[outletName].totalSales += saleAmount;
-        grandTotals.totalSales += saleAmount;
+        const groupCount = sale.group_customers
+          ? sale.group_customers.length
+          : 0;
+        const totalGuests = 1 + groupCount;
 
-        if (sale.payment_method === 'cash') {
-          perOutletTotals[outletName].cash += saleAmount;
-          grandTotals.cash += saleAmount;
-        } else if (sale.payment_method === 'upi') {
-          perOutletTotals[outletName].upi += saleAmount;
-          grandTotals.upi += saleAmount;
-        } else if (sale.payment_method === 'card') {
-          perOutletTotals[outletName].card += saleAmount;
-          grandTotals.card += saleAmount;
-        }
+        const groupDetails = sale.group_customers
+          ? sale.group_customers
+              .map((gc, idx) => {
+                const guestName = gc.name || `Guest ${idx + 2}`;
+                const dur =
+                  gc.sessionHours && gc.sessionHours > 0
+                    ? `${gc.sessionHours}h`
+                    : '';
+                return `${guestName} - ${gc.treatment || '—'}${
+                  dur ? ` (${dur})` : ''
+                }`;
+              })
+              .join(' | ')
+          : '';
 
-        if (sale.took_package) {
-          const pkgAmt = sale.package_amount / 100;
-          perOutletTotals[outletName].packageValue += pkgAmt;
-          grandTotals.packageValue += pkgAmt;
-        }
+        const mainInDisplay = sale.in_time
+          ? sale.in_time
+          : sale.check_in_time
+          ? new Date(sale.check_in_time).toLocaleTimeString('en-IN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : '';
 
-        // -------- MAIN CUSTOMER ROW --------
-        outletSheets[sheetKey].push({
-          Date: toInputDate(sale.date),
+        const mainOutDisplay = sale.out_time
+          ? sale.out_time
+          : sale.check_out_time
+          ? new Date(sale.check_out_time).toLocaleTimeString('en-IN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : '';
+
+        return {
+          Date: sale.date,
           Outlet: sale.outlet_name,
-          Customer: sale.name,
+          CustomerName: sale.name,
           Mobile: sale.mobile,
-          Type: sale.took_package
-            ? 'New Package'
-            : sale.is_package_customer
-            ? 'Package Redeem'
-            : 'Regular',
-          Group:
-            sale.group_customers && sale.group_customers.length
-              ? 'Main (Group)'
-              : 'Single',
+          ServiceType: formatService(sale),
           Treatment: sale.treatment,
-          Therapist: sale.therapist_name,
-          Room: sale.room,
-          'Duration (hrs)': sale.session_hours,
-          'In Time':
-            sale.in_time ||
-            (sale.check_in_time ? toInputTime(sale.check_in_time) : ''),
-          'Out Time':
-            sale.out_time ||
-            (sale.check_out_time ? toInputTime(sale.check_out_time) : ''),
-          Payment: sale.payment_method?.toUpperCase() || '',
-          'Amount (₹)': saleAmount,
-        });
+          SessionHours: sale.session_hours ?? '',
+          GuestsCount: totalGuests,
+          GroupDetails: groupDetails,
+          Amount: amountRupees,
+          PaymentMethod: sale.payment_method
+            ? sale.payment_method.toUpperCase()
+            : '',
+          TookPackage: sale.took_package ? 'YES' : 'NO',
+          PackageAmount: sale.took_package ? amountRupees : '',
+          IsPackageCustomer: sale.is_package_customer ? 'YES' : 'NO',
+          PackageSoldBy: sale.package_sold_by || '',
+          CheckIn: sale.check_in_time || '',
+          CheckOut: sale.check_out_time || '',
+          InTimeDisplay: mainInDisplay,
+          OutTimeDisplay: mainOutDisplay,
+          Therapist: sale.therapist_name || '',
+          Room: sale.room || '',
+        };
+      };
 
-        // -------- GROUP CUSTOMERS ROWS --------
-        if (sale.group_customers && sale.group_customers.length) {
-          sale.group_customers.forEach((g) => {
-            outletSheets[sheetKey].push({
-              Date: toInputDate(sale.date),
-              Outlet: sale.outlet_name,
-              Customer: g.name || 'Group Guest',
-              Mobile: sale.mobile,
-              Type: 'Group Member',
-              Group: 'Member',
-              Treatment: g.treatment,
-              Therapist: g.therapist_name,
-              Room: g.room,
-              'Duration (hrs)': g.sessionHours ?? null,
-              'In Time': g.in_time || '',
-              'Out Time': g.out_time || '',
-              Payment: '',
-              'Amount (₹)': 0, // money is on main row
-            });
-          });
-        }
+      // ALL SALES (based on current filters)
+      const allSalesRows = sales.map(buildRow);
+
+      // OUTLET-WISE SHEETS
+      const outletSheets: Record<string, any[]> = {};
+      sales.forEach((sale) => {
+        const key = sale.outlet_name || 'Unknown Outlet';
+        if (!outletSheets[key]) outletSheets[key] = [];
+        outletSheets[key].push(buildRow(sale));
       });
 
-      // ---------- SUMMARY SHEET ----------
-      const summaryRows = Object.values(perOutletTotals).map((t) => ({
-        Outlet: t.outletName,
-        'Total Sales (₹)': t.totalSales,
-        'Cash (₹)': t.cash,
-        'UPI (₹)': t.upi,
-        'Card (₹)': t.card,
-        'Package Value (₹)': t.packageValue,
-      }));
+      // SUMMARY SHEET (only completed sales for totals)
+      const summaryRows = [
+        {
+          Metric: 'Date Range',
+          Value: `${startDate} to ${endDate}`,
+        },
+        {
+          Metric: 'Outlet Filter',
+          Value:
+            selectedOutletId === 'all'
+              ? 'All Outlets'
+              : OUTLETS.find((o) => o.id === selectedOutletId)?.name ||
+                selectedOutletId,
+        },
+        {},
+        {
+          Metric: 'Total Completed Sales (₹)',
+          Value: totalSales / 100,
+        },
+        {
+          Metric: 'Total Cash Sales (₹)',
+          Value: totalCashSales / 100,
+        },
+        {
+          Metric: 'Total UPI Sales (₹)',
+          Value: totalUpiSales / 100,
+        },
+        {
+          Metric: 'Total Card Sales (₹)',
+          Value: totalCardSales / 100,
+        },
+        {
+          Metric: 'Total Package Value (₹)',
+          Value: totalPackageSales / 100,
+        },
+        {
+          Metric: 'Number of Completed Sessions',
+          Value: activeSalesCount,
+        },
+      ];
 
-      // GRAND TOTAL row
-      summaryRows.push({
-        Outlet: 'GRAND TOTAL',
-        'Total Sales (₹)': grandTotals.totalSales,
-        'Cash (₹)': grandTotals.cash,
-        'UPI (₹)': grandTotals.upi,
-        'Card (₹)': grandTotals.card,
-        'Package Value (₹)': grandTotals.packageValue,
-      });
-
-      // ---------- FINAL MULTI-SHEET EXPORT ----------
       const workbookData: Record<string, any[]> = {
         Summary: summaryRows,
+        'All Sales': allSalesRows,
         ...outletSheets,
       };
 
@@ -646,8 +614,7 @@ export default function AdminSalesPage() {
         workbookData,
         `Sales_${startDate}_to_${endDate}.xlsx`,
       );
-
-      logActivity('export_sales', 'Downloaded outlet-wise sales report');
+      logActivity('export_sales', 'Downloaded Sales');
     } catch (e: any) {
       console.error(e);
       alert('Export failed');
