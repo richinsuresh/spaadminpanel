@@ -730,11 +730,9 @@ export default function ClientCheckinForm() {
       const duration =
         (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
 
-      if (!c.name.trim() || !c.treatment || !c.therapist || !c.room || duration <= 0) {
+      if (!c.treatment || !c.therapist || !c.room || duration <= 0) {
         setError(
-          `Please fill all details (name, treatment, therapist, room, duration) for customer ${
-            i + 2
-          }.`,
+          `Please fill treatment, therapist, room and duration for customer ${i + 2}.`,
         );
         setLoading(false);
         return;
@@ -1282,7 +1280,7 @@ export default function ClientCheckinForm() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-300 mb-1">
-                          Name *
+                          Name (optional)
                         </label>
                         <input
                           type="text"

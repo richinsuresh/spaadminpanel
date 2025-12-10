@@ -162,7 +162,7 @@ export default function AdminSalesPage() {
     useState<Sale | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // NEW: track which group rows are expanded
+  // track which group rows are expanded
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
     {},
   );
@@ -196,6 +196,33 @@ export default function AdminSalesPage() {
 
   useEffect(() => {
     fetchSales();
+  }, [fetchSales]);
+
+  // 🔄 Realtime auto-refresh when any customer row changes
+  useEffect(() => {
+    const channel = supabase
+      .channel('admin-sales-customers')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'customers',
+        },
+        () => {
+          // re-fetch based on current filters
+          fetchSales();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch (e) {
+        console.warn('Failed to remove admin realtime channel', e);
+      }
+    };
   }, [fetchSales]);
 
   /* ===================== TOTALS ===================== */
@@ -338,7 +365,7 @@ export default function AdminSalesPage() {
         ? Math.round(amountNumber * 100)
         : editingSale.package_amount,
 
-      // 🔴 NEW: persist edited date, outlet, and check-in time
+      // persist edited date, outlet, and check-in time
       date: editForm.date, // "YYYY-MM-DD"
       outlet_id: editForm.outlet_id,
       check_in_time: newCheckInTime,
