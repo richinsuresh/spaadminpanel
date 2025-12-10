@@ -5,7 +5,16 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
-import { Clock, Calendar, MapPin, User, Tag, ChevronDown, RefreshCcw, X, Info } from 'lucide-react';
+import {
+  Clock,
+  Calendar,
+  MapPin,
+  User,
+  Tag,
+  RefreshCcw,
+  X,
+  Info,
+} from 'lucide-react';
 
 // OFFLINE imports
 import { offlineDb } from '@/lib/offlineDb';
@@ -49,6 +58,17 @@ type VisitHistory = {
   isPackageUsed: boolean;
 };
 
+// NEW: Additional customer type for group entries
+type AdditionalCustomer = {
+  id: string;
+  name: string;
+  treatment: string;
+  therapist: string;
+  room: string;
+  sessionHours: number;
+  sessionMinutes: number;
+};
+
 // --- Helper Functions ---
 const formatDuration = (hours: number): string => {
   const h = Math.floor(hours);
@@ -70,6 +90,13 @@ const formatDate = (isoString: string | null): string => {
   } catch {
     return 'Invalid Date';
   }
+};
+
+// HH:mm helper (local time)
+const formatTimeHM = (date: Date): string => {
+  const h = date.getHours().toString().padStart(2, '0');
+  const m = date.getMinutes().toString().padStart(2, '0');
+  return `${h}:${m}`;
 };
 
 // --- Package History Modal Component ---
@@ -266,6 +293,7 @@ export default function ClientCheckinForm() {
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
 
+  // Main (primary) customer + payment/package data
   const [formData, setFormData] = useState({
     name: '',
     treatment: '',
@@ -283,6 +311,9 @@ export default function ClientCheckinForm() {
     showSecondaryTherapist: false, // reveal second therapist
     room: '',
   });
+
+  // NEW: additional customers in the same sale
+  const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
 
   // --- State for employees list (therapists only, checked-in) ---
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -593,6 +624,36 @@ export default function ClientCheckinForm() {
     return (Number(formData.amountPaid) || 0) * 100;
   }, [formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
+  // NEW: helpers for additional customers
+  const addAdditionalCustomer = () => {
+    setAdditionalCustomers((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        name: '',
+        treatment: '',
+        therapist: '',
+        room: '',
+        sessionHours: 0,
+        sessionMinutes: 0,
+      },
+    ]);
+  };
+
+  const removeAdditionalCustomer = (id: string) => {
+    setAdditionalCustomers((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const updateAdditionalCustomer = <K extends keyof AdditionalCustomer>(
+    id: string,
+    field: K,
+    value: AdditionalCustomer[K],
+  ) => {
+    setAdditionalCustomers((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
+    );
+  };
+
   // --- UPDATED handleSubmit (uses local paymentMethod & outlet for redirect) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -614,9 +675,9 @@ export default function ClientCheckinForm() {
     const finalAmountInPaise = getFinalAmountInPaise();
     const outletIdForRedirect = outlet.id;
 
-    // --- Validation ---
+    // --- Validation: primary customer ---
     if (sessionHours > 0 && !String(formData.therapistPrimary || '').trim()) {
-      setError('Please select a Therapist (Primary).');
+      setError('Please select a Therapist (Primary) for the main customer.');
       setLoading(false);
       return;
     }
@@ -644,7 +705,7 @@ export default function ClientCheckinForm() {
       }
     } else {
       if (sessionHours <= 0) {
-        setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins).');
+        setError('Please enter a valid Session Duration (e.g., 1 hour 30 mins) for main customer.');
         setLoading(false);
         return;
       }
@@ -663,6 +724,23 @@ export default function ClientCheckinForm() {
       }
     }
 
+    // --- Validation: additional customers in the same sale ---
+    for (let i = 0; i < additionalCustomers.length; i++) {
+      const c = additionalCustomers[i];
+      const duration =
+        (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+
+      if (!c.name.trim() || !c.treatment || !c.therapist || !c.room || duration <= 0) {
+        setError(
+          `Please fill all details (name, treatment, therapist, room, duration) for customer ${
+            i + 2
+          }.`,
+        );
+        setLoading(false);
+        return;
+      }
+    }
+
     const treatmentName = formData.treatment;
 
     // generate client_uuid here and attach to payload (helps idempotency)
@@ -670,7 +748,14 @@ export default function ClientCheckinForm() {
       typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
 
     try {
+      // Base check-in time for the whole group
       const checkInTime: string | null = new Date().toISOString();
+      const checkInDate = new Date(checkInTime);
+      const mainOutDate = new Date(
+        checkInDate.getTime() + sessionHours * 60 * 60 * 1000,
+      );
+      const mainInTimeStr = formatTimeHM(checkInDate);
+      const mainOutTimeStr = formatTimeHM(mainOutDate);
 
       // Build therapist info:
       const therapistPrimary = String(formData.therapistPrimary || '').trim() || null;
@@ -683,6 +768,24 @@ export default function ClientCheckinForm() {
           : therapistPrimary || therapistSecondary || null;
 
       const isPackageUsed = !formData.tookPackage && clientInfo?.status === 'active';
+
+      // Build group customers payload (auto time)
+      const groupCustomersPayload = additionalCustomers.map((c) => {
+        const dur =
+          (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+        const outDate = new Date(
+          checkInDate.getTime() + dur * 60 * 60 * 1000,
+        );
+        return {
+          name: c.name.trim(),
+          treatment: c.treatment,
+          therapist_name: c.therapist,
+          room: c.room,
+          sessionHours: dur,
+          in_time: mainInTimeStr,
+          out_time: formatTimeHM(outDate),
+        };
+      });
 
       const payload = {
         client_uuid: clientUuid,
@@ -713,6 +816,13 @@ export default function ClientCheckinForm() {
         therapist_secondary: therapistSecondary,
 
         room: formData.room || null,
+
+        // Auto-calculated in/out time for main customer
+        in_time: mainInTimeStr,
+        out_time: mainOutTimeStr,
+
+        // full group in same sale
+        group_customers: groupCustomersPayload,
       };
 
       const res = await fetch('/api/client-form-submit', {
@@ -810,6 +920,7 @@ export default function ClientCheckinForm() {
           room: '',
         });
 
+        setAdditionalCustomers([]);
         setMobile('');
         setClientInfo(null);
       } catch (dexErr) {
@@ -856,7 +967,7 @@ export default function ClientCheckinForm() {
         <h1 className="text-2xl font-bold text-white text-center mb-2">
           Welcome to {outlet?.name || 'Your Spa'}
         </h1>
-        <p className="text-center text-gray-400 mb-6">Client Check-in</p>
+        <p className="text-center text-gray-400 mb-6">Client Check-in (Group Friendly)</p>
 
         {error && !success && (
           <div className="mb-4 p-3 bg-red-900/50 text-red-300 rounded-lg border border-red-700 text-sm">
@@ -876,7 +987,7 @@ export default function ClientCheckinForm() {
                 htmlFor="mobile"
                 className="block text-sm font-medium text-gray-300 mb-1"
               >
-                Phone Number *
+                Phone Number (for the group) *
               </label>
               <input
                 id="mobile"
@@ -895,7 +1006,7 @@ export default function ClientCheckinForm() {
                 htmlFor="name"
                 className="block text-sm font-medium text-gray-300 mb-1"
               >
-                Full Name *
+                Main Customer Name *
               </label>
               <input
                 id="name"
@@ -905,7 +1016,7 @@ export default function ClientCheckinForm() {
                 onChange={handleChange}
                 required
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                placeholder="Client&apos;s full name"
+                placeholder="Person giving the number"
                 disabled={loading}
               />
             </div>
@@ -983,12 +1094,13 @@ export default function ClientCheckinForm() {
           )}
           {/* --- End Package Info, Progress Bar & History Button --- */}
 
+          {/* MAIN CUSTOMER SERVICE DETAILS */}
           <div>
             <label
               htmlFor="treatment"
               className="block text-sm font-medium text-gray-300 mb-1"
             >
-              Select Treatment *
+              Treatment for Main Customer *
             </label>
             <select
               id="treatment"
@@ -1008,7 +1120,7 @@ export default function ClientCheckinForm() {
             </select>
           </div>
 
-          {/* --- Therapist Inputs: Primary + optional Secondary reveal checkbox --- */}
+          {/* --- Therapist Inputs: Primary + optional Secondary --- */}
           <div className="space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -1034,7 +1146,7 @@ export default function ClientCheckinForm() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Room Number
+                  Room Number (Main)
                 </label>
                 <input
                   name="room"
@@ -1057,7 +1169,7 @@ export default function ClientCheckinForm() {
                 className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                 disabled={loading}
               />
-              <span className="text-sm text-gray-300">Add second therapist</span>
+              <span className="text-sm text-gray-300">Add second therapist for main</span>
             </label>
 
             {formData.showSecondaryTherapist && (
@@ -1087,10 +1199,10 @@ export default function ClientCheckinForm() {
           </div>
           {/* --- End Therapist Inputs --- */}
 
-          {/* --- Session Duration --- */}
+          {/* --- Session Duration (Main) --- */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
-              Session Duration *
+              Session Duration (Main Customer) *
             </label>
             <div className="grid grid-cols-2 gap-4">
               <input
@@ -1119,8 +1231,180 @@ export default function ClientCheckinForm() {
                 disabled={loading}
               />
             </div>
+            <p className="text-[11px] text-gray-400 mt-1">
+              In / Out time will be auto-calculated from this duration.
+            </p>
           </div>
           {/* --- End Session Duration --- */}
+
+          {/* --- GROUP CUSTOMERS --- */}
+          <div className="border border-gray-700 rounded-lg p-4 space-y-3 bg-gray-900/60">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-100">
+                  Additional Customers (Same Sale)
+                </h3>
+                <p className="text-xs text-gray-400">
+                  For friends in the same group with different therapist / room / duration.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addAdditionalCustomer}
+                className="text-xs px-3 py-1.5 rounded-md border border-red-600 text-red-400 hover:bg-red-600 hover:text-white transition"
+                disabled={loading}
+              >
+                + Add one more customer
+              </button>
+            </div>
+
+            {additionalCustomers.length > 0 && (
+              <div className="space-y-3 pt-2">
+                {additionalCustomers.map((c, index) => (
+                  <div
+                    key={c.id}
+                    className="rounded-lg border border-gray-700 bg-gray-800/70 p-3 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-gray-300">
+                        Customer {index + 2}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeAdditionalCustomer(c.id)}
+                        className="text-xs text-red-400 hover:text-red-300"
+                        disabled={loading}
+                      >
+                        Remove
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">
+                          Name *
+                        </label>
+                        <input
+                          type="text"
+                          value={c.name}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(c.id, 'name', e.target.value)
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          placeholder="Customer name"
+                          disabled={loading}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">
+                          Therapist *
+                        </label>
+                        <select
+                          value={c.therapist}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(c.id, 'therapist', e.target.value)
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          disabled={loading}
+                        >
+                          <option value="">-- Select Therapist --</option>
+                          {employees.map((emp) => (
+                            <option key={emp.id} value={emp.name}>
+                              {emp.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">
+                          Treatment *
+                        </label>
+                        <select
+                          value={c.treatment}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(c.id, 'treatment', e.target.value)
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          disabled={loading || treatments.length === 0}
+                        >
+                          <option value="">-- Select Treatment --</option>
+                          {treatments.map((t) => (
+                            <option key={t.id} value={t.name}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">
+                          Room Number *
+                        </label>
+                        <input
+                          type="text"
+                          value={c.room}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(c.id, 'room', e.target.value)
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          placeholder="Room"
+                          disabled={loading}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-300 mb-1">
+                        Session Duration *
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={c.sessionHours}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(
+                              c.id,
+                              'sessionHours',
+                              Number(e.target.value) || 0,
+                            )
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          placeholder="Hours"
+                          disabled={loading}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={59}
+                          step={5}
+                          value={c.sessionMinutes}
+                          onChange={(e) =>
+                            updateAdditionalCustomer(
+                              c.id,
+                              'sessionMinutes',
+                              Number(e.target.value) || 0,
+                            )
+                          }
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
+                          placeholder="Mins"
+                          disabled={loading}
+                        />
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        In / Out time will be auto-calculated from group check-in and this
+                        duration.
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* --- END GROUP CUSTOMERS --- */}
 
           {/* --- New Package Checkbox and Fields --- */}
           <div className="space-y-4 pt-2">
@@ -1133,8 +1417,10 @@ export default function ClientCheckinForm() {
                 className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                 disabled={loading}
               />
+              <span className="text-sm font-medium text-gray-300">
+                Add new package for this customer
+              </span>
             </label>
-            <span className="text-sm font-medium text-gray-300">Add new package</span>
 
             {formData.tookPackage && (
               <div className="space-y-4 bg-gray-800 p-4 rounded-lg border border-red-700/50">
@@ -1228,7 +1514,7 @@ export default function ClientCheckinForm() {
                   htmlFor="amountPaid"
                   className="block text-sm font-medium text-gray-300 mb-1"
                 >
-                  Amount for Treatment (₹) *
+                  Total Amount for this Sale (₹) *
                 </label>
                 <input
                   id="amountPaid"
@@ -1281,10 +1567,10 @@ export default function ClientCheckinForm() {
                 ? 'Register Package & Accept Cash'
                 : 'Register Package & Accept Card'
               : formData.paymentMethod === 'upi'
-              ? 'Proceed to UPI Payment'
+              ? 'Register Group & Proceed to UPI'
               : formData.paymentMethod === 'cash'
-              ? 'Register & Accept Cash'
-              : 'Register & Accept Card'}
+              ? 'Register Group & Accept Cash'
+              : 'Register Group & Accept Card'}
           </button>
         </form>
       </div>

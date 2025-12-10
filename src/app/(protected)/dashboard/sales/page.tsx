@@ -10,11 +10,21 @@ import React, {
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
 
 /* ===================== TYPES ===================== */
+
+type GroupCustomer = {
+  name: string;
+  treatment: string;
+  therapist_name: string;
+  room: string;
+  sessionHours?: number | null;
+  in_time?: string | null;
+  out_time?: string | null;
+};
 
 type Sale = {
   id: string;
@@ -35,6 +45,13 @@ type Sale = {
   package_sold_by: string | null;
   payment_method: string | null;
   is_package_customer: boolean;
+
+  // in/out time for main customer (HH:mm)
+  in_time: string | null;
+  out_time: string | null;
+
+  // group customers (friends in same sale)
+  group_customers: GroupCustomer[] | null;
 };
 
 /* ===================== HELPERS ===================== */
@@ -56,6 +73,22 @@ const formatTime = (d: string | null) => {
   });
 };
 
+// For plain "HH:mm" strings
+const formatPlainTime = (t: string | null | undefined) => {
+  if (!t) return '—';
+  try {
+    const [h, m] = t.split(':');
+    const dt = new Date();
+    dt.setHours(Number(h), Number(m), 0, 0);
+    return dt.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return t;
+  }
+};
+
 const getExpectedCheckoutTime = (inTime: string | null, hrs: number | null) => {
   if (!inTime || !hrs) return null;
   const dt = new Date(inTime);
@@ -63,8 +96,8 @@ const getExpectedCheckoutTime = (inTime: string | null, hrs: number | null) => {
   return new Date(dt.getTime() + hrs * 60 * 60 * 1000);
 };
 
-const formatDuration = (h: number | null) => {
-  if (!h) return '—';
+const formatDuration = (h: number | null | undefined) => {
+  if (!h && h !== 0) return '—';
   if (h < 1) return `${Math.round(h * 60)} mins`;
   return `${h} hr`;
 };
@@ -129,6 +162,18 @@ export default function AdminSalesPage() {
     useState<Sale | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // NEW: track which group rows are expanded
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
+    {},
+  );
+
+  const toggleGroup = (id: string) => {
+    setExpandedGroups((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
+
   /* ===================== FETCH ===================== */
 
   const fetchSales = useCallback(async () => {
@@ -157,16 +202,16 @@ export default function AdminSalesPage() {
 
   const activeSales = useMemo(
     () => sales.filter((s) => s.check_out_time),
-    [sales]
+    [sales],
   );
 
   const totalSales = useMemo(
     () =>
       activeSales.reduce(
         (a, s) => a + (s.took_package ? s.package_amount : s.amount_paid),
-        0
+        0,
       ),
-    [activeSales]
+    [activeSales],
   );
 
   const totalCashSales = useMemo(
@@ -174,7 +219,7 @@ export default function AdminSalesPage() {
       activeSales
         .filter((s) => s.payment_method === 'cash')
         .reduce((a, s) => a + s.amount_paid, 0),
-    [activeSales]
+    [activeSales],
   );
 
   const totalUpiSales = useMemo(
@@ -182,7 +227,7 @@ export default function AdminSalesPage() {
       activeSales
         .filter((s) => s.payment_method === 'upi')
         .reduce((a, s) => a + s.amount_paid, 0),
-    [activeSales]
+    [activeSales],
   );
 
   const totalCardSales = useMemo(
@@ -190,7 +235,7 @@ export default function AdminSalesPage() {
       activeSales
         .filter((s) => s.payment_method === 'card')
         .reduce((a, s) => a + s.amount_paid, 0),
-    [activeSales]
+    [activeSales],
   );
 
   const totalPackageSales = useMemo(
@@ -198,12 +243,12 @@ export default function AdminSalesPage() {
       activeSales
         .filter((s) => s.took_package)
         .reduce((a, s) => a + s.package_amount, 0),
-    [activeSales]
+    [activeSales],
   );
 
   const activeSalesCount = useMemo(
     () => activeSales.length,
-    [activeSales]
+    [activeSales],
   );
 
   /* ===================== EDIT ===================== */
@@ -264,6 +309,15 @@ export default function AdminSalesPage() {
 
     const amountNumber = Number(editForm.amount || 0);
 
+    // Build new check_in_time from edited date + time (if provided)
+    let newCheckInTime: string | null = editingSale.check_in_time;
+    if (editForm.date && editForm.check_in_time) {
+      const combined = new Date(`${editForm.date}T${editForm.check_in_time}`);
+      if (!isNaN(combined.getTime())) {
+        newCheckInTime = combined.toISOString();
+      }
+    }
+
     const updates: Partial<Sale> & {
       amount_paid: number;
       package_amount: number;
@@ -283,6 +337,11 @@ export default function AdminSalesPage() {
       package_amount: editingSale.took_package
         ? Math.round(amountNumber * 100)
         : editingSale.package_amount,
+
+      // 🔴 NEW: persist edited date, outlet, and check-in time
+      date: editForm.date, // "YYYY-MM-DD"
+      outlet_id: editForm.outlet_id,
+      check_in_time: newCheckInTime,
     };
 
     const { error } = await supabase
@@ -306,7 +365,7 @@ export default function AdminSalesPage() {
         before,
         after,
       }),
-      username: 'admin',
+      username: 'admin', // TODO: replace with real logged-in user later
     });
 
     setIsEditModalOpen(false);
@@ -375,7 +434,7 @@ export default function AdminSalesPage() {
         before,
         after: null,
       }),
-      username: 'admin',
+      username: 'admin', // TODO: replace with real logged-in user later
     });
 
     setIsDeleteModalOpen(false);
@@ -392,7 +451,7 @@ export default function AdminSalesPage() {
       const { data } = await supabase.from('customers').select('*');
       exportToExcel(
         data || [],
-        `Sales_${startDate}_to_${endDate}.xlsx`
+        `Sales_${startDate}_to_${endDate}.xlsx`,
       );
       logActivity('export_sales', 'Downloaded Sales');
     } catch (e: any) {
@@ -526,7 +585,7 @@ export default function AdminSalesPage() {
                   Sale Date
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Service
+                  Service / Group Details
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
                   Amount
@@ -535,13 +594,13 @@ export default function AdminSalesPage() {
                   Payment
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Time
+                  Time (Main)
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Therapist
+                  Therapist (Main)
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Room
+                  Room (Main)
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
                   Action
@@ -569,109 +628,212 @@ export default function AdminSalesPage() {
                   </td>
                 </tr>
               ) : (
-                sales.map((sale) => (
-                  <tr
-                    key={sale.id}
-                    className={
-                      sale.check_out_time ? 'bg-gray-50 opacity-60' : ''
-                    }
-                  >
-                    <td className="px-3 py-2 text-xs">
-                      <div className="font-medium text-black">
-                        {sale.name}
-                      </div>
-                      <div className="text-black">{sale.mobile}</div>
-                    </td>
+                sales.map((sale) => {
+                  const groupCount = sale.group_customers
+                    ? sale.group_customers.length
+                    : 0;
+                  const totalGuests = 1 + groupCount;
+                  const customerLabel =
+                    groupCount > 0
+                      ? `${sale.name} + ${groupCount} more`
+                      : sale.name;
 
-                    <td className="px-3 py-2 text-xs text-black">
-                      {sale.outlet_name}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-black">
-                      {toInputDate(sale.date)}
-                    </td>
+                  const isGroupExpanded = !!expandedGroups[sale.id];
 
-                    <td className="px-3 py-2 text-xs max-w-xs text-black">
-                      <div className="text-black">
-                        {formatService(sale)}
-                      </div>
-                      <div className="text-black">
-                        {formatDuration(sale.session_hours)}
-                      </div>
-                    </td>
+                  // Main customer time display (prefers manual in_time/out_time)
+                  const mainInDisplay = sale.in_time
+                    ? formatPlainTime(sale.in_time)
+                    : formatTime(sale.check_in_time);
 
-                    <td className="px-3 py-2 text-xs font-bold text-black">
-                      {formatCurrency(
-                        sale.took_package
-                          ? sale.package_amount
-                          : sale.amount_paid
-                      )}
-                    </td>
+                  const hasManualOut = !!sale.out_time;
+                  const mainOutDisplay = hasManualOut
+                    ? formatPlainTime(sale.out_time)
+                    : sale.check_out_time
+                    ? formatTime(sale.check_out_time)
+                    : (() => {
+                        const expected = getExpectedCheckoutTime(
+                          sale.check_in_time,
+                          sale.session_hours,
+                        );
+                        return expected
+                          ? formatTime(expected.toISOString())
+                          : '—';
+                      })();
 
-                    <td className="px-3 py-2 text-xs text-black">
-                      {formatPaymentMethod(sale.payment_method)}
-                    </td>
+                  const showEstimated =
+                    !sale.out_time && !sale.check_out_time;
 
-                    <td className="px-3 py-2 text-xs text-black">
-                      <div>In: {formatTime(sale.check_in_time)}</div>
-                      {sale.check_out_time ? (
-                        <div>Out: {formatTime(sale.check_out_time)}</div>
-                      ) : (
-                        <div className="text-black">
-                          Est:{' '}
-                          {(() => {
-                            const expected = getExpectedCheckoutTime(
-                              sale.check_in_time,
-                              sale.session_hours
-                            );
-                            return expected
-                              ? formatTime(expected.toISOString())
-                              : '—';
-                          })()}
+                  return (
+                    <tr
+                      key={sale.id}
+                      className={
+                        sale.check_out_time ? 'bg-gray-50 opacity-60' : ''
+                      }
+                    >
+                      {/* CUSTOMER */}
+                      <td className="px-3 py-2 text-xs align-top">
+                        <div className="font-medium text-black">
+                          {customerLabel}
                         </div>
-                      )}
-                    </td>
-
-                    <td className="px-3 py-2 text-xs text-black">
-                      {sale.therapist_name || '—'}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-black">
-                      {sale.room || '—'}
-                    </td>
-
-                    <td className="px-3 py-2 text-xs">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleOpenEdit(sale)}
-                          className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
-                        >
-                          Edit
-                        </button>
-
-                        {!sale.check_out_time && (
-                          <button
-                            onClick={() => handleCheckOut(sale.id)}
-                            className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700"
-                          >
-                            Check Out
-                          </button>
+                        <div className="text-black">{sale.mobile}</div>
+                        {totalGuests > 1 && (
+                          <div className="text-[11px] text-gray-500 mt-0.5">
+                            Group of {totalGuests}
+                          </div>
                         )}
+                      </td>
 
-                        <button
-                          onClick={() => {
-                            setSelectedSaleForDelete(sale);
-                            setDeleteError('');
-                            setDeletePassword('');
-                            setDeleteRemark('');
-                            setIsDeleteModalOpen(true);
-                          }}
-                          className="px-3 py-1 bg-red-700 text-white rounded-lg hover:bg-red-800"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      {/* OUTLET */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        {sale.outlet_name}
+                      </td>
+
+                      {/* SALE DATE */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        {toInputDate(sale.date)}
+                      </td>
+
+                      {/* SERVICE + GROUP DETAILS */}
+                      <td className="px-3 py-2 text-xs max-w-xs text-black align-top">
+                        {/* Top row: service + dropdown button */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-black font-semibold">
+                            {formatService(sale)}
+                          </div>
+
+                          {groupCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => toggleGroup(sale.id)}
+                              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-100"
+                            >
+                              {isGroupExpanded ? (
+                                <>
+                                  <ChevronUp className="h-3 w-3" />
+                                  Hide group
+                                </>
+                              ) : (
+                                <>
+                                  <ChevronDown className="h-3 w-3" />
+                                  View group ({groupCount})
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Main customer line (always visible) */}
+                        <div className="mt-2 space-y-1 text-[11px] text-gray-700">
+                          <div>
+                            <span className="font-semibold text-gray-800">
+                              Main:
+                            </span>{' '}
+                            {sale.treatment || '—'} ·{' '}
+                            {formatDuration(sale.session_hours)} ·{' '}
+                            {sale.therapist_name || '—'} · Room{' '}
+                            {sale.room || '—'} · In {mainInDisplay} / Out{' '}
+                            {mainOutDisplay}
+                          </div>
+                        </div>
+
+                        {/* Group members details (only when expanded) */}
+                        {sale.group_customers &&
+                          sale.group_customers.length > 0 &&
+                          isGroupExpanded && (
+                            <div className="mt-2 pt-2 border-t border-gray-200 space-y-1 text-[11px] text-gray-700">
+                              <div className="font-semibold text-gray-800">
+                                Group Members:
+                              </div>
+                              {sale.group_customers.map((gc, idx) => (
+                                <div key={idx}>
+                                  <span className="font-medium">
+                                    {gc.name || `Guest ${idx + 2}`}
+                                  </span>
+                                  {': '}
+                                  {gc.treatment || '—'} ·{' '}
+                                  {formatDuration(gc.sessionHours)} ·{' '}
+                                  {gc.therapist_name || '—'} · Room{' '}
+                                  {gc.room || '—'} · In{' '}
+                                  {formatPlainTime(gc.in_time)} / Out{' '}
+                                  {formatPlainTime(gc.out_time)}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                      </td>
+
+                      {/* AMOUNT */}
+                      <td className="px-3 py-2 text-xs font-bold text-black align-top">
+                        {formatCurrency(
+                          sale.took_package
+                            ? sale.package_amount
+                            : sale.amount_paid,
+                        )}
+                      </td>
+
+                      {/* PAYMENT */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        {formatPaymentMethod(sale.payment_method)}
+                      </td>
+
+                      {/* TIME (MAIN) */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        <div>In: {mainInDisplay}</div>
+                        {showEstimated ? (
+                          <div className="text-black">
+                            Est: {mainOutDisplay}
+                          </div>
+                        ) : (
+                          <div>Out: {mainOutDisplay}</div>
+                        )}
+                      </td>
+
+                      {/* THERAPIST MAIN */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        {sale.therapist_name || '—'}
+                      </td>
+
+                      {/* ROOM MAIN */}
+                      <td className="px-3 py-2 text-xs text-black align-top">
+                        {sale.room || '—'}
+                      </td>
+
+                      {/* ACTIONS */}
+                      <td className="px-3 py-2 text-xs align-top">
+                        <div className="flex flex-col gap-1">
+                          <button
+                            onClick={() => handleOpenEdit(sale)}
+                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                          >
+                            Edit
+                          </button>
+
+                          {!sale.check_out_time && (
+                            <button
+                              onClick={() => handleCheckOut(sale.id)}
+                              className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                            >
+                              Check Out
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => {
+                              setSelectedSaleForDelete(sale);
+                              setDeleteError('');
+                              setDeletePassword('');
+                              setDeleteRemark('');
+                              setIsDeleteModalOpen(true);
+                            }}
+                            className="px-3 py-1 bg-red-700 text-white rounded-lg hover:bg-red-800"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

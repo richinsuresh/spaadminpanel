@@ -34,7 +34,7 @@ function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPer
 async function processPayload(payload: any) {
   const result: any = {
     client_uuid: payload && payload.client_uuid ? payload.client_uuid : null,
-    ok: false
+    ok: false,
   };
 
   try {
@@ -83,7 +83,9 @@ async function processPayload(payload: any) {
 
         if (findError) {
           console.warn('[client-form-submit] package lookup error:', findError);
-          result.package_warn = 'Package lookup error: ' + (findError.message || JSON.stringify(findError));
+          result.package_warn =
+            'Package lookup error: ' +
+            (findError.message || JSON.stringify(findError));
         } else if (activePackage && activePackage.id) {
           const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
           const currentUsed = parseFloat(activePackage.used_hours || '0');
@@ -97,16 +99,20 @@ async function processPayload(payload: any) {
             .update({
               remaining_hours: newRemainingHours,
               used_hours: newUsedHours,
-              status: newStatus
+              status: newStatus,
             })
             .eq('id', payload.packageId);
 
           if (updateError) {
             console.error('[client-form-submit] package update error:', updateError);
-            throw new Error('Error updating package: ' + (updateError.message || JSON.stringify(updateError)));
+            throw new Error(
+              'Error updating package: ' +
+                (updateError.message || JSON.stringify(updateError)),
+            );
           }
         } else {
-          result.package_warn = 'No active package available to redeem (skipped deduction)';
+          result.package_warn =
+            'No active package available to redeem (skipped deduction)';
         }
       }
     }
@@ -120,18 +126,26 @@ async function processPayload(payload: any) {
       const packagePrice = payload.packageAmount || 0;
       const validityPeriod = payload.packageValidity || '3 months';
 
-      const { data: existingActivePackage, error: findActivePkgError } = await supabase
-        .from('packages')
-        .select('id, remaining_hours, expiry_date, total_hours, used_hours')
-        .eq('mobile', payload.mobile)
-        .eq('status', 'active')
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
+      const { data: existingActivePackage, error: findActivePkgError } =
+        await supabase
+          .from('packages')
+          .select('id, remaining_hours, expiry_date, total_hours, used_hours')
+          .eq('mobile', payload.mobile)
+          .eq('status', 'active')
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
 
       if (findActivePkgError) {
-        console.error('[client-form-submit] find active package error:', findActivePkgError);
-        throw new Error('Error finding active package: ' + (findActivePkgError.message || JSON.stringify(findActivePkgError)));
+        console.error(
+          '[client-form-submit] find active package error:',
+          findActivePkgError,
+        );
+        throw new Error(
+          'Error finding active package: ' +
+            (findActivePkgError.message ||
+              JSON.stringify(findActivePkgError)),
+        );
       }
 
       const basePkg: any = {
@@ -143,11 +157,13 @@ async function processPayload(payload: any) {
         outlet: payload.outlet,
         outlet_name: payload.outlet,
         payment_method: payload.paymentMethod,
-        status: 'active'
+        status: 'active',
       };
 
       if (existingActivePackage && existingActivePackage.id) {
-        const currentRemaining = parseFloat(existingActivePackage.remaining_hours || '0');
+        const currentRemaining = parseFloat(
+          existingActivePackage.remaining_hours || '0',
+        );
         const currentTotal = parseFloat(existingActivePackage.total_hours || '0');
         const currentUsed = parseFloat(existingActivePackage.used_hours || '0');
 
@@ -155,7 +171,10 @@ async function processPayload(payload: any) {
         const finalTotal = currentTotal + newTotalHours;
         const finalUsed = currentUsed + sessionHours;
 
-        const newExpiry = calculateNewExpiryDate(existingActivePackage.expiry_date, validityPeriod);
+        const newExpiry = calculateNewExpiryDate(
+          existingActivePackage.expiry_date,
+          validityPeriod,
+        );
 
         basePkg.remaining_hours = finalRemaining;
         basePkg.total_hours = finalTotal;
@@ -168,8 +187,14 @@ async function processPayload(payload: any) {
           .eq('id', existingActivePackage.id);
 
         if (updateError) {
-          console.error('[client-form-submit] package stacking error:', updateError);
-          throw new Error('Error adding hours to existing package: ' + (updateError.message || JSON.stringify(updateError)));
+          console.error(
+            '[client-form-submit] package stacking error:',
+            updateError,
+          );
+          throw new Error(
+            'Error adding hours to existing package: ' +
+              (updateError.message || JSON.stringify(updateError)),
+          );
         }
       } else {
         const newExpiry = calculateNewExpiryDate(null, validityPeriod);
@@ -185,8 +210,14 @@ async function processPayload(payload: any) {
           .insert([basePkg]);
 
         if (insertError) {
-          console.error('[client-form-submit] new package insert error:', insertError);
-          throw new Error('Error creating new package: ' + (insertError.message || JSON.stringify(insertError)));
+          console.error(
+            '[client-form-submit] new package insert error:',
+            insertError,
+          );
+          throw new Error(
+            'Error creating new package: ' +
+              (insertError.message || JSON.stringify(insertError)),
+          );
         }
       }
     }
@@ -194,7 +225,9 @@ async function processPayload(payload: any) {
     // -------------------------------
     // 3. INSERT CUSTOMER SESSION
     // -------------------------------
-    const checkInTime = new Date().toISOString();
+    // Use check_in_time from payload if present (client already computed),
+    // otherwise default to "now".
+    const checkInTime: string = payload.check_in_time || new Date().toISOString();
 
     const customerInsert: any = {
       name: payload.name,
@@ -213,7 +246,17 @@ async function processPayload(payload: any) {
       payment_method: payload.paymentMethod,
       check_in_time: checkInTime,
       therapist_name: payload.therapist_name,
-      room: payload.room
+      room: payload.room,
+
+      // 🔴 NEW: save manual / auto-calculated times from client form
+      in_time: payload.in_time ?? null,   // "HH:mm" (main customer)
+      out_time: payload.out_time ?? null, // "HH:mm" (main customer)
+
+      // 🔴 NEW: full group JSON sent from client form
+      group_customers:
+        payload.group_customers && payload.group_customers.length
+          ? payload.group_customers
+          : null,
     };
 
     if (payload.client_uuid) {
@@ -230,7 +273,12 @@ async function processPayload(payload: any) {
       const lower = (sessionError.message || '').toLowerCase();
       console.error('[client-form-submit] session insert error:', sessionError);
 
-      if (payload.client_uuid && (lower.includes('unique') || lower.includes('duplicate') || lower.includes('client_uuid'))) {
+      if (
+        payload.client_uuid &&
+        (lower.includes('unique') ||
+          lower.includes('duplicate') ||
+          lower.includes('client_uuid'))
+      ) {
         const { data: existing, error: findExistingErr } = await supabase
           .from('customers')
           .select('id')
@@ -247,7 +295,10 @@ async function processPayload(payload: any) {
         }
       }
 
-      throw new Error('Error saving session: ' + (sessionError.message || JSON.stringify(sessionError)));
+      throw new Error(
+        'Error saving session: ' +
+          (sessionError.message || JSON.stringify(sessionError)),
+      );
     }
 
     // success
@@ -255,10 +306,14 @@ async function processPayload(payload: any) {
     result.customer_session_id = sessionData ? sessionData.id : null;
     result.message = 'Processed';
     return result;
-
   } catch (err: any) {
     const uuid = payload && payload.client_uuid ? payload.client_uuid : 'none';
-    console.error('[client-form-submit] Error processing payload (client_uuid=' + uuid + '):', err);
+    console.error(
+      '[client-form-submit] Error processing payload (client_uuid=' +
+        uuid +
+        '):',
+      err,
+    );
 
     result.ok = false;
     result.error = err && err.message ? err.message : String(err);
@@ -273,7 +328,11 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
 
-    const bulk = Array.isArray(body && body.bulk) ? body.bulk : (Array.isArray(body) ? body : null);
+    const bulk = Array.isArray(body && body.bulk)
+      ? body.bulk
+      : Array.isArray(body)
+      ? body
+      : null;
     const single = !bulk ? body : null;
 
     // BULK MODE
@@ -286,7 +345,10 @@ export async function POST(req: NextRequest) {
           results.push(r);
         } catch (e: any) {
           console.error('[client-form-submit] fatal error in bulk:', e);
-          results.push({ ok: false, error: e && e.message ? e.message : String(e) });
+          results.push({
+            ok: false,
+            error: e && e.message ? e.message : String(e),
+          });
         }
       }
 
@@ -300,7 +362,7 @@ export async function POST(req: NextRequest) {
         mobile: single.mobile,
         tookPackage: single.tookPackage,
         isPackageCustomer: single.isPackageCustomer,
-        outlet: single.outlet
+        outlet: single.outlet,
       });
 
       const res = await processPayload(single);
@@ -308,17 +370,19 @@ export async function POST(req: NextRequest) {
       if (res.ok) {
         return NextResponse.json({ ok: true, result: res });
       } else {
-        return NextResponse.json({ ok: false, error: res.error || 'Failed to process' }, { status: 500 });
+        return NextResponse.json(
+          { ok: false, error: res.error || 'Failed to process' },
+          { status: 500 },
+        );
       }
     }
 
     return NextResponse.json({ error: 'No payload' }, { status: 400 });
-
   } catch (err: any) {
     console.error('[client-form-submit] top-level error:', err);
     return NextResponse.json(
       { error: err && err.message ? err.message : 'Unknown server error' },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

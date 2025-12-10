@@ -7,7 +7,7 @@ type ActivityRow = {
   id: string;
   action: string;
   description: string;
-  user_email: string | null;
+  username: string | null;
   created_at: string;
 };
 
@@ -98,7 +98,7 @@ export default function ActivityPage() {
       setErrorMsg(null);
 
       const { data, error } = await supabase
-        .from('activity_logs') // 👈 IMPORTANT: existing table with data
+        .from('activity_logs')
         .select('id, action_type, description, username, created_at')
         .order('created_at', { ascending: false })
         .limit(200);
@@ -112,7 +112,7 @@ export default function ActivityPage() {
           id: String(r.id),
           action: r.action_type ?? '',
           description: r.description ?? '',
-          user_email: r.username ?? null,
+          username: r.username ?? null,
           created_at: r.created_at,
         }));
         setRows(mapped);
@@ -204,9 +204,10 @@ export default function ActivityPage() {
                         {entityForAction(row.action)}
                       </span>
                     </div>
-                    {row.user_email && (
+
+                    {row.username && (
                       <div className="text-xs text-black">
-                        By {row.user_email}
+                        By {row.username}
                       </div>
                     )}
 
