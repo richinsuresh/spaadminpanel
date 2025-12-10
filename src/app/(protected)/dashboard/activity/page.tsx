@@ -19,6 +19,12 @@ type ParsedDescription =
     }
   | null;
 
+type EmployeeMeta = {
+  id: string;
+  name: string;
+  role: string | null;
+};
+
 const formatDateTime = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -92,6 +98,12 @@ export default function ActivityPage() {
     'all' | 'sales' | 'packages' | 'customers' | 'attendance' | 'employees'
   >('all');
 
+  // NEW: map employee name -> "Name (Role)"
+  const [employeeLabelMap, setEmployeeLabelMap] = useState<
+    Record<string, string>
+  >({});
+
+  // Fetch activity logs
   useEffect(() => {
     const fetchActivity = async () => {
       setLoading(true);
@@ -122,6 +134,31 @@ export default function ActivityPage() {
     };
 
     fetchActivity();
+  }, []);
+
+  // Fetch employees once, to build label map
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      const { data, error } = await supabase
+        .from('employees')
+        .select('id, name, role');
+
+      if (error) {
+        console.error('Failed to load employees for activity labels', error);
+        return;
+      }
+
+      const map: Record<string, string> = {};
+      (data as EmployeeMeta[] | null)?.forEach((emp) => {
+        const role = emp.role ? emp.role.trim() : '';
+        // Label will look like: "Raj (Receptionist)" or just "Raj" if no role
+        map[emp.name] = role ? `${emp.name} (${role})` : emp.name;
+      });
+
+      setEmployeeLabelMap(map);
+    };
+
+    fetchEmployees();
   }, []);
 
   const filteredRows = rows.filter((row) => {
@@ -188,6 +225,13 @@ export default function ActivityPage() {
 
             const isExpanded = expandedId === row.id;
 
+            // Figure out what to show as "By ..."
+            const rawUser = row.username ?? '';
+            const displayUser =
+              (rawUser && employeeLabelMap[rawUser]) ||
+              rawUser ||
+              'System';
+
             return (
               <div
                 key={row.id}
@@ -205,9 +249,9 @@ export default function ActivityPage() {
                       </span>
                     </div>
 
-                    {row.username && (
+                    {displayUser && (
                       <div className="text-xs text-black">
-                        By {row.username}
+                        By {displayUser}
                       </div>
                     )}
 
