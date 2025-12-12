@@ -1,4 +1,3 @@
-// src/app/(protected)/outlet/dashboard/layout.tsx
 'use client'; 
 
 import { useState, useEffect } from 'react';
@@ -40,13 +39,14 @@ export default function OutletDashboardLayout({
   
   const navItems = [
     { name: 'Sales & Check-out', href: '/outlet/dashboard/sales', icon: '💰' },
-    { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: '💸' }, // ✅ NEW
+    { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: '💸' },
+    { name: 'New Package Sale', href: '/outlet/dashboard/packages/new', icon: '📦' }, // Added new package page
     // { name: 'Customers', href: '/outlet/dashboard/customers', icon: '👥' },
-    // { name: 'Packages', href: '/outlet/dashboard/packages', icon: '📦' },
   ];
   
   const getLinkClass = (href: string) => {
-    const isActive = pathname === href || pathname.startsWith(href);
+    // Check if pathname starts with the item's href for active state, e.g., /packages/new is active when /packages is active
+    const isActive = pathname === href || pathname.startsWith(href) || (href === '/outlet/dashboard/sales' && pathname === '/outlet/dashboard');
     
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
       isActive
@@ -56,8 +56,10 @@ export default function OutletDashboardLayout({
   };
 
   return (
+    // Base layout: uses flex to handle the content next to the sidebar on desktop
     <div className="flex min-h-screen bg-gray-100">
       
+      {/* Mobile Overlay */}
       {isSidebarOpen && (
         <div 
           className="fixed inset-0 z-20 bg-black/50 md:hidden"
@@ -66,10 +68,14 @@ export default function OutletDashboardLayout({
       )}
 
       {/* Sidebar */}
+      {/* On mobile, it slides in/out. On desktop (md:), it is fixed and takes up 64 units of width. */}
       <div 
-        className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl flex flex-col transform ${
-          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:inset-0`}
+        className={`fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 shadow-xl flex flex-col 
+          transform transition-transform duration-300 ease-in-out 
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          
+          md:translate-x-0 md:fixed md:h-full md:flex-shrink-0 md:border-r border-gray-700`}
+          // Removed md:static md:inset-0, added md:fixed md:h-full
       >
         <div className="p-6 border-b border-gray-700">
           <h1 className="text-xl font-bold text-red-600" title={outletName}>
@@ -102,13 +108,15 @@ export default function OutletDashboardLayout({
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col md:ml-64">
-        {/* Mobile header */}
-        <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-gray-900 p-4 shadow-sm">
+      {/* Main Content Wrapper */}
+      {/* md:ml-64 creates the offset for the fixed sidebar. min-w-0 prevents content overflow on mobile. */}
+      <div className="flex-1 flex flex-col md:ml-64 min-w-0">
+        
+        {/* Mobile header (Sticky for better navigation) */}
+        <div className="md:hidden sticky top-0 z-10 flex items-center justify-between bg-gray-900 p-4 shadow-xl">
           <button 
             onClick={() => setIsSidebarOpen(true)}
-            className="text-gray-400 hover:text-white"
+            className="text-gray-400 hover:text-white p-2"
             aria-label="Open navigation"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -116,11 +124,12 @@ export default function OutletDashboardLayout({
             </svg>
           </button>
           <h1 className="text-lg font-bold text-red-600">{outletName}</h1>
-          <div></div>
+          <div className="w-6 h-6"></div> {/* Placeholder for balance */}
         </div>
         
-        <main className="flex-1 bg-white">
-          <div className="max-w-7xl mx-auto p-6 md:p-10">
+        <main className="flex-1 bg-gray-100">
+          {/* Inner content padding */}
+          <div className="max-w-7xl mx-auto p-4 md:p-8">
             {children}
           </div>
         </main>

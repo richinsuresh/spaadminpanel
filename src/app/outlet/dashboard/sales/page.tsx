@@ -1,16 +1,24 @@
+// src/app/outlet/dashboard/sales/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, UserPlus, Save, X, RefreshCw } from 'lucide-react';
 
-/* ===================== TYPES ===================== */
+/* ===================== TYPES (FIXED) ===================== */
+
+type Employee = {
+  id: string;
+  name: string;
+};
 
 type GroupCustomer = {
   name: string;
   treatment: string;
-  therapist_name: string;
-  room: string;
+  // --- FIX APPLIED ---
+  therapist_name: string | null;
+  room: string | null;
+  // -------------------
   sessionHours?: number | null;
   in_time?: string | null;   // plain "HH:mm"
   out_time?: string | null;  // plain "HH:mm"
@@ -32,8 +40,16 @@ type Sale = {
   session_hours: number | null;
   payment_method: string | null;
 
-  // NEW: group customers (friends in same sale)
   group_customers: GroupCustomer[] | null;
+};
+
+// State type for the assignment modal
+type AssignmentData = {
+    saleId: string;
+    mainCustomerName: string;
+    initialTherapist: string | null;
+    initialRoom: string | null;
+    groupCustomers: GroupCustomer[] | null;
 };
 
 type AddonModalProps = {
@@ -54,6 +70,15 @@ type CheckoutConfirmModalProps = {
   onCheckout: (id: string) => void;
   onAddon: (sale: Sale) => void;
 };
+
+type StaffAssignmentModalProps = {
+  data: AssignmentData | null;
+  employees: Employee[];
+  onClose: () => void;
+  onSave: (saleId: string, mainTherapist: string, mainRoom: string, groupUpdates: { index: number, therapist: string, room: string }[]) => void;
+  isSaving: boolean;
+};
+
 
 /* ===================== HELPERS ===================== */
 
@@ -123,6 +148,7 @@ const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
   if (!method) return 'N/A';
   return method.charAt(0).toUpperCase() + method.slice(1);
 };
+
 
 /* ===================== MODALS ===================== */
 
@@ -237,6 +263,153 @@ function CheckoutConfirmModal({
   );
 }
 
+// --- NEW STAFF ASSIGNMENT MODAL ---
+function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: StaffAssignmentModalProps) {
+    if (!data) return null;
+
+    const [mainTherapist, setMainTherapist] = useState(data.initialTherapist || '');
+    const [mainRoom, setMainRoom] = useState(data.initialRoom || '');
+    const [groupAssignments, setGroupAssignments] = useState(data.groupCustomers ? 
+        data.groupCustomers.map(gc => ({
+            // Use || '' to ensure state remains a string, even if type allows null
+            therapist: gc.therapist_name === 'CLIENT_FORM_PENDING' ? '' : gc.therapist_name || '',
+            room: gc.room === 'CLIENT_FORM_PENDING' ? '' : gc.room || ''
+        })) : []);
+
+    const handleGroupChange = (index: number, field: 'therapist' | 'room', value: string) => {
+        setGroupAssignments(prev => prev.map((item, i) => 
+            i === index ? { ...item, [field]: value } : item
+        ));
+    };
+
+    const handleSave = () => {
+        // Collect updates for group customers
+        const groupUpdates = groupAssignments.map((assignment, index) => ({
+            index: index,
+            // Convert empty string to null if needed in DB, but pass trimmed string here
+            therapist: assignment.therapist.trim(),
+            room: assignment.room.trim(),
+        }));
+
+        onSave(data.saleId, mainTherapist.trim(), mainRoom.trim(), groupUpdates);
+    };
+
+    const needsAssignment = (data.initialTherapist === null || data.initialTherapist === 'CLIENT_FORM_PENDING') || 
+                            (data.groupCustomers && data.groupCustomers.some(gc => gc.therapist_name === 'CLIENT_FORM_PENDING' || gc.room === 'CLIENT_FORM_PENDING'));
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center pb-3 border-b border-gray-200">
+                    <h2 className={`text-xl font-bold ${needsAssignment ? 'text-red-600' : 'text-gray-800'}`}>
+                        Staff Assignment for {data.mainCustomerName}
+                    </h2>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+                        <X size={24} />
+                    </button>
+                </div>
+                
+                <p className="text-sm text-gray-600">
+                    {needsAssignment ? '⚠️ These sessions are missing staff details and need to be assigned.' : 'Review/Update staff assignments.'}
+                </p>
+
+                <div className="space-y-6">
+                    {/* Main Customer Assignment */}
+                    <div className="border p-4 rounded-lg bg-gray-50">
+                        <h3 className="text-lg font-semibold text-gray-800 mb-3">Main Customer</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Therapist (Main)</label>
+                                <select
+                                    value={mainTherapist}
+                                    onChange={(e) => setMainTherapist(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                                    disabled={isSaving}
+                                >
+                                    <option value="">— Select Therapist —</option>
+                                    {employees.map(emp => (
+                                        <option key={emp.id} value={emp.name}>{emp.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Room (Main)</label>
+                                <input
+                                    type="text"
+                                    value={mainRoom}
+                                    onChange={(e) => setMainRoom(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                                    placeholder="Room 1, 2, etc."
+                                    disabled={isSaving}
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Group Customers Assignment */}
+                    {data.groupCustomers && data.groupCustomers.length > 0 && (
+                        <div className="space-y-3">
+                            <h3 className="text-lg font-semibold text-gray-800">Group Members</h3>
+                            {data.groupCustomers.map((gc, index) => (
+                                <div key={index} className="border p-4 rounded-lg space-y-3">
+                                    <p className="font-medium text-sm text-gray-700">
+                                        {gc.name || `Guest ${index + 1}`} ({formatDuration(gc.sessionHours)} for {gc.treatment})
+                                    </p>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-medium text-gray-700 mb-1">Therapist</label>
+                                            <select
+                                                value={groupAssignments[index].therapist}
+                                                onChange={(e) => handleGroupChange(index, 'therapist', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                                disabled={isSaving}
+                                            >
+                                                <option value="">— Select Therapist —</option>
+                                                {employees.map(emp => (
+                                                    <option key={emp.id} value={emp.name}>{emp.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-gray-700 mb-1">Room</label>
+                                            <input
+                                                type="text"
+                                                value={groupAssignments[index].room}
+                                                onChange={(e) => handleGroupChange(index, 'room', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black text-sm"
+                                                placeholder="Room"
+                                                disabled={isSaving}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 bg-gray-200 rounded-lg font-medium"
+                        disabled={isSaving}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium flex items-center gap-2"
+                        disabled={isSaving}
+                    >
+                        {isSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        Save Assignment
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /* ===================== MAIN COMPONENT ===================== */
 
 export default function OutletSalesPage() {
@@ -244,6 +417,13 @@ export default function OutletSalesPage() {
   const [loading, setLoading] = useState(true);
   const [outletName, setOutletName] = useState('');
   const [outletId, setOutletId] = useState('');
+  
+  // --- NEW STAFF STATES ---
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
+  const [assignmentSale, setAssignmentSale] = useState<Sale | null>(null);
+  const [isAssignmentSaving, setIsAssignmentSaving] = useState(false);
+
 
   const today = useMemo(
     () => new Date().toISOString().split('T')[0],
@@ -277,7 +457,23 @@ export default function OutletSalesPage() {
     }));
   };
 
-  /* -------- Fetch outlet info -------- */
+  /* -------- Fetch outlet info and employees -------- */
+  const fetchOutletEmployees = useCallback(async (currentOutletId: string) => {
+    try {
+        // Fetch all active employees (therapists/staff) regardless of check-in status for assignment
+        const { data, error } = await supabase
+            .from('employees')
+            .select('id, name')
+            .eq('is_active', true)
+            .order('name', { ascending: true });
+        
+        if (error) throw error;
+        setEmployees((data as Employee[]) || []);
+    } catch (err) {
+        console.error('Error fetching employees:', err);
+    }
+  }, []);
+
   useEffect(() => {
     async function fetchOutletSession() {
       try {
@@ -286,6 +482,7 @@ export default function OutletSalesPage() {
         if (data.outletId) {
           setOutletId(data.outletId);
           setOutletName(data.outletName);
+          fetchOutletEmployees(data.outletId); // Fetch employees once ID is known
         } else {
           console.error('Outlet ID not found in session data.');
         }
@@ -294,7 +491,7 @@ export default function OutletSalesPage() {
       }
     }
     fetchOutletSession();
-  }, []);
+  }, [fetchOutletEmployees]); // Dependency added
 
   /* -------- Fetch sales -------- */
   const fetchSales = useCallback(async () => {
@@ -390,7 +587,7 @@ export default function OutletSalesPage() {
     [warningSale],
   );
 
-  /* -------- Warning system -------- */
+  /* -------- Warning system (Unchanged) -------- */
   useEffect(() => {
     if (!isToday) {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
@@ -490,7 +687,79 @@ export default function OutletSalesPage() {
     [handleCloseAddonModal],
   );
 
-  /* -------- Totals -------- */
+  /* -------- NEW ASSIGNMENT HANDLERS -------- */
+
+  const handleOpenAssignmentModal = useCallback((sale: Sale) => {
+    setAssignmentSale(sale);
+    setAssignmentModalOpen(true);
+  }, []);
+
+  const handleCloseAssignmentModal = useCallback(() => {
+    setAssignmentSale(null);
+    setAssignmentModalOpen(false);
+    setIsAssignmentSaving(false);
+  }, []);
+
+  const handleSaveAssignment = useCallback(async (
+    saleId: string, 
+    mainTherapist: string, 
+    mainRoom: string, 
+    groupUpdates: { index: number, therapist: string, room: string }[]
+  ) => {
+    if (!assignmentSale) return;
+    setIsAssignmentSaving(true);
+    
+    try {
+        let newGroupCustomers = assignmentSale.group_customers ? [...assignmentSale.group_customers] : null;
+        
+        // 1. Update Group Customers JSON
+        if (newGroupCustomers) {
+            groupUpdates.forEach(update => {
+                if (newGroupCustomers && newGroupCustomers[update.index]) {
+                    newGroupCustomers[update.index] = {
+                        ...newGroupCustomers[update.index],
+                        therapist_name: update.therapist || null,
+                        room: update.room || null,
+                    };
+                }
+            });
+        }
+        
+        // 2. Update Main Customer Record
+        const { error } = await supabase
+            .from('customers')
+            .update({
+                therapist_name: mainTherapist || null,
+                room: mainRoom || null,
+                group_customers: newGroupCustomers,
+            })
+            .eq('id', saleId);
+
+        if (error) throw error;
+
+        console.log('Staff assignment saved successfully.');
+        handleCloseAssignmentModal();
+    } catch (err: any) {
+        console.error(`Error saving assignment: ${err.message}`);
+        setIsAssignmentSaving(false);
+    }
+  }, [assignmentSale, handleCloseAssignmentModal]);
+
+
+  const getAssignmentData = useMemo(() => {
+    if (!assignmentSale) return null;
+
+    return {
+      saleId: assignmentSale.id,
+      mainCustomerName: assignmentSale.name,
+      initialTherapist: assignmentSale.therapist_name,
+      initialRoom: assignmentSale.room,
+      groupCustomers: assignmentSale.group_customers,
+    };
+  }, [assignmentSale]);
+
+
+  /* -------- Totals (Unchanged) -------- */
   const completedSales = useMemo(
     () => sales.filter((sale) => sale.check_out_time),
     [sales],
@@ -556,6 +825,14 @@ export default function OutletSalesPage() {
         onCheckout={handleCheckOut}
         onAddon={handleOpenAddonModal}
       />
+      {/* NEW ASSIGNMENT MODAL */}
+      <StaffAssignmentModal 
+        data={getAssignmentData}
+        employees={employees}
+        onClose={handleCloseAssignmentModal}
+        onSave={handleSaveAssignment}
+        isSaving={isAssignmentSaving}
+      />
 
       <h1 className="text-2xl font-bold text-gray-800">
         {outletName} Sales &amp; Check-out{' '}
@@ -577,7 +854,7 @@ export default function OutletSalesPage() {
         </div>
       </div>
 
-      {/* Totals */}
+      {/* Totals (Unchanged) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
           <div>
@@ -644,10 +921,7 @@ export default function OutletSalesPage() {
                   Session Time
                 </th>
                 <th className="px-3 py-2 text-xs font-medium text-gray-600 uppercase text-left">
-                  Therapist
-                </th>
-                <th className="px-3 py-2 text-xs font-medium text-gray-600 uppercase text-left">
-                  Room
+                  Therapist & Room
                 </th>
                 <th className="px-3 py-2 text-xs font-medium text-gray-600 uppercase text-left">
                   Action
@@ -658,13 +932,13 @@ export default function OutletSalesPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center">
+                  <td colSpan={8} className="p-6 text-center">
                     Loading...
                   </td>
                 </tr>
               ) : sales.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center">
+                  <td colSpan={8} className="p-6 text-center">
                     No sales found for this date.
                   </td>
                 </tr>
@@ -679,6 +953,13 @@ export default function OutletSalesPage() {
                       ? `${sale.name} + ${groupCount} more`
                       : sale.name;
                   const isGroupExpanded = !!expandedGroups[sale.id];
+                  
+                  // Check if assignment is needed (null or placeholder text)
+                  const needsAssignment = 
+                      !sale.check_out_time && (
+                          (sale.therapist_name === null || sale.room === null || sale.therapist_name === 'CLIENT_FORM_PENDING') || 
+                          (sale.group_customers && sale.group_customers.some(gc => gc.therapist_name === null || gc.room === null || gc.therapist_name === 'CLIENT_FORM_PENDING' || gc.room === 'CLIENT_FORM_PENDING'))
+                      );
 
                   const expected = getExpectedCheckoutTime(
                     sale.check_in_time,
@@ -691,7 +972,7 @@ export default function OutletSalesPage() {
                       className={
                         sale.check_out_time
                           ? 'bg-gray-50 opacity-60'
-                          : ''
+                          : needsAssignment ? 'bg-red-50 hover:bg-red-100' : ''
                       }
                     >
                       {/* Customer */}
@@ -742,19 +1023,6 @@ export default function OutletSalesPage() {
                           )}
                         </div>
 
-                        {/* Main customer line */}
-                        <div className="mt-2 space-y-1 text-[11px] text-gray-700">
-                          <div>
-                            <span className="font-semibold text-gray-800">
-                              Main:
-                            </span>{' '}
-                            {sale.treatment || '—'} ·{' '}
-                            {formatDuration(sale.session_hours)} ·{' '}
-                            {sale.therapist_name || '—'} · Room{' '}
-                            {sale.room || '—'}
-                          </div>
-                        </div>
-
                         {/* Group members (when expanded) */}
                         {sale.group_customers &&
                           sale.group_customers.length > 0 &&
@@ -763,20 +1031,25 @@ export default function OutletSalesPage() {
                               <div className="font-semibold text-gray-800">
                                 Group Members:
                               </div>
-                              {sale.group_customers.map((gc, idx) => (
-                                <div key={idx}>
-                                  <span className="font-medium">
-                                    {gc.name || `Guest ${idx + 2}`}
-                                  </span>
-                                  {': '}
-                                  {gc.treatment || '—'} ·{' '}
-                                  {formatDuration(gc.sessionHours)} ·{' '}
-                                  {gc.therapist_name || '—'} · Room{' '}
-                                  {gc.room || '—'} · In{' '}
-                                  {formatPlainTime(gc.in_time)} / Out{' '}
-                                  {formatPlainTime(gc.out_time)}
-                                </div>
-                              ))}
+                              {sale.group_customers.map((gc, idx) => {
+                                const therapistStatus = gc.therapist_name === null || gc.therapist_name === 'CLIENT_FORM_PENDING' ? <span className='text-red-500 font-bold'>PENDING</span> : gc.therapist_name || '—';
+                                const roomStatus = gc.room === null || gc.room === 'CLIENT_FORM_PENDING' ? <span className='text-red-500 font-bold'>PENDING</span> : gc.room || '—';
+                                
+                                return (
+                                  <div key={idx}>
+                                    <span className="font-medium">
+                                      {gc.name || `Guest ${idx + 2}`}
+                                    </span>
+                                    {': '}
+                                    {gc.treatment || '—'} ·{' '}
+                                    {formatDuration(gc.sessionHours)} ·{' '}
+                                    {therapistStatus} · Room{' '}
+                                    {roomStatus} · In{' '}
+                                    {formatPlainTime(gc.in_time)} / Out{' '}
+                                    {formatPlainTime(gc.out_time)}
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                       </td>
@@ -816,16 +1089,25 @@ export default function OutletSalesPage() {
                         )}
                       </td>
 
-                      {/* Therapist (main) */}
-                      <td className="px-3 py-2 text-xs text-gray-800 text-left align-top">
-                        {sale.therapist_name || '—'}
+                      {/* Staff Assignment */}
+                      <td className="px-3 py-2 text-xs text-left align-top">
+                          <div className="text-gray-800 font-medium">
+                              {sale.therapist_name || '—'}
+                          </div>
+                          <div className="text-gray-600">
+                              Room: {sale.room || '—'}
+                          </div>
+                          
+                          {needsAssignment && (
+                              <button
+                                  onClick={() => handleOpenAssignmentModal(sale)}
+                                  className="mt-1 px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-semibold hover:bg-red-200 transition"
+                              >
+                                  Assign Staff
+                              </button>
+                          )}
                       </td>
-
-                      {/* Room (main) */}
-                      <td className="px-3 py-2 text-xs text-gray-800 text-left align-top">
-                        {sale.room || '—'}
-                      </td>
-
+                      
                       {/* Action */}
                       <td className="px-3 py-2 text-xs text-left align-top">
                         {sale.check_out_time ? (
@@ -834,11 +1116,12 @@ export default function OutletSalesPage() {
                           </span>
                         ) : (
                           <div className="flex flex-col gap-1">
+                            
                             <button
                               onClick={() => handleCheckOut(sale.id)}
-                              className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs transition duration-150"
+                              className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-xs transition duration-150"
                             >
-                              Check Out
+                              Checkout
                             </button>
 
                             <button

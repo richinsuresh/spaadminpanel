@@ -37,6 +37,13 @@ const toInputDate = (d: string | null): string => {
 
 const getToday = () => new Date().toISOString().split('T')[0];
 
+// --- NEW HELPER: Get date N days ago ---
+const getNDaysAgo = (n: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() - n);
+  return date.toISOString().split('T')[0];
+};
+
 export default function OutletExpensesPage() {
   const { logActivity } = useActivityLog();
 
@@ -44,8 +51,10 @@ export default function OutletExpensesPage() {
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
-  const [startDate, setStartDate] = useState<string>(getToday());
-  const [endDate, setEndDate] = useState<string>(getToday());
+  // --- MODIFIED INITIAL STATE ---
+  const [startDate, setStartDate] = useState<string>(getNDaysAgo(30)); // Default to 30 days ago
+  const [endDate, setEndDate] = useState<string>(getToday()); // Default to today
+  // ------------------------------
   const [selectedOutletId, setSelectedOutletId] = useState<string>(
     OUTLETS[0]?.id || 'unknown'
   );
@@ -80,8 +89,8 @@ export default function OutletExpensesPage() {
       let query = supabase
         .from('expenses')
         .select('*')
-        .gte('date', startDate)
-        .lte('date', endDate)
+        .gte('date', startDate) // Uses start date
+        .lte('date', endDate)   // Uses end date
         .order('date', { ascending: false })
         .order('created_at', { ascending: false });
 
@@ -100,7 +109,7 @@ export default function OutletExpensesPage() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate, selectedOutletId]);
+  }, [startDate, endDate, selectedOutletId]); // Dependencies already correct
 
   useEffect(() => {
     fetchExpenses();
@@ -113,7 +122,7 @@ export default function OutletExpensesPage() {
     [expenses]
   );
 
-  /* ============ FORM HANDLERS ============ */
+  /* ============ FORM HANDLERS (Unchanged) ============ */
 
   const handleFormChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -175,7 +184,7 @@ export default function OutletExpensesPage() {
     }
   };
 
-  /* ============ EXPORT ============ */
+  /* ============ EXPORT (Unchanged) ============ */
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -235,7 +244,7 @@ export default function OutletExpensesPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">Outlet Expenses</h1>
 
-      {/* Filters & Export */}
+      {/* Filters & Export (Already correctly filters by the start/end date state) */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -293,7 +302,7 @@ export default function OutletExpensesPage() {
         </div>
       </div>
 
-      {/* Add Expense Form */}
+      {/* Add Expense Form (Unchanged) */}
       <div className="bg-white p-6 rounded-xl shadow-sm">
         <h2 className="text-lg font-semibold text-gray-800 mb-4">
           Add New Expense
@@ -421,7 +430,7 @@ export default function OutletExpensesPage() {
         </form>
       </div>
 
-      {/* Expense List */}
+      {/* Expense List (Unchanged) */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="p-4 flex justify-between items-center border-b">
           <h2 className="text-lg font-semibold text-gray-800">Expenses</h2>
