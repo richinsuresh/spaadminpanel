@@ -5,10 +5,22 @@ import { NextRequest, NextResponse } from 'next/server';
 /**
  * Expected POST body:
  * { bulk: [ { op: 'create'|'update'|'delete', client_uuid?: string, payload: { ... } }, ... ] }
- *
- * For idempotency we use client_uuid. For create operations, if client_uuid is present and already exists,
- * the operation will be skipped and returned as already_synced.
  */
+
+// Helper to log activity
+async function logActivity(action: string, description: string, user: string) {
+  try {
+    // Note: 'supabase' here is the client from lib/supabase. 
+    // If RLS blocks this, you might need to use supabaseServer.
+    await supabase.from('activity_logs').insert({
+      action_type: action,
+      description: description,
+      username: user
+    });
+  } catch (err) {
+    console.error('Failed to log activity:', err);
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -74,6 +86,9 @@ export async function POST(request: NextRequest) {
       const op = (item.op || 'create').toLowerCase();
       const client_uuid = item.client_uuid || item.payload?.client_uuid || null;
       const payload = item.payload || {};
+      
+      // Determine "Who" did this.
+      const actor = payload.username || payload.outlet || payload.outlet_id || 'API';
 
       try {
         if (op === 'create') {
@@ -139,6 +154,13 @@ export async function POST(request: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'create_customer', 
+            `Created Customer ${insertObj.name} (${insertObj.mobile})`, 
+            actor
+          );
+
           results.push({ op, client_uuid, status: 'created', customer_id: inserted?.id ?? null });
           continue;
         }
@@ -179,6 +201,13 @@ export async function POST(request: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'update_customer', 
+            `Updated Customer ${client_uuid}`, 
+            actor
+          );
+
           results.push({ op, client_uuid, status: 'updated', customer_id: updated?.[0]?.id ?? null });
           continue;
         }
@@ -198,6 +227,13 @@ export async function POST(request: NextRequest) {
             results.push({ op, client_uuid, status: 'failed', error: deleteErr.message || deleteErr });
             continue;
           }
+
+          // --- LOGGING ---
+          await logActivity(
+            'delete_customer', 
+            `Deleted Customer ${client_uuid}`, 
+            actor
+          );
 
           results.push({ op, client_uuid, status: 'deleted' });
           continue;

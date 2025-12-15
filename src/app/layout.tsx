@@ -1,12 +1,9 @@
-// app/(protected)/client-form/layout.tsx
-import type { Metadata } from 'next';
+// src/app/layout.tsx
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-// --- MUST IMPORT THESE ---
 import { UserProvider } from '@/context/UserContext';
 import { NotificationProvider } from '@/components/NotificationSystem';
-
-// Offline sync component (client-side) — runs background sync and shows queue status
 import OfflineSync from '@/components/OfflineSync';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -14,6 +11,20 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: 'Spa Admin Panel',
   description: 'Admin dashboard for managing spa outlets',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Spa Admin',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#ffffff',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
@@ -24,11 +35,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        {/* --- MUST WRAP CHILDREN --- */}
+        {/* UserProvider wraps everything, allowing child layouts to use useUser */}
         <UserProvider>
           <NotificationProvider>
             {children}
-            {/* Client-side background sync UI — mounts on all pages under this layout */}
             <OfflineSync />
           </NotificationProvider>
         </UserProvider>

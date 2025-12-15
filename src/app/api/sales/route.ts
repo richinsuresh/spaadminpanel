@@ -7,6 +7,19 @@ import { NextRequest, NextResponse } from 'next/server';
  * POST: bulk handler { bulk: [ { op, op_uuid, payload }, ... ] }
  */
 
+// Helper to log activity
+async function logActivity(action: string, description: string, user: string) {
+  try {
+    await supabase.from('activity_logs').insert({
+      action_type: action,
+      description: description,
+      username: user
+    });
+  } catch (err) {
+    console.error('Failed to log activity:', err);
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -41,6 +54,9 @@ export async function POST(req: NextRequest) {
       const op = (item.op || 'create').toLowerCase();
       const op_uuid = item.op_uuid || item.payload?.op_uuid || null;
       const payload = item.payload || {};
+      
+      // Determine "Who" did this. Prioritize explicit username, then outlet name/ID.
+      const actor = payload.username || payload.outlet || payload.outletId || payload.outlet_id || 'API';
 
       try {
         // CREATE
@@ -91,6 +107,13 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'create_sale', 
+            `Created Sale Invoice #${insertObj.invoice_no || 'Unknown'} (Amount: ${insertObj.amount})`, 
+            actor
+          );
+
           results.push({ op, op_uuid, status: 'created', sale_id: inserted?.id ?? null });
           continue;
         }
@@ -123,6 +146,13 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'update_sale', 
+            `Updated Sale ${identifier.op_uuid || identifier.id}`, 
+            actor
+          );
+
           results.push({ op, op_uuid, status: 'updated', sale_id: updated?.[0]?.id ?? null });
           continue;
         }
@@ -144,6 +174,13 @@ export async function POST(req: NextRequest) {
             results.push({ op, op_uuid, status: 'failed', error: delErr.message || String(delErr) });
             continue;
           }
+
+          // --- LOGGING ---
+          await logActivity(
+            'delete_sale', 
+            `Deleted Sale ${identifier.op_uuid || identifier.id}`, 
+            actor
+          );
 
           results.push({ op, op_uuid, status: 'deleted' });
           continue;

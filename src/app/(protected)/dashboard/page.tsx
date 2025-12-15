@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { OUTLETS } from '@/lib/outlet';
-import { useUser } from '@/context/UserContext'; // <-- Import User Hook
+import { useUser } from '@/context/UserContext';
 
 interface OutletSale {
   name: string;
@@ -20,12 +20,14 @@ interface TodaySaleRow {
 }
 
 export default function Dashboard() {
-  const { user } = useUser(); // <-- Get User
+  const { user } = useUser();
 
   const [loading, setLoading] = useState(true);
   const [totalCustomers, setTotalCustomers] = useState(0);
+  
+  // --- UPDATED: Default state target set to 2,00,000 ---
   const [dailyTarget, setDailyTarget] = useState({
-    target: 350000, // in rupees
+    target: 200000, // in rupees
     achieved: 0, // in paise
     percentage: 0,
   });
@@ -70,7 +72,9 @@ export default function Dashboard() {
         }
       }
 
-      const targetInRupees = 350000;
+      // --- UPDATED: Calculation target set to 2,00,000 ---
+      const targetInRupees = 200000;
+      
       const salesInRupees = totalDailySalesInPaise / 100;
       const percentage =
         targetInRupees > 0

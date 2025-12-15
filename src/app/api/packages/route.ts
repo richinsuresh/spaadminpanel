@@ -5,11 +5,20 @@ import { NextRequest, NextResponse } from 'next/server';
 /**
  * GET: existing packages listing (keeps your existing behavior)
  * POST: accepts { bulk: [ { op, op_uuid, payload }, ... ] }
- *   - op: create | update | delete
- *   - op_uuid: optional idempotency key
- *
- * Returns: { ok: true, results: [ { op, op_uuid, status, package_id?, error? } ] }
  */
+
+// Helper to log activity
+async function logActivity(action: string, description: string, user: string) {
+  try {
+    await supabase.from('activity_logs').insert({
+      action_type: action,
+      description: description,
+      username: user
+    });
+  } catch (err) {
+    console.error('Failed to log activity:', err);
+  }
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -53,6 +62,9 @@ export async function POST(req: NextRequest) {
       const op = (item.op || 'create').toLowerCase();
       const op_uuid = item.op_uuid || item.payload?.op_uuid || null;
       const payload = item.payload || {};
+      
+      // Determine "Who" did this.
+      const actor = payload.username || payload.outlet || payload.outlet_id || 'API';
 
       try {
         // CREATE
@@ -110,6 +122,13 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'create_package', 
+            `Created Package for ${insertObj.name} (${insertObj.mobile}) - ₹${insertObj.package_amount}`, 
+            actor
+          );
+
           results.push({ op, op_uuid, status: 'created', package_id: inserted?.id ?? null });
           continue;
         }
@@ -149,6 +168,13 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
+          // --- LOGGING ---
+          await logActivity(
+            'update_package', 
+            `Updated Package ${identifier.op_uuid || identifier.id}`, 
+            actor
+          );
+
           results.push({ op, op_uuid, status: 'updated', package_id: updated?.[0]?.id ?? null });
           continue;
         }
@@ -171,6 +197,13 @@ export async function POST(req: NextRequest) {
             results.push({ op, op_uuid, status: 'failed', error: delErr.message || String(delErr) });
             continue;
           }
+
+          // --- LOGGING ---
+          await logActivity(
+            'delete_package', 
+            `Deleted Package ${identifier.op_uuid || identifier.id}`, 
+            actor
+          );
 
           results.push({ op, op_uuid, status: 'deleted' });
           continue;
