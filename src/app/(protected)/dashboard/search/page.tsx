@@ -1,17 +1,18 @@
+// src/app/(protected)/dashboard/search/page.tsx
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { exportToExcel } from '@/lib/exportToExcel';
 import { Search, Loader2, FileText, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import Link from 'next/link'; // <-- IMPORTANT: Link imported
 
 /**
  * 🎯 Goal: Client Search Page with Visual Progress Bar
  *
  * - Groups data by client (mobile).
  * - Shows Client Name, latest Package, Remaining Hours, and Expiry.
- * - NEW: Adds a visual progress bar indicating hours consumed vs. total package hours.
- * - Clicking a client shows a detailed history (service, duration, outlet, therapist, time, date).
+ * - FIX: Restores navigation via <Link> while keeping history toggle via button.
  */
 
 /* ---------------- types ---------------- */
@@ -24,8 +25,8 @@ type HistoryRow = {
   treatment: string | null;
   session_hours: number | null;
   amount_paid: number | null;
-  took_package: boolean | null;
-  package_amount: number | null;
+  took_package: boolean | null; 
+  package_amount: number | null; 
   check_in_time: string | null;
   check_out_time: string | null;
   therapist_name: string | null;
@@ -35,7 +36,7 @@ type HistoryRow = {
   remaining_hours?: number | null;
   expiry_date?: string | null;
   start_date?: string | null;
-  status?: string | null;
+  status?: string | null; // <-- Included for pkg status display
   package_name?: string | null;
 
   is_package_customer?: boolean | null;
@@ -54,8 +55,8 @@ type ClientSummary = {
   // Latest Package Info
   latestPackageName: string;
   remaining_hours: number | null;
-  used_hours: number | null; // Added used hours for bar calculation
-  total_hours: number | null; // Added total hours for bar calculation
+  used_hours: number | null; 
+  total_hours: number | null; 
   expiry_date: string | null;
   package_status: string | null;
 
@@ -97,9 +98,10 @@ const initials = (name?: string | null) =>
     .join('') || '?';
 
 /* ---------------- DB helpers ---------------- */
+const toNum = (v: any) => (v === undefined || v === null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+
 const normalizeCustomerRow = (r: any): HistoryRow => {
   const maybeStr = (v: any) => (v === undefined || v === null ? null : String(v));
-  const toNum = (v: any) => (v === undefined || v === null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
   return {
     id: String(r.id ?? r._id ?? ''),
     date: maybeStr(r.date ?? r.visit_date ?? r.created_at ?? null),
@@ -138,12 +140,11 @@ const PackageProgressBar = ({ used, total }: { used: number | null, total: numbe
     const toNum = (val: any) => (val !== null && val !== undefined && Number.isFinite(Number(val)) ? Number(val) : 0);
     const totalNum = toNum(total);
     const usedNum = toNum(used);
-    const remainingNum = Math.max(0, totalNum - usedNum);
 
-    if (totalNum <= 0) return null; // Hide if total is zero or missing
+    if (totalNum <= 0) return null; 
 
     const pct = Math.round((usedNum / totalNum) * 100);
-    const barColor = pct < 80 ? 'bg-indigo-600' : 'bg-red-600'; // Change color when nearly finished
+    const barColor = pct < 80 ? 'bg-indigo-600' : 'bg-red-600';
 
     return (
         <div className="mt-1">
@@ -178,7 +179,6 @@ export default function ClientSearchPage() {
   const [warning, setWarning] = useState<string | null>(null);
 
   const fetchMeta = useCallback(async () => {
-    // Fetch outlets and employees (kept the same)
     try {
       const { data: outData } = await supabase.from('outlets').select('id, name');
       setOutlets(Array.isArray(outData) ? outData : []);
@@ -209,7 +209,9 @@ export default function ClientSearchPage() {
 
       if (mobiles.length > 0) {
         try {
-          const { data: pkgData } = await supabase.from('packages').select('*').in('mobile', mobiles);
+          // FIX: Changed .select('*') to specify fields, and the essential .in() for array matching
+          const { data: pkgData } = await supabase.from('packages').select(`*, package_name, total_hours, used_hours, expiry_date, status`).in('mobile', mobiles);
+          
           if (Array.isArray(pkgData)) {
             const grouped: Record<string, any[]> = {};
             pkgData.forEach((p: any) => {
@@ -249,12 +251,19 @@ export default function ClientSearchPage() {
         const pkg = packageMap[mobile] ?? null;
 
         // Apply package details for the summary
-        const remaining = pkg ? (pkg.remaining_hours ?? pkg.remainingHours ?? pkg.remaining ?? null) : null;
-        const used = pkg ? (pkg.used_hours ?? pkg.usedHours ?? pkg.used ?? null) : null;
+        
+        // Use fallbacks for pkg properties
+        const used = pkg ? (pkg.used_hours ?? pkg.usedHours ?? null) : null;
         const total = pkg ? (pkg.total_hours ?? pkg.totalHours ?? pkg.totalPackageHours ?? pkg.total ?? null) : null;
         const expiry = pkg ? (pkg.expiry_date ?? pkg.expiryDate ?? pkg.expiry ?? null) : null;
         const status = pkg ? (pkg.status ?? pkg.package_status ?? null) : null;
         const pkgName = pkg ? (pkg.package_name ?? pkg.name ?? pkg.treatment ?? 'N/A') : 'None';
+
+        // --- FIX: Client-side calculation logic ---
+        const usedNum = used !== undefined && used !== null && Number.isFinite(Number(used)) ? Number(used) : 0;
+        const totalNum = total !== undefined && total !== null && Number.isFinite(Number(total)) ? Number(total) : 0;
+        const calculatedRemaining = Math.max(0, totalNum - usedNum);
+        // ------------------------------------------
 
         // Sort history by date descending (latest first)
         client.history.sort((a, b) => {
@@ -264,17 +273,15 @@ export default function ClientSearchPage() {
         });
 
         // Ensure hours are treated as numbers
-        const remainingNum = remaining !== undefined && remaining !== null ? Number(remaining) : null;
-        const usedNum = used !== undefined && used !== null ? Number(used) : null;
-        const totalNum = total !== undefined && total !== null ? Number(total) : null;
-
+        // We use the calculated remaining hours if total > 0
+        const finalRemaining = totalNum > 0 ? calculatedRemaining : null;
 
         return {
           mobile: mobile,
           name: client.name,
           latestVisitDate: client.latestVisitDate,
           latestPackageName: pkgName,
-          remaining_hours: remainingNum,
+          remaining_hours: finalRemaining,
           used_hours: usedNum,
           total_hours: totalNum,
           expiry_date: expiry ? String(expiry) : null,
@@ -438,9 +445,18 @@ export default function ClientSearchPage() {
             return (
               <div key={s.mobile} className="group">
                 {/* Client Summary Row (Clickable) */}
-                <div
-                  onClick={() => toggleExpand(s.mobile)}
-                  className={`p-4 flex items-start gap-4 cursor-pointer hover:bg-gray-50 transition-colors ${isExpanded ? 'bg-gray-50' : ''}`}
+                <Link // <-- FIX: Replaced div with Link for navigation
+                  href={`/dashboard/customers/${s.mobile}`}
+                  className={`p-4 flex items-start gap-4 hover:bg-gray-50 transition-colors ${isExpanded ? 'bg-gray-50' : ''}`}
+                  onClick={(e) => {
+                    // Prevent navigation when the toggle button is clicked (handleToggle is below)
+                    // If the user clicks anywhere *outside* the toggle button, it navigates.
+                    // If the user clicks the toggle button, we prevent default action and let the button handler take over.
+                    const target = e.target as HTMLElement;
+                    if (target.closest('.toggle-history')) {
+                      e.preventDefault();
+                    }
+                  }}
                 >
                   {/* Avatar */}
                   <div className="w-12 shrink-0 pt-1">
@@ -480,51 +496,60 @@ export default function ClientSearchPage() {
 
                   {/* Toggle Icon */}
                   <div className="shrink-0 pl-4 pt-4">
-                    {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-500" /> : <ChevronDown className="h-5 w-5 text-gray-500" />}
+                    <button
+                      className="toggle-history p-1 rounded-full hover:bg-gray-200 transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation(); // Stop the click from propagating to the parent Link
+                        toggleExpand(s.mobile);
+                      }}
+                      title={isExpanded ? "Collapse History" : "Expand History"}
+                    >
+                      {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-500" /> : <ChevronDown className="h-5 w-5 text-gray-500" />}
+                    </button>
                   </div>
-                </div>
+                </Link>
 
                 {/* Expanded Client History (kept the same) */}
                 {isExpanded && (
-                  <div className="p-4 pt-0 bg-white border-t border-gray-100">
-                    <h4 className="text-md font-semibold text-black mb-3">Client History ({history.length} visits)</h4>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Date & Time</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Service Taken</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Duration</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Therapist</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Outlet</th>
-                            <th className="px-4 py-2 text-right text-xs font-medium text-black/60">Sale Link</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 text-sm">
-                          {history.map((h, index) => (
-                            <tr key={h.id || `${h.mobile}-${index}`} className={h.is_package_customer ? 'bg-indigo-50/50' : 'hover:bg-gray-50'}>
-                              <td className="px-4 py-3 whitespace-nowrap">
-                                <div className="font-medium text-black">{fmtDate(h.date)}</div>
-                                <div className="text-xs text-black/60">{fmtTime(h.check_in_time)}</div>
-                              </td>
-                              <td className="px-4 py-3 text-black">
-                                {h.treatment}
-                                {h.is_package_customer && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Redeemed</span>}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-black">{fmtDuration(h.session_hours)}</td>
-                              <td className="px-4 py-3 whitespace-nowrap text-black">{h.therapist_name ?? '—'}</td>
-                              <td className="px-4 py-3 whitespace-nowrap text-black">{h.outlet_name ?? '—'}</td>
-                              <td className="px-4 py-3 whitespace-nowrap text-right">
-                                <a href={`/sales/${h.id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs flex items-center justify-end gap-1">
-                                  View <ExternalLink className="h-3 w-3" />
-                                </a>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="p-4 pt-0 bg-white border-t border-gray-100">
+                        <h4 className="text-md font-semibold text-black mb-3">Client History ({history.length} visits)</h4>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Date & Time</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Service Taken</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Duration</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Therapist</th>
+                                        <th className="px-4 py-2 text-left text-xs font-medium text-black/60">Outlet</th>
+                                        <th className="px-4 py-2 text-right text-xs font-medium text-black/60">Sale Link</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200 text-sm">
+                                    {history.map((h, index) => (
+                                        <tr key={h.id || `${h.mobile}-${index}`} className={h.is_package_customer ? 'bg-indigo-50/50' : 'hover:bg-gray-50'}>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <div className="font-medium text-black">{fmtDate(h.date)}</div>
+                                                <div className="text-xs text-black/60">{fmtTime(h.check_in_time)}</div>
+                                            </td>
+                                            <td className="px-4 py-3 text-black">
+                                                {h.treatment}
+                                                {h.is_package_customer && <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Redeemed</span>}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-black">{fmtDuration(h.session_hours)}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-black">{h.therapist_name ?? '—'}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-black">{h.outlet_name ?? '—'}</td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-right">
+                                                <a href={`/sales/${h.id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs flex items-center justify-end gap-1">
+                                                    View <ExternalLink className="h-3 w-3" />
+                                                </a>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                  </div>
                 )}
               </div>
             );

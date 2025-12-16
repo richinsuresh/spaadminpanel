@@ -1,3 +1,4 @@
+// src/app/(protected)/dashboard/sales/page.tsx
 'use client';
 
 import React, {
@@ -53,6 +54,8 @@ type Sale = {
   // group customers (friends in same sale)
   group_customers: GroupCustomer[] | null;
 };
+
+type Employee = { id: string; name: string }; // Type for therapists
 
 /* ===================== HELPERS ===================== */
 
@@ -140,6 +143,8 @@ export default function AdminSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  // NEW: State for therapist list
+  const [therapists, setTherapists] = useState<Employee[]>([]); 
 
   const [startDate, setStartDate] = useState<string>(getToday());
   const [endDate, setEndDate] = useState<string>(getToday());
@@ -174,7 +179,24 @@ export default function AdminSalesPage() {
     }));
   };
 
-  /* ===================== FETCH ===================== */
+  /* ===================== FETCH DATA ===================== */
+
+  // NEW: Fetch all active therapists/employees
+  const fetchTherapists = useCallback(async () => {
+    try {
+      // ASSUMPTION: 'employees' table exists and has 'name' column for therapists
+      const { data } = await supabase
+        .from('employees')
+        .select('id, name')
+        .eq('is_active', true) // Only fetch active therapists
+        .order('name', { ascending: true });
+        
+      setTherapists((data as Employee[]) || []);
+    } catch (e) {
+      console.error('Failed to fetch therapists:', e);
+      setTherapists([]);
+    }
+  }, []);
 
   const fetchSales = useCallback(async () => {
     setLoading(true);
@@ -195,8 +217,9 @@ export default function AdminSalesPage() {
   }, [startDate, endDate, selectedOutletId]);
 
   useEffect(() => {
+    fetchTherapists(); // Fetch therapists once on mount
     fetchSales();
-  }, [fetchSales]);
+  }, [fetchSales, fetchTherapists]);
 
   // 🔄 Realtime auto-refresh when any customer row changes
   useEffect(() => {
@@ -319,6 +342,7 @@ export default function AdminSalesPage() {
     e.preventDefault();
     setSaveError(null);
 
+    // NOTE: Hardcoded password 'admin123' should be replaced with proper authentication/role check
     if (editPassword !== 'admin123') {
       setSaveError('Wrong password');
       return;
@@ -352,7 +376,7 @@ export default function AdminSalesPage() {
       name: editForm.name,
       mobile: editForm.mobile,
       treatment: editForm.treatment,
-      therapist_name: editForm.therapist_name || null,
+      therapist_name: editForm.therapist_name || null, // Value comes from the dropdown selection
       room: editForm.room || null,
       session_hours: editForm.session_hours
         ? Number(editForm.session_hours)
@@ -1144,13 +1168,21 @@ export default function AdminSalesPage() {
                 <label className="text-xs font-semibold text-black">
                   Therapist
                 </label>
-                <input
-                  type="text"
+                {/* // 🛑 NEW DROPDOWN MENU FOR THERAPIST 🛑
+                */}
+                <select
                   name="therapist_name"
                   value={editForm.therapist_name}
                   onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                />
+                  className="w-full p-2 border rounded bg-white text-black"
+                >
+                  <option value="">— Select Therapist —</option>
+                  {therapists.map((t) => (
+                    <option key={t.id} value={t.name}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
