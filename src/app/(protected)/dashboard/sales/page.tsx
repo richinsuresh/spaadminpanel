@@ -300,6 +300,7 @@ export default function AdminSalesPage() {
     () => activeSales.length,
     [activeSales],
   );
+  
 
   /* ===================== EDIT ===================== */
 

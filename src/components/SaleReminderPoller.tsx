@@ -1,145 +1,119 @@
-// src/components/SaleReminderPoller.tsx
+// src/components/SaleReminderPoller.tsx - UNIVERSAL REMINDER SYSTEM (FINAL LOOP & CLOSE FIX)
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Clock } from 'lucide-react';
+import { AlertTriangle, Clock, Loader2 } from 'lucide-react';
 
 // ====================================================================
-// === TYPES AND UTILITY FUNCTIONS (Must be defined at the top) ===
+// === TYPES AND UTILITY FUNCTIONS ===
 // ====================================================================
 
-// Simple type for sales that need action
 type DueSale = {
   id: string;
-  customer_name: string;
-  check_out_time: string;
+  name: string; 
+  check_in_time: string | null;
+  session_hours: number | null; 
+  check_out_time: string | null;
 };
 
-// Utility for time formatting
-const fmtTime = (iso: string | null) => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+const fmtTime = (dateString: string | null) => {
+  if (!dateString) return '—';
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return 'Invalid Date';
+  return date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 };
 
-// Simple helper to check if data is an array
+const getExpectedCheckoutTime = (
+  checkIn: string | null,
+  hours: number | null,
+): Date | null => {
+  if (!checkIn || !hours || hours <= 0) return null;
+  const checkInDate = new Date(checkIn);
+  const durationInMs = hours * 60 * 60 * 1000;
+  return new Date(checkInDate.getTime() + durationInMs);
+};
+
 function ArrayOf(data: any): data is any[] {
     return Array.isArray(data);
 }
 
+const getTodayDate = () => new Date().toISOString().split('T')[0];
+
 // ====================================================================
 // === CONFIGURATION ===
-// 🛑 IMPORTANT: This must match the identifier selected in /dev-settings
-const SETTINGS_KEY_TARGET_ADMIN = 'target_admin_uid'; 
-const POLLING_INTERVAL_MS = 60000; // Check every 60 seconds (1 minute)
-const AUDIO_ALERT_PATH = '/audio/alert.mp3'; // <--- Set the path to your audio file
-
-// Simple helper to fetch the target user identifier from app_settings
-async function fetchTargetAdminIdentifier() {
-    try {
-        const { data, error } = await supabase
-            .from('app_settings')
-            .select('value')
-            .eq('key', SETTINGS_KEY_TARGET_ADMIN)
-            .single();
-        
-        // PGRST116 means "No rows found," which is fine, just return null.
-        if (error && error.code !== 'PGRST116') throw error;
-        
-        return data?.value || null;
-    } catch (e) {
-        console.error("Error fetching target setting:", e);
-        return null;
-    }
-}
+// ====================================================================
+const POLLING_INTERVAL_MS = 30000; 
+const SNOOZE_DURATION_MS = 300000; // 5 minutes
+const CLOSE_SNOOZE_DURATION_MS = 5000; // 5 seconds (to break the loop)
+const NAVIGATION_DELAY_MS = 50; // Critical delay for router.push()
+const AUDIO_ALERT_PATH = '/audio/alert.mp3'; 
 
 // ====================================================================
 // === MAIN COMPONENT ===
 // ====================================================================
 
 export default function SaleReminderPoller() {
-  // FIX: DueSale is now defined above and can be used here
   const [dueSales, setDueSales] = useState<DueSale[]>([]); 
-  const [isTargetUser, setIsTargetUser] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const router = useRouter(); 
   
-  // State to hold the current user's unique identifier (e.g., username from app_users)
-  const [currentUserIdentifier, setCurrentUserIdentifier] = useState<string | null>(null);
-  const [targetUserIdentifier, setTargetUserIdentifier] = useState<string | null>(null);
+  const snoozedClients = useRef<Set<string>>(new Set());
+  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-
-  // 1. Setup Audio & Get Current User Identifier
+  // 1. Setup Audio
   useEffect(() => {
     if (typeof window !== 'undefined' && AUDIO_ALERT_PATH) {
       audioRef.current = new Audio(AUDIO_ALERT_PATH);
     }
-    
-    // Get the current logged-in user's identifier (assuming you use the 'username' or similar)
-    // NOTE: This must use the same unique identifier (e.g., username) as stored in app_users
-    supabase.auth.getUser().then(({ data: { user } }) => {
-        // Assume user metadata contains the identifier (e.g., username, or just the email/UID)
-        // Adjust this if your username is stored elsewhere in the auth object!
-        const identifier = user?.user_metadata?.username || user?.email || user?.id; 
-        if (identifier) {
-            setCurrentUserIdentifier(identifier);
-        }
-    });
   }, []);
 
-  // 2. Fetch Target User Setting
-  useEffect(() => {
-      fetchTargetAdminIdentifier().then(targetId => {
-          setTargetUserIdentifier(targetId);
-      });
-  }, []);
-  
-  // 3. Check Authorization & Set Flag
-  useEffect(() => {
-    // If both are loaded, check if they match
-    if (currentUserIdentifier && targetUserIdentifier !== null) {
-        setIsTargetUser(currentUserIdentifier === targetUserIdentifier);
-    }
-  }, [currentUserIdentifier, targetUserIdentifier]);
 
-
-  // 4. Data Fetching and Polling Logic
+  // 2. Data Fetching and Polling Logic
   const fetchDueSales = useCallback(async () => {
-    if (!isTargetUser) return;
+    const now = new Date();
+    const today = getTodayDate();
     
-    const now = new Date().toISOString();
-
     try {
-      // Query for sales where check_out_time is due (<= now)
-      // 🛑 ADJUST TABLE NAME AND STATUS COLUMN as necessary for your DB schema
       const { data, error } = await supabase
-        .from('customers') // Assuming 'customers' table holds sales data with check_out_time
-        .select('id, name, check_out_time')
-        .lte('check_out_time', now)
-        // Add status filter if necessary (e.g., .eq('status', 'checked_in'))
-        .limit(10); 
-
+        .from('customers') 
+        .select('id, name, check_in_time, session_hours, check_out_time')
+        .eq('date', today);
+        
       if (error) throw error;
 
-      const salesToAlert = ArrayOf(data) ? data.map(d => ({
-        id: d.id,
-        customer_name: d.name || 'N/A',
-        check_out_time: d.check_out_time || '',
-      })) : [];
+      const salesToAlert: DueSale[] = [];
       
-      // Alert only if new sales are found
+      if (ArrayOf(data)) {
+          for (const sale of data) {
+              const s = sale as DueSale;
+
+              if (
+                  s.check_in_time && 
+                  s.session_hours && 
+                  !s.check_out_time && 
+                  !snoozedClients.current.has(s.id)
+              ) {
+                  const expected = getExpectedCheckoutTime(s.check_in_time, s.session_hours);
+                  
+                  if (expected && now >= expected) {
+                      salesToAlert.push(s);
+                  }
+              }
+          }
+      }
+
       if (salesToAlert.length > 0) {
-        // Prevent double alert if the set of due sales is identical
-        const newSaleIds = new Set(salesToAlert.map(s => s.id));
         const oldSaleIds = new Set(dueSales.map(s => s.id));
         const hasNewAlerts = salesToAlert.some(s => !oldSaleIds.has(s.id));
 
         if (hasNewAlerts) {
             if (audioRef.current) {
-                // Rewind and play sound
                 audioRef.current.currentTime = 0;
                 audioRef.current.play().catch(e => console.log("Audio play failed:", e));
             }
@@ -147,35 +121,101 @@ export default function SaleReminderPoller() {
         setDueSales(salesToAlert);
 
       } else if (dueSales.length > 0) {
-        setDueSales([]); // Clear alert if no due sales are found
+        setDueSales([]); 
       }
 
     } catch (e) {
-      console.error("Error fetching due sales:", e);
+      console.error("Error fetching due sales (Check RLS on 'customers' table!):", e);
     }
-  }, [isTargetUser, dueSales, router]);
+  }, [dueSales]); 
 
-
-  // 5. Start Polling Interval
-  useEffect(() => {
-    if (isTargetUser) {
-        fetchDueSales(); 
-        const intervalId = setInterval(fetchDueSales, POLLING_INTERVAL_MS);
-        return () => clearInterval(intervalId);
-    }
-  }, [isTargetUser, fetchDueSales]);
   
-  // 6. Component Gate
-  if (!isTargetUser || dueSales.length === 0) {
+  // 3. Start Polling Interval and Cleanup
+  useEffect(() => {
+    if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    
+    fetchDueSales(); 
+    pollingTimerRef.current = setInterval(fetchDueSales, POLLING_INTERVAL_MS);
+    
+    return () => {
+        if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    };
+  }, [fetchDueSales]);
+
+  
+  // 4. Handle Snooze/Dismiss
+  const handleModalClose = useCallback(() => {
+    // Standard 5-minute Snooze
+    if (dueSales.length > 0) {
+        dueSales.forEach(sale => {
+            snoozedClients.current.add(sale.id);
+            setTimeout(
+                () => snoozedClients.current.delete(sale.id),
+                SNOOZE_DURATION_MS
+            );
+        });
+    }
+    setDueSales([]);
+  }, [dueSales]);
+  
+  // Handler for "Close" button - uses a 5-second snooze to break the loop
+  const handleImmediateClose = useCallback(() => {
+    if (dueSales.length > 0) {
+        // Apply a very short snooze to the clients to stop the loop
+        dueSales.forEach(sale => {
+            snoozedClients.current.add(sale.id);
+            setTimeout(
+                () => snoozedClients.current.delete(sale.id),
+                CLOSE_SNOOZE_DURATION_MS
+            );
+        });
+    }
+    setDueSales([]);
+  }, [dueSales]);
+
+  // 🛑 FIX: Handler for "Review Sales" button (now navigates to a specific sale page)
+  const handleReviewSales = useCallback(() => {
+    const saleId = dueSales[0]?.id; // Get the ID of the first due sale
+    if (!saleId) {
+        setDueSales([]);
+        return;
+    }
+    
+    // 1. CLEAR POLLING to prevent race condition/loop
+    if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    
+    // 2. Dismiss the modal state IMMEDIATELY
+    setDueSales([]); 
+    
+    // 3. Navigate after a brief delay (CRITICAL FIX for the looping issue)
+    setTimeout(() => {
+        // Navigate to the new dynamic sale dashboard page
+        router.push(`/dashboard/sales/${saleId}`); 
+    }, NAVIGATION_DELAY_MS);
+    
+    // Polling will restart when the sales page loads and the poller component remounts.
+  }, [router, dueSales]);
+
+
+  // 5. Component Gate
+  if (dueSales.length === 0) {
     return null;
   }
 
-  // 7. Modal UI
+  // Use the FIRST item for the title display
+  const saleToDisplay = dueSales[0];
+  const expectedTime = saleToDisplay.check_in_time && saleToDisplay.session_hours 
+      ? fmtTime(getExpectedCheckoutTime(saleToDisplay.check_in_time, saleToDisplay.session_hours)?.toISOString() || null)
+      : 'N/A';
+  
+  // 6. Modal UI
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <div 
+      className="fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4" 
+      role="alert" 
+      aria-live="assertive"
+    >
       <div className="flex min-h-screen items-center justify-center p-4 text-center">
-        {/* Background Overlay */}
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true" />
         
         {/* Modal Panel */}
         <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:align-middle sm:max-w-lg sm:w-full">
@@ -190,13 +230,13 @@ export default function SaleReminderPoller() {
                 </h3>
                 <div className="mt-2 space-y-3">
                   <p className="text-sm text-gray-500">
-                    The following sessions are past their scheduled checkout time. Please check their status:
+                    The following sessions {dueSales.length > 1 ? 'are' : 'is'} past the scheduled end time (Est: {expectedTime}).
                   </p>
                   <ul className="list-disc list-inside text-sm text-red-700">
                     {dueSales.map((sale) => (
                       <li key={sale.id} className="font-semibold flex justify-between">
                         <Clock size={16} className="mr-2" />
-                        {sale.customer_name} (Due: {fmtTime(sale.check_out_time)})
+                        {sale.name}
                       </li>
                     ))}
                   </ul>
@@ -206,27 +246,33 @@ export default function SaleReminderPoller() {
           </div>
           <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
             
-            {/* Review Button */}
+            {/* Review Button (Navigates to the specific Sale Dashboard) */}
             <button
               type="button"
               className="inline-flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-indigo-700 sm:ml-3 sm:w-auto sm:text-sm"
-              onClick={() => {
-                // Navigate to a dedicated review page
-                router.push('/dashboard/sales/review-due'); 
-                setDueSales([]); // Clear alert after navigation
-              }}
+              onClick={handleReviewSales}
             >
-              Review Due Sales
+              Review Sale
             </button>
             
-            {/* Dismiss Button */}
+            {/* Snooze Button */}
             <button
               type="button"
               className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm"
-              onClick={() => setDueSales([])}
+              onClick={handleModalClose}
             >
-              Dismiss Alert
+              Snooze (5 min)
             </button>
+            
+            {/* Close Button */}
+            <button
+              type="button"
+              className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm sm:mr-3"
+              onClick={handleImmediateClose}
+            >
+              Close
+            </button>
+
           </div>
         </div>
       </div>

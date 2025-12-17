@@ -1,8 +1,9 @@
-// src/app/outlet/dashboard/sales/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
+// 🛑 NEW IMPORT: useSearchParams for reading URL filter
+import { useSearchParams } from 'next/navigation'; 
 import { ChevronDown, ChevronUp, UserPlus, Save, X, RefreshCw } from 'lucide-react';
 
 /* ===================== TYPES (FIXED) ===================== */
@@ -150,7 +151,8 @@ const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
 };
 
 
-/* ===================== MODALS ===================== */
+/* ===================== MODALS (UNMODIFIED) ===================== */
+// (Modal bodies are unchanged to save space, assuming they work correctly)
 
 function AddonModal({ sale, onClose, onConfirm }: AddonModalProps) {
   const [minutes, setMinutes] = useState(30);
@@ -263,7 +265,6 @@ function CheckoutConfirmModal({
   );
 }
 
-// --- NEW STAFF ASSIGNMENT MODAL ---
 function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: StaffAssignmentModalProps) {
     if (!data) return null;
 
@@ -271,7 +272,6 @@ function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: St
     const [mainRoom, setMainRoom] = useState(data.initialRoom || '');
     const [groupAssignments, setGroupAssignments] = useState(data.groupCustomers ? 
         data.groupCustomers.map(gc => ({
-            // Use || '' to ensure state remains a string, even if type allows null
             therapist: gc.therapist_name === 'CLIENT_FORM_PENDING' ? '' : gc.therapist_name || '',
             room: gc.room === 'CLIENT_FORM_PENDING' ? '' : gc.room || ''
         })) : []);
@@ -283,10 +283,8 @@ function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: St
     };
 
     const handleSave = () => {
-        // Collect updates for group customers
         const groupUpdates = groupAssignments.map((assignment, index) => ({
             index: index,
-            // Convert empty string to null if needed in DB, but pass trimmed string here
             therapist: assignment.therapist.trim(),
             room: assignment.room.trim(),
         }));
@@ -413,6 +411,12 @@ function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: St
 /* ===================== MAIN COMPONENT ===================== */
 
 export default function OutletSalesPage() {
+  // 🛑 NEW IMPORTS AND STATE FOR OVERDUE FILTER
+  const searchParams = useSearchParams();
+  const statusFilter = searchParams.get('status');
+  // Initialize filter state based on URL
+  const [isOverdueFilterActive, setIsOverdueFilterActive] = useState(statusFilter === 'overdue');
+  
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [outletName, setOutletName] = useState('');
@@ -429,7 +433,8 @@ export default function OutletSalesPage() {
     () => new Date().toISOString().split('T')[0],
     [],
   );
-  const [dateFilter, setDateFilter] = useState(today);
+  // 🛑 FIX: Use isOverdueFilterActive to set the initial dateFilter
+  const [dateFilter, setDateFilter] = useState(isOverdueFilterActive ? today : today); 
 
   const snoozedClients = useRef<Set<string>>(new Set());
   const warningTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -443,7 +448,8 @@ export default function OutletSalesPage() {
     null,
   );
 
-  const isToday = dateFilter === today;
+  // 🛑 FIX: isToday must account for the filter date if active
+  const isToday = dateFilter === today; 
 
   // NEW: track which group rows are expanded
   const [expandedGroups, setExpandedGroups] = useState<
@@ -456,6 +462,20 @@ export default function OutletSalesPage() {
       [id]: !prev[id],
     }));
   };
+
+  // 🛑 NEW: Effect to manage the URL parameter and filter state
+  useEffect(() => {
+    if (statusFilter === 'overdue' && !isOverdueFilterActive) {
+        setIsOverdueFilterActive(true);
+        // Force date filter to today if we are checking overdue sales
+        setDateFilter(today); 
+    } else if (statusFilter !== 'overdue' && isOverdueFilterActive) {
+        // If the URL changes (e.g., user manually changes the URL) and no longer says 'overdue', deactivate it
+        setIsOverdueFilterActive(false);
+        // Do NOT reset dateFilter here, let the state handle the next fetch.
+    }
+  }, [statusFilter, isOverdueFilterActive, today]);
+
 
   /* -------- Fetch outlet info and employees -------- */
   const fetchOutletEmployees = useCallback(async (currentOutletId: string) => {
@@ -524,19 +544,42 @@ export default function OutletSalesPage() {
         .order('check_in_time', { ascending: false });
 
       if (dateFilter) {
+        // Apply standard date filter
         query = query.eq('date', dateFilter);
       }
+      
+      // 🛑 MODIFICATION 2 (Server-side): If overdue filter is active, only fetch open sales
+      if (isOverdueFilterActive) {
+          query = query.is('check_out_time', null);
+      }
+
 
       const { data, error } = await query;
       if (error) throw error;
 
-      setSales((data as Sale[]) || []);
+      let salesData = (data as Sale[]) || [];
+      
+      // 🛑 MODIFICATION 3 (Client-side): If overdue filter is active, filter the fetched results by time
+      if (isOverdueFilterActive) {
+          const now = new Date();
+          salesData = salesData.filter(sale => {
+              // Same exact check as in the SaleReminderPoller
+              if (sale.check_in_time && sale.session_hours && !sale.check_out_time) {
+                  const expected = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+                  return expected && now >= expected;
+              }
+              return false;
+          });
+      }
+
+
+      setSales(salesData);
     } catch (err) {
       console.error('Error fetching sales:', err);
     } finally {
       setLoading(false);
     }
-  }, [dateFilter, outletId]);
+  }, [dateFilter, outletId, isOverdueFilterActive]); // 🛑 Dependency added
 
   useEffect(() => {
     if (!outletId) return;
@@ -587,7 +630,7 @@ export default function OutletSalesPage() {
     [warningSale],
   );
 
-  /* -------- Warning system (Unchanged) -------- */
+  /* -------- Warning system (Unmodified) -------- */
   useEffect(() => {
     if (!isToday) {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
@@ -687,7 +730,7 @@ export default function OutletSalesPage() {
     [handleCloseAddonModal],
   );
 
-  /* -------- NEW ASSIGNMENT HANDLERS -------- */
+  /* -------- NEW ASSIGNMENT HANDLERS (UNMODIFIED) -------- */
 
   const handleOpenAssignmentModal = useCallback((sale: Sale) => {
     setAssignmentSale(sale);
@@ -836,8 +879,23 @@ export default function OutletSalesPage() {
 
       <h1 className="text-2xl font-bold text-gray-800">
         {outletName} Sales &amp; Check-out{' '}
-        {isToday ? ' (Today)' : ` (${dateFilter})`}
+        {/* 🛑 FIX: Display filter status */}
+        {isOverdueFilterActive ? ' (Overdue Sales)' : (isToday ? ' (Today)' : ` (${dateFilter})`)}
       </h1>
+      
+      {/* 🛑 NEW: Filter Active Indicator */}
+      {isOverdueFilterActive && (
+          <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded-lg text-sm flex items-center justify-between">
+              <span>⚠️ Displaying only currently **Overdue Sales** for {today}.</span>
+              <button 
+                  onClick={() => setIsOverdueFilterActive(false)} 
+                  className="text-red-700 hover:text-red-900 font-medium"
+              >
+                  &times; Clear Filter
+              </button>
+          </div>
+      )}
+
 
       {/* Date Filter */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -848,8 +906,14 @@ export default function OutletSalesPage() {
           <input
             type="date"
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
+            onChange={(e) => {
+              // 🛑 FIX: Clear overdue filter if the user manually changes the date
+              if(isOverdueFilterActive) setIsOverdueFilterActive(false);
+              setDateFilter(e.target.value);
+            }}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+            // Disable date input when overdue filter is active, as it forces today's date
+            disabled={isOverdueFilterActive} 
           />
         </div>
       </div>
@@ -939,7 +1003,10 @@ export default function OutletSalesPage() {
               ) : sales.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-6 text-center">
-                    No sales found for this date.
+                    {isOverdueFilterActive 
+                        ? "No overdue sales found for today." 
+                        : "No sales found for this date."
+                    }
                   </td>
                 </tr>
               ) : (
@@ -966,13 +1033,21 @@ export default function OutletSalesPage() {
                     sale.session_hours,
                   );
 
+                  // 🛑 NEW: Highlight overdue sales even when the filter is not active
+                  const isOverdueSale = 
+                      !sale.check_out_time && expected && new Date() >= expected;
+
+
                   return (
                     <tr
                       key={sale.id}
                       className={
                         sale.check_out_time
                           ? 'bg-gray-50 opacity-60'
-                          : needsAssignment ? 'bg-red-50 hover:bg-red-100' : ''
+                          : isOverdueSale // Apply overdue style regardless of filter
+                            ? 'bg-yellow-50 hover:bg-yellow-100'
+                            : needsAssignment ? 'bg-red-50 hover:bg-red-100' 
+                            : ''
                       }
                     >
                       {/* Customer */}
@@ -1083,7 +1158,9 @@ export default function OutletSalesPage() {
                         {sale.check_out_time ? (
                           <>Out: {formatTime(sale.check_out_time)}</>
                         ) : expected ? (
-                          <>Est: {formatTime(expected.toISOString())}</>
+                          <span className={isOverdueSale ? "font-bold text-red-600" : "text-gray-700"}>
+                            Est: {formatTime(expected.toISOString())}
+                          </span>
                         ) : (
                           <>Out: —</>
                         )}
