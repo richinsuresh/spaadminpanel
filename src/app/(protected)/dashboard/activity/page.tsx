@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { Search, User } from 'lucide-react'; // Added icons for clarity
 
 type ActivityRow = {
   id: string;
@@ -23,6 +24,7 @@ type EmployeeMeta = {
   id: string;
   name: string;
   role: string | null;
+  username?: string; // Added to help mapping
 };
 
 const formatDateTime = (iso: string) => {
@@ -60,7 +62,6 @@ const parseDescription = (raw: string): ParsedDescription => {
     }
     return null;
   } catch {
-    // not JSON, plain text description
     return null;
   }
 };
@@ -94,16 +95,15 @@ export default function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState(''); // Search state
   const [actionFilter, setActionFilter] = useState<
     'all' | 'sales' | 'packages' | 'customers' | 'attendance' | 'employees'
   >('all');
 
-  // NEW: map employee name -> "Name (Role)"
   const [employeeLabelMap, setEmployeeLabelMap] = useState<
     Record<string, string>
   >({});
 
-  // Fetch activity logs
   useEffect(() => {
     const fetchActivity = async () => {
       setLoading(true);
@@ -129,14 +129,13 @@ export default function ActivityPage() {
         }));
         setRows(mapped);
       }
-
       setLoading(false);
     };
 
     fetchActivity();
   }, []);
 
-  // Fetch employees once, to build label map
+  // Fetch employees to map usernames to real names
   useEffect(() => {
     const fetchEmployees = async () => {
       const { data, error } = await supabase
@@ -151,8 +150,8 @@ export default function ActivityPage() {
       const map: Record<string, string> = {};
       (data as EmployeeMeta[] | null)?.forEach((emp) => {
         const role = emp.role ? emp.role.trim() : '';
-        // Label will look like: "Raj (Receptionist)" or just "Raj" if no role
-        map[emp.name] = role ? `${emp.name} (${role})` : emp.name;
+        // Map the identifier to "Name (Role)"
+        map[emp.name.toLowerCase()] = role ? `${emp.name} (${role})` : emp.name;
       });
 
       setEmployeeLabelMap(map);
@@ -162,13 +161,35 @@ export default function ActivityPage() {
   }, []);
 
   const filteredRows = rows.filter((row) => {
-    if (actionFilter === 'all') return true;
-    if (actionFilter === 'sales') return row.action.includes('sale');
-    if (actionFilter === 'packages') return row.action.includes('package');
-    if (actionFilter === 'customers') return row.action.includes('customer');
-    if (actionFilter === 'attendance') return row.action.includes('attendance');
-    if (actionFilter === 'employees') return row.action.includes('employee');
-    return true;
+    // Category Filter
+    let matchesCategory = true;
+    if (actionFilter !== 'all') {
+        const action = row.action.toLowerCase();
+        if (actionFilter === 'sales') matchesCategory = action.includes('sale');
+        else if (actionFilter === 'packages') matchesCategory = action.includes('package');
+        else if (actionFilter === 'customers') matchesCategory = action.includes('customer');
+        else if (actionFilter === 'attendance') matchesCategory = action.includes('attendance');
+        else if (actionFilter === 'employees') matchesCategory = action.includes('employee');
+    }
+
+    if (!matchesCategory) return false;
+
+    // Search Filter
+    if (searchTerm.trim() === '') return true;
+    
+    const term = searchTerm.toLowerCase();
+    const parsed = parseDescription(row.description);
+    const targetName = (parsed?.after?.name || parsed?.before?.name || parsed?.after?.customer_name || parsed?.before?.customer_name || '').toLowerCase();
+    const targetMobile = (parsed?.after?.mobile || parsed?.before?.mobile || parsed?.after?.phone || parsed?.before?.phone || '');
+    const actionLabel = labelForAction(row.action).toLowerCase();
+    const username = (row.username || '').toLowerCase();
+
+    return (
+        targetName.includes(term) || 
+        targetMobile.includes(term) || 
+        actionLabel.includes(term) ||
+        username.includes(term)
+    );
   });
 
   return (
@@ -179,19 +200,28 @@ export default function ActivityPage() {
             Activity Log
           </h1>
           <p className="text-sm text-black mt-1">
-            See all edits made in Sales, Packages, Customers, Attendance and Employees.
+            Track edits and deletions across your spa.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2 text-sm">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input
+              type="text"
+              placeholder="Search name or mobile..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-black w-full sm:w-64"
+            />
+          </div>
+
           <select
             value={actionFilter}
-            onChange={(e) =>
-              setActionFilter(e.target.value as any)
-            }
+            onChange={(e) => setActionFilter(e.target.value as any)}
             className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-black"
           >
-            <option value="all">All</option>
+            <option value="all">All Categories</option>
             <option value="sales">Sales</option>
             <option value="packages">Packages</option>
             <option value="customers">Customers</option>
@@ -202,17 +232,11 @@ export default function ActivityPage() {
       </div>
 
       {loading ? (
-        <div className="bg-white rounded-xl shadow p-6 text-center text-black">
-          Loading activity…
-        </div>
+        <div className="bg-white rounded-xl shadow p-6 text-center text-black">Loading...</div>
       ) : errorMsg ? (
-        <div className="bg-white rounded-xl shadow p-6 text-center text-red-600">
-          {errorMsg}
-        </div>
+        <div className="bg-white rounded-xl shadow p-6 text-center text-red-600">{errorMsg}</div>
       ) : filteredRows.length === 0 ? (
-        <div className="bg-white rounded-xl shadow p-6 text-center text-black">
-          No activity found.
-        </div>
+        <div className="bg-white rounded-xl shadow p-6 text-center text-black">No activity found.</div>
       ) : (
         <div className="space-y-4">
           {filteredRows.map((row) => {
@@ -220,60 +244,47 @@ export default function ActivityPage() {
             const remark = parsed?.remark;
             const before = parsed?.before ?? null;
             const after = parsed?.after ?? null;
-            const diffs =
-              before && after ? getChangedFields(before, after) : [];
+            
+            const targetName = after?.name || before?.name || after?.customer_name || before?.customer_name;
+            const targetMobile = after?.mobile || before?.mobile || after?.phone || before?.phone;
 
+            const diffs = before && after ? getChangedFields(before, after) : [];
             const isExpanded = expandedId === row.id;
 
-            // Figure out what to show as "By ..."
-            const rawUser = row.username ?? '';
-            const displayUser =
-              (rawUser && employeeLabelMap[rawUser]) ||
-              rawUser ||
-              'System';
+            // Resolve the name of the user who performed the action
+            const rawUser = (row.username || '').toLowerCase();
+            const displayUser = employeeLabelMap[rawUser] || row.username || 'System';
 
             return (
-              <div
-                key={row.id}
-                className="bg-white rounded-xl shadow border border-gray-100 p-4"
-              >
+              <div key={row.id} className="bg-white rounded-xl shadow border border-gray-100 p-4">
                 <div className="flex justify-between items-start gap-4">
                   <div className="flex flex-col gap-1">
-                    <div className="text-sm text-black">
-                      {formatDateTime(row.created_at)}
-                    </div>
+                    <div className="text-sm text-gray-500">{formatDateTime(row.created_at)}</div>
                     <div className="text-base font-semibold text-black">
-                      {labelForAction(row.action)}{' '}
-                      <span className="text-black">
-                        {entityForAction(row.action)}
-                      </span>
+                      {labelForAction(row.action)} <span className="text-gray-700">{entityForAction(row.action)}</span>
                     </div>
 
-                    {displayUser && (
-                      <div className="text-xs text-black">
-                        By {displayUser}
+                    {(targetName || targetMobile) && (
+                      <div className="mt-1 text-sm font-medium text-blue-700 bg-blue-50 px-2 py-1 rounded inline-block w-fit">
+                        Affected: {targetName || 'N/A'} {targetMobile ? `(${targetMobile})` : ''}
                       </div>
                     )}
 
-                    {/* Remark / description */}
+                    <div className="flex items-center gap-1 text-xs text-gray-600 mt-1">
+                      <User size={12} />
+                      Performed by: <span className="font-semibold text-black">{displayUser}</span>
+                    </div>
+
                     {remark && (
-                      <div className="mt-2 text-sm text-black">
-                        <span className="font-medium">Remark: </span>
-                        {remark}
-                      </div>
-                    )}
-                    {!parsed && row.description && (
-                      <div className="mt-2 text-sm text-black">
-                        {row.description}
+                      <div className="mt-2 text-sm text-gray-800">
+                        <span className="font-medium">Remark: </span>{remark}
                       </div>
                     )}
                   </div>
 
                   {before && after && (
                     <button
-                      onClick={() =>
-                        setExpandedId(isExpanded ? null : row.id)
-                      }
+                      onClick={() => setExpandedId(isExpanded ? null : row.id)}
                       className="text-xs px-3 py-1 rounded-full border border-gray-300 text-black hover:bg-gray-50"
                     >
                       {isExpanded ? 'Hide changes' : 'View changes'}
@@ -283,42 +294,24 @@ export default function ActivityPage() {
 
                 {before && after && isExpanded && (
                   <div className="mt-4 overflow-x-auto">
-                    {diffs.length === 0 ? (
-                      <div className="text-sm text-black">
-                        No visible field changes (maybe only remark changed).
-                      </div>
-                    ) : (
-                      <table className="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">
-                              Field
-                            </th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">
-                              Before
-                            </th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">
-                              After
-                            </th>
+                    <table className="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">Field</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">Before</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-black uppercase">After</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {diffs.map((d) => (
+                          <tr key={d.field} className="border-t">
+                            <td className="px-3 py-2 font-medium text-black">{d.field}</td>
+                            <td className="px-3 py-2 text-gray-600">{String(d.before ?? '—')}</td>
+                            <td className="px-3 py-2 text-black bg-green-50">{String(d.after ?? '—')}</td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {diffs.map((d) => (
-                            <tr key={d.field} className="border-t">
-                              <td className="px-3 py-2 font-medium text-black">
-                                {d.field}
-                              </td>
-                              <td className="px-3 py-2 text-black">
-                                {String(d.before ?? '—')}
-                              </td>
-                              <td className="px-3 py-2 text-black bg-green-50">
-                                {String(d.after ?? '—')}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
