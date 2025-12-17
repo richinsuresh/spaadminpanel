@@ -1,243 +1,212 @@
-// src/app/(protected)/dashboard/outlets/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, ArrowUp, ArrowDown } from 'lucide-react'; 
+import { 
+  Loader2, ArrowUp, ArrowDown, BarChart3, 
+  MapPin, ChevronRight, Search, Calendar as CalendarIcon,
+  Trophy, AlertCircle, DollarSign
+} from 'lucide-react'; 
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip, LabelList } from 'recharts';
 
 type Outlet = {
   id: string;
   name: string;
   location: string;
-  periodSales: number; // Renamed for clarity: sales for the selected period
+  periodSales: number; 
 };
 
-// Helper function to format dates as 'YYYY-MM-DD'
 const formatDate = (date: Date): string => {
-  // Use UTC methods to avoid time zone issues when formatting to date strings
   const year = date.getUTCFullYear();
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   const day = String(date.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
 
-// Helper to get the date immediately following the end date
-const getDayAfter = (dateString: string): string => {
-    const date = new Date(dateString);
-    date.setDate(date.getDate() + 1);
-    return formatDate(date);
-};
-
 export default function OutletsPage() {
   const router = useRouter();
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
   
-  // --- STATE FOR DATE FILTERING ---
   const today = new Date();
   const sevenDaysAgo = new Date(today.getTime() - (7 * 24 * 60 * 60 * 1000));
   
   const [startDate, setStartDate] = useState(formatDate(sevenDaysAgo));
   const [endDate, setEndDate] = useState(formatDate(today));
-
-  // --- NEW STATE FOR SORTING ---
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc'); 
-  // -----------------------------
-
 
   const fetchOutletData = useCallback(async (start: string, end: string) => {
     setLoading(true);
-    
     try {
-        const dayAfterEndDate = getDayAfter(end);
-
-        const { data: customerData, error: customersError } = await supabase
+        const { data: customerData, error } = await supabase
             .from('customers')
             .select('outlet_name, package_amount, amount_paid, took_package, date')
             .gte('date', start)
-            .lt('date', dayAfterEndDate);
+            .lte('date', end);
 
-        if (customersError) throw customersError;
+        if (error) throw error;
 
-        const salesData = customerData || [];
-        
-        const salesByOutlet = new Map<string, number>();
-        for (const outlet of OUTLETS) {
-            salesByOutlet.set(outlet.name, 0);
-        }
+        const salesMap = new Map<string, number>();
+        OUTLETS.forEach(o => salesMap.set(o.name, 0));
 
-        for (const sale of salesData) {
-            const amount = sale.took_package 
-                ? (sale.package_amount || 0) 
-                : (sale.amount_paid || 0);
-
-            if (sale.outlet_name && salesByOutlet.has(sale.outlet_name)) {
-                salesByOutlet.set(
-                    sale.outlet_name,
-                    (salesByOutlet.get(sale.outlet_name) || 0) + amount
-                );
+        customerData?.forEach(sale => {
+            const amount = sale.took_package ? (sale.package_amount || 0) : (sale.amount_paid || 0);
+            if (sale.outlet_name && salesMap.has(sale.outlet_name)) {
+                salesMap.set(sale.outlet_name, (salesMap.get(sale.outlet_name) || 0) + amount);
             }
-        }
-
-        const outletsWithSales: Outlet[] = OUTLETS.map(outlet => {
-            const totalSales = salesByOutlet.get(outlet.name) || 0;
-            return {
-                id: outlet.id,
-                name: outlet.name,
-                location: outlet.location,
-                periodSales: totalSales,
-            };
         });
 
-        setOutlets(outletsWithSales);
-    } catch (error) {
-        console.error('Error fetching outlet data:', error);
-        const fallbackOutlets = OUTLETS.map(o => ({ ...o, periodSales: 0 }));
-        setOutlets(fallbackOutlets);
+        setOutlets(OUTLETS.map(o => ({
+            id: o.id, name: o.name, location: o.location, periodSales: salesMap.get(o.name) || 0,
+        })));
     } finally {
         setLoading(false);
     }
   }, []); 
 
-  // --- useEffect to refetch data when dates change ---
-  useEffect(() => {
-    if (new Date(startDate) <= new Date(endDate)) {
-        fetchOutletData(startDate, endDate);
-    } else {
-        setOutlets(outlets.map(o => ({...o, periodSales: 0})));
-        setLoading(false);
-    }
-  }, [startDate, endDate, fetchOutletData]);
-  
-  // --- NEW: Function to toggle sort direction ---
-  const handleSort = () => {
-    setSortDirection(prev => (prev === 'desc' ? 'asc' : 'desc'));
-  };
+  useEffect(() => { fetchOutletData(startDate, endDate); }, [startDate, endDate, fetchOutletData]);
 
-  // --- NEW: Apply sorting to the current outlets list ---
-  const sortedOutlets = [...outlets].sort((a, b) => {
-    if (sortDirection === 'desc') {
-      return b.periodSales - a.periodSales; // High to Low
-    } else {
-      return a.periodSales - b.periodSales; // Low to High
-    }
-  });
+  const { highestOutlet, lowestOutlet, totalRevenue, maxSaleValue } = useMemo(() => {
+    if (outlets.length === 0) return { highestOutlet: '', lowestOutlet: '', totalRevenue: 0, maxSaleValue: 0 };
+    const sorted = [...outlets].sort((a, b) => b.periodSales - a.periodSales);
+    return {
+      highestOutlet: sorted[0].name,
+      lowestOutlet: sorted[sorted.length - 1].name,
+      totalRevenue: outlets.reduce((sum, o) => sum + o.periodSales, 0),
+      maxSaleValue: sorted[0].periodSales || 1
+    };
+  }, [outlets]);
 
+  const processedOutlets = useMemo(() => {
+    return [...outlets]
+      .filter(o => o.name.toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => sortDirection === 'desc' ? b.periodSales - a.periodSales : a.periodSales - b.periodSales);
+  }, [outlets, sortDirection, searchTerm]);
 
-  const formatCurrency = (amountInPaise: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      minimumFractionDigits: 0
-    }).format(amountInPaise / 100);
-  };
+  const formatCurrency = (amount: number) => 
+    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount / 100);
 
-  const salesTitle = startDate === endDate ? 
-    "Daily Sales" : 
-    `Sales: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`;
+  if (loading) return (
+    <div className="h-screen flex items-center justify-center bg-slate-50">
+      <Loader2 className="animate-spin text-indigo-700 w-10 h-10" />
+    </div>
+  );
 
   return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Outlets Management</h1>
-        <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-          ➕ Add New Outlet
-        </button>
-      </div>
-
-      {/* Date Range Filters (Unchanged) */}
-      <div className="flex flex-col md:flex-row gap-4 mb-8 p-4 bg-white shadow rounded-lg border border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-700 md:self-center">Filter Sales Period:</h3>
-        
-        <div className="flex flex-col flex-1">
-          <label htmlFor="startDate" className="text-sm font-medium text-gray-500">Start Date</label>
-          <input 
-            id="startDate"
-            type="date" 
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500"
-          />
+    <div className="max-w-7xl mx-auto space-y-6 pb-12 px-4 pt-4">
+      {/* 1. TOP DATE FILTER BAR */}
+      <div className="bg-slate-900 p-5 rounded-2xl shadow-xl text-white flex flex-col md:flex-row items-center justify-between gap-6 border-b-4 border-indigo-600">
+        <div className="flex items-center gap-4">
+           <div className="bg-indigo-600 p-3 rounded-xl"><CalendarIcon size={22} /></div>
+           <div className="flex gap-4">
+             <div className="flex flex-col">
+               <span className="text-[10px] text-slate-500 font-black uppercase mb-1">From</span>
+               <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent border-none p-0 text-sm font-bold outline-none cursor-pointer" />
+             </div>
+             <div className="flex flex-col">
+               <span className="text-[10px] text-slate-500 font-black uppercase mb-1">To</span>
+               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent border-none p-0 text-sm font-bold outline-none cursor-pointer" />
+             </div>
+           </div>
         </div>
-
-        <div className="flex flex-col flex-1">
-          <label htmlFor="endDate" className="text-sm font-medium text-gray-500">End Date</label>
-          <input 
-            id="endDate"
-            type="date" 
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500"
-            max={formatDate(today)}
-          />
-        </div>
-
-        <div className="md:self-center">
-            <p className="text-sm font-medium text-gray-600">Current View:</p>
-            <p className="font-bold text-purple-700">{salesTitle}</p>
+        <div className="text-right">
+           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Network Sales</p>
+           <p className="text-2xl font-black">{formatCurrency(totalRevenue)}</p>
         </div>
       </div>
-      {/* End Date Range Filters */}
 
-
-      {loading ? (
-        <div className="bg-white shadow rounded-lg p-8 text-center flex justify-center items-center gap-2 text-purple-600">
-          <Loader2 className="animate-spin h-5 w-5"/> Loading sales data...
-        </div>
-      ) : (
-        <div className="bg-white shadow rounded-lg overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outlet</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
-                  
-                  {/* --- SORTABLE HEADER --- */}
-                  <th 
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-900 transition-colors"
-                    onClick={handleSort} // <-- Sorting handler
-                  >
-                    <div className="flex items-center gap-1">
-                        Total Sales (Period)
-                        {sortDirection === 'desc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
-                    </div>
-                  </th>
-                  {/* ----------------------- */}
-                  
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {sortedOutlets.map((outlet) => ( // <-- Use sortedOutlets here
-                  <tr 
-                    key={outlet.id} 
-                    className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => router.push(`/dashboard/outlets/${outlet.id}`)}
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
-                      {outlet.name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {outlet.location}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
-                      {formatCurrency(outlet.periodSales)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                        Active
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* 2. HIGHLIGHT CARDS (STRAIGHTFORWARD LABELS) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 border-l-8 border-l-emerald-500">
+          <div className="bg-emerald-100 p-4 rounded-xl text-emerald-600"><Trophy size={32} /></div>
+          <div>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Highest Sales Outlet</p>
+            <h3 className="text-xl font-black text-slate-900">{highestOutlet}</h3>
           </div>
         </div>
-      )}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-5 border-l-8 border-l-rose-500">
+          <div className="bg-rose-100 p-4 rounded-xl text-rose-600"><AlertCircle size={32} /></div>
+          <div>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Lowest Sales Outlet</p>
+            <h3 className="text-xl font-black text-slate-900">{lowestOutlet}</h3>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. PERFORMANCE INDEX CHART */}
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex items-center gap-3 mb-10">
+          <div className="bg-slate-100 p-2 rounded-lg text-slate-600"><BarChart3 size={20} /></div>
+          <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest">Growth Distribution</h2>
+        </div>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={outlets.sort((a,b) => a.name.localeCompare(b.name))} margin={{ top: 25 }}>
+              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10, fontWeight: 900 }} interval={0} />
+              <YAxis hide />
+              <Bar dataKey="periodSales" radius={[6, 6, 6, 6]} barSize={40}>
+                {outlets.map((entry, index) => {
+                  let color = '#FBBF24'; // Yellow
+                  if (entry.name === highestOutlet) color = '#10B981'; // Green
+                  if (entry.name === lowestOutlet) color = '#EF4444'; // Red
+                  return <Cell key={index} fill={color} />;
+                })}
+                <LabelList dataKey="periodSales" position="top" content={({ x, y, width, value, index }: any) => {
+                  const name = outlets[index]?.name;
+                  if (name === highestOutlet || name === lowestOutlet) {
+                    return <text x={(x as number) + (width as number) / 2} y={(y as number) - 10} fill="#0f172a" textAnchor="middle" className="text-[10px] font-black">{formatCurrency(value)}</text>;
+                  }
+                  return null;
+                }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 4. BRANCH STANDINGS TABLE */}
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+        <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest">League Standings</h2>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
+            <input type="text" placeholder="Search..." className="pl-9 pr-4 py-1.5 text-xs border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-slate-900 w-48" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+          </div>
+        </div>
+        <table className="w-full">
+          <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            <tr>
+              <th className="px-8 py-4 text-left">Branch Name</th>
+              <th className="px-8 py-4 text-left">Period Revenue</th>
+              <th className="px-8 py-4 text-right">Details</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {processedOutlets.map((outlet, i) => (
+              <tr key={outlet.id} className="hover:bg-slate-50/50 transition-colors group cursor-pointer" onClick={() => router.push(`/dashboard/outlets/${outlet.id}`)}>
+                <td className="px-8 py-5">
+                   <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xs font-black ${i === 0 ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>{i + 1}</div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{outlet.name}</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase">{outlet.location}</p>
+                      </div>
+                   </div>
+                </td>
+                <td className="px-8 py-5 font-black text-slate-900 text-sm">{formatCurrency(outlet.periodSales)}</td>
+                <td className="px-8 py-5 text-right">
+                  <div className="inline-flex p-2 rounded-xl bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white transition-all shadow-sm">
+                    <ChevronRight size={18} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
