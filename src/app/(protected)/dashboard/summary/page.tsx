@@ -76,7 +76,6 @@ export default function SalesSummaryPage() {
     const daily = Object.keys(dMap)
       .sort()
       .map(date => ({ 
-        // We use a consistent string format for the XAxis category
         dateLabel: new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), 
         sales: dMap[date],
         fullDate: date 
@@ -142,15 +141,12 @@ export default function SalesSummaryPage() {
         </h2>
         <div className="h-[400px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            {/* Switch to BarChart if data is 3 days or less for better visibility.
-              Line charts often look broken or invisible with very few points.
-            */}
             {chartData.length <= 3 ? (
               <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="dateLabel" />
                 <YAxis tickFormatter={(val) => `₹${val}`} />
-                <Tooltip formatter={(val: number) => `₹${val.toLocaleString()}`} />
+                <Tooltip formatter={(val: any) => val !== undefined ? `₹${Number(val).toLocaleString()}` : '₹0'} />
                 <Bar dataKey="sales" fill="#4f46e5" radius={[4, 4, 0, 0]} barSize={60} />
               </BarChart>
             ) : (
@@ -158,7 +154,7 @@ export default function SalesSummaryPage() {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="dateLabel" padding={{ left: 30, right: 30 }} />
                 <YAxis tickFormatter={(val) => `₹${val}`} />
-                <Tooltip formatter={(val: number) => `₹${val.toLocaleString()}`} />
+                <Tooltip formatter={(val: any) => val !== undefined ? `₹${Number(val).toLocaleString()}` : '₹0'} />
                 <Legend iconType="circle" />
                 <Line 
                   type="monotone" 
@@ -172,7 +168,6 @@ export default function SalesSummaryPage() {
                 
                 {markers.map((m, i) => {
                   const markerLabel = new Date(m.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-                  // Only show marker if that date exists in our chartData labels
                   const exists = chartData.some(d => d.dateLabel === markerLabel);
                   if (!exists) return null;
 
@@ -199,7 +194,7 @@ export default function SalesSummaryPage() {
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="name" />
               <YAxis tickFormatter={(val) => `₹${val}`} />
-              <Tooltip formatter={(val: number) => `₹${val.toLocaleString()}`} />
+              <Tooltip formatter={(val: any) => val !== undefined ? `₹${Number(val).toLocaleString()}` : '₹0'} />
               <Bar dataKey="total" fill="#6366f1" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
