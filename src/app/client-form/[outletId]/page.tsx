@@ -637,8 +637,8 @@ export default function ClientCheckinForm() {
         };
       });
 
-      // --- FINAL PAYLOAD ---
-      const payload = {
+     // --- FINAL PAYLOAD ---
+      const payload: any = { 
         client_uuid: clientUuid,
         name: String(formData.name || '').trim(),
         mobile: mobile,
@@ -653,10 +653,14 @@ export default function ClientCheckinForm() {
         packageValidity: null,
 
         // Amount and Package Use
+        // NOTE: Even if redeeming, we send 0 here for paid amount
         amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
+        
+        // --- NEW LOGIC: This signals it's a REQUEST, not an immediate deduction ---
         isPackageCustomer: isPackageRedemption,
         packageId: isPackageRedemption ? clientInfo?.packageId : null,
+        is_redemption_request: isPackageRedemption, // <--- ADD THIS LINE
 
         // Outlet/Payment Info
         outlet: outlet.name,
@@ -890,7 +894,7 @@ export default function ClientCheckinForm() {
                 </button>
               </div>
 
-              {/* Package Redemption Checkbox */}
+            {/* Package Redemption Checkbox */}
               {isPackageActive && (
                  <label className="inline-flex items-center gap-2 mt-2 cursor-pointer">
                     <input
@@ -900,8 +904,9 @@ export default function ClientCheckinForm() {
                       className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                       disabled={loading}
                     />
+                    {/* CHANGED TEXT HERE */}
                     <span className="text-sm font-medium text-green-400">
-                      Use Package Credit for this Session
+                      Request Package Redemption
                     </span>
                   </label>
               )}
@@ -1220,6 +1225,7 @@ export default function ClientCheckinForm() {
         <small>
           Local queue enabled — unsynced entries are stored locally if server is unreachable.
         </small>
+        
       </div>
     </div>
   );
