@@ -2,8 +2,19 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { OUTLETS, Outlet } from '@/lib/outlet';
-import { Trash2, AlertTriangle, Loader2, X, Clock, MapPin, Edit } from 'lucide-react';
+import { OUTLETS } from '@/lib/outlet';
+import { 
+  Trash2, 
+  Loader2, 
+  X, 
+  Clock, 
+  MapPin, 
+  Calendar as CalendarIcon, 
+  CheckCircle, 
+  ShieldAlert,
+  Search,
+  User
+} from 'lucide-react';
 
 // --- Types ---
 type Employee = {
@@ -26,43 +37,25 @@ type AttendanceRecord = {
   early_checkout_request_time: string | null;
 };
 
-// --- DATE HELPERS FOR IST ---
-// India Standard Time (IST) is UTC + 5:30.
 const IST_OFFSET_MINUTES = 5.5 * 60; 
 
-// Gets the current date string (YYYY-MM-DD) based on IST
 const getISTDateString = (date?: Date): string => {
     const now = date || new Date();
     const localOffset = now.getTimezoneOffset(); 
-    // Calculate time adjusted to IST
     const istTime = new Date(now.getTime() + (IST_OFFSET_MINUTES + localOffset) * 60 * 1000);
-    
     return istTime.toISOString().split('T')[0];
 };
 
-// Gets the date string for the day *before* the current IST day
-const getYesterdayISTDateString = (todayString: string): string => {
-    const today = new Date(todayString);
-    today.setDate(today.getDate() - 1);
-    return getISTDateString(today);
-};
-// ----------------------------
-
-
-const getStatusBadge = (status: string, checkOutTime: string | null) => {
-  if (status === 'leave') return <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-full">On Leave</span>;
-  if (status === 'off') return <span className="px-2 py-1 bg-gray-200 text-gray-700 text-xs rounded-full">Weekly Off</span>;
-  if (checkOutTime) return <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">Completed</span>;
-  return <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full animate-pulse">Working Now</span>;
-};
-
-const formatTime = (dateStr: string | null) => {
+// Fixed formatTime to handle undefined values correctly for TypeScript
+const formatTime = (dateStr: string | null | undefined) => {
   if (!dateStr) return '—';
-  // Formatting in IST for consistency
-  return new Date(dateStr).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+  return new Date(dateStr).toLocaleTimeString('en-IN', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    timeZone: 'Asia/Kolkata' 
+  });
 };
 
-// --- Admin Password (Change for production) ---
 const ADMIN_PASSWORD = 'attend123';
 
 export default function AttendancePage() {
@@ -70,33 +63,25 @@ export default function AttendancePage() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState(currentISTDate); // Initialize with today's IST date
+  const [dateFilter, setDateFilter] = useState(currentISTDate);
   const [outletFilter, setOutletFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
-  // Clear All History State
-  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
-  const [clearPassword, setClearPassword] = useState('');
-  const [clearError, setClearError] = useState('');
-  const [isClearing, setIsClearing] = useState(false);
-  
-  // Single Record Delete State
+  // Modals State
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
-  const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
-  const [isSingleDeleting, setIsSingleDeleting] = useState(false);
-  
-  // Early Checkout Approval State
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
-  const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
-  const [isApproving, setIsApproving] = useState(false);
-  
-  // --- NEW: Change Outlet State ---
   const [isOutletChangeModalOpen, setIsOutletChangeModalOpen] = useState(false);
+  
+  // Data State
+  const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
+  const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
   const [recordToTransfer, setRecordToTransfer] = useState<AttendanceRecord | null>(null);
+  
+  // Form/Action State
+  const [adminPassword, setAdminPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
   const [newOutletId, setNewOutletId] = useState('');
-  const [transferPassword, setTransferPassword] = useState('');
-  const [transferError, setTransferError] = useState('');
-  const [isTransferring, setIsTransferring] = useState(false);
-
 
   const fetchEmployees = useCallback(async () => {
     const { data } = await supabase.from('employees').select('id, name, role').eq('is_active', true).order('name');
@@ -104,18 +89,10 @@ export default function AttendancePage() {
   }, []);
 
   const fetchAttendance = useCallback(async () => {
+    setLoading(true);
     try {
-      let query = supabase
-        .from('attendance')
-        .select(`*, 
-                early_checkout_requested, 
-                early_checkout_request_time`)
-        .eq('date', dateFilter);
-
-      if (outletFilter !== 'all') {
-        query = query.eq('outlet_id', outletFilter);
-      }
-      
+      let query = supabase.from('attendance').select(`*`).eq('date', dateFilter);
+      if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
       const { data, error } = await query;
       if (error) throw error;
       setRecords(data || []);
@@ -126,491 +103,193 @@ export default function AttendancePage() {
     }
   }, [dateFilter, outletFilter]);
 
-  // --- Daily Reset/Force Logout Logic ---
-  const forceLogoutPreviousDay = useCallback(async () => {
-    const yesterday = getYesterdayISTDateString(currentISTDate);
-    // Set the check-out time to midnight IST of the previous day
-    const midnightOfYesterdayIST = `${yesterday}T23:59:59.000+05:30`; 
-
-    try {
-        // Find attendance records from previous days that are still checked in
-        const { data: oldRecords, error: fetchError } = await supabase
-            .from('attendance')
-            .select('id, employee_id')
-            .lt('date', currentISTDate) // date is less than today
-            .is('check_out_time', null); // still checked in
-
-        if (fetchError) throw fetchError;
-
-        if (oldRecords && oldRecords.length > 0) {
-            console.log(`[Auto Logout] Found ${oldRecords.length} employees checked-in on previous days.`);
-
-            const recordIds = oldRecords.map(r => r.id);
-            const employeeIds = oldRecords.map(r => r.employee_id);
-
-            // 1. Update the old attendance records
-            const { error: updateRecordsError } = await supabase
-                .from('attendance')
-                .update({ 
-                    check_out_time: midnightOfYesterdayIST,
-                    status: 'Completed (Auto Logout)',
-                    early_checkout_requested: false,
-                })
-                .in('id', recordIds);
-            
-            if (updateRecordsError) throw updateRecordsError;
-
-            // 2. Reset the employee status
-            const { error: updateEmployeesError } = await supabase
-                .from('employees')
-                .update({ 
-                    is_checked_in: false, 
-                    current_attendance_id: null,
-                    current_outlet_name: null 
-                })
-                .in('id', employeeIds);
-            
-            if (updateEmployeesError) throw updateEmployeesError;
-
-            console.log('[Auto Logout] Previous day attendance reset successful.');
-        }
-
-    } catch (err) {
-        console.error('[Auto Logout] Error during automatic reset:', err);
-    }
-  }, [currentISTDate]);
-  // ---------------------------------------------
-
-
-  // Initial Load & Daily Reset Trigger
   useEffect(() => {
-    setLoading(true);
     fetchEmployees();
-    
-    // Ensure force logout runs before fetching today's attendance
-    forceLogoutPreviousDay().then(() => {
-        fetchAttendance();
-    });
-    
-  }, [fetchEmployees, fetchAttendance, forceLogoutPreviousDay]);
+    fetchAttendance();
+  }, [fetchEmployees, fetchAttendance]);
 
-  // Real-time Auto Refresh 
-  useEffect(() => {
-    const channel = supabase
-      .channel('admin-attendance-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
-        console.log('Attendance update detected, refreshing...');
-        fetchAttendance();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
-        console.log('Employee update detected, refreshing...');
-        fetchEmployees();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchAttendance, fetchEmployees]);
-
-
-  // --- Handle Clear ALL History ---
-  const handleClearHistory = async () => {
-    setClearError('');
-    
-    // Simple admin password check
-    if (clearPassword !== ADMIN_PASSWORD) {
-      setClearError('Incorrect password');
-      return;
+  const handleSingleRecordDelete = async () => {
+    if (!recordToDelete || adminPassword !== ADMIN_PASSWORD) {
+        setErrorMsg('Incorrect admin password');
+        return;
     }
-
-    setIsClearing(true);
+    setIsProcessing(true);
     try {
-      // 1. Delete all attendance records
-      const { error: deleteError } = await supabase
-        .from('attendance')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete everything
-
-      if (deleteError) throw deleteError;
-
-      // 2. Reset employee status
-      const { error: employeeResetError } = await supabase
-        .from('employees')
-        .update({ 
+      const { data: emp } = await supabase.from('employees').select('current_attendance_id').eq('id', recordToDelete.employee_id).single();
+      const { error: delErr } = await supabase.from('attendance').delete().eq('id', recordToDelete.id);
+      if (delErr) throw delErr;
+      
+      if (emp?.current_attendance_id === recordToDelete.id) {
+        await supabase.from('employees').update({ 
             is_checked_in: false, 
             current_attendance_id: null,
             current_outlet_name: null 
-        })
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // Update everything
-        
-      if (employeeResetError) throw employeeResetError;
-
-
-      alert('Attendance history cleared successfully.');
-      setIsClearModalOpen(false);
-      setClearPassword('');
-      // Force refresh of the page data
-      fetchAttendance(); 
-    } catch (err: any) {
-      console.error('Clear error:', err);
-      setClearError(err.message || 'Failed to clear history');
-    } finally {
-      setIsClearing(false);
-    }
-  };
-
-  // --- Handle Single Record Deletion ---
-  const handleSingleRecordDelete = async () => {
-    if (!recordToDelete) return;
-
-    setIsSingleDeleting(true);
-    
-    try {
-      // 1. Check if the deleted record is the employee's current check-in record
-      const { data: employeeData } = await supabase.from('employees').select('current_attendance_id').eq('id', recordToDelete.employee_id).single();
-      const isCurrentRecord = employeeData?.current_attendance_id === recordToDelete.id;
-
-      // 2. Delete the specific attendance record
-      const { error: deleteError } = await supabase
-        .from('attendance')
-        .delete()
-        .eq('id', recordToDelete.id); 
-
-      if (deleteError) throw deleteError;
-
-      // 3. If it was the current check-in record, reset the employee status and outlet
-      if (isCurrentRecord) {
-        await supabase
-          .from('employees')
-          .update({ 
-              is_checked_in: false, 
-              current_attendance_id: null,
-              current_outlet_name: null 
-          })
-          .eq('id', recordToDelete.employee_id);
+        }).eq('id', recordToDelete.employee_id);
       }
 
-      alert(`Attendance record for ${recordToDelete.employee_name} on ${recordToDelete.date} deleted.`);
-      
-      setRecordToDelete(null);
       setIsSingleDeleteModalOpen(false);
+      setRecordToDelete(null);
+      setAdminPassword('');
       fetchAttendance(); 
     } catch (err: any) {
-      console.error('Single delete error:', err);
       alert(err.message || 'Failed to delete record.');
     } finally {
-      setIsSingleDeleting(false);
+      setIsProcessing(false);
     }
   };
 
-
-  // --- Handle Approve Early Checkout ---
-  const handleApproveEarlyCheckout = async () => {
-      if (!requestToApprove || !requestToApprove.early_checkout_request_time) return;
-
-      setIsApproving(true);
-
-      try {
-          // Use the current time (IST adjusted) as the check-out time
-          const checkOutTime = new Date().toISOString(); 
-          
-          // 1. Update the Attendance record
-          const { error: recordError } = await supabase
-              .from('attendance')
-              .update({
-                  check_out_time: checkOutTime, 
-                  early_checkout_requested: false,
-                  status: 'Completed' 
-              })
-              .eq('id', requestToApprove.id);
-
-          if (recordError) throw recordError;
-
-          // 2. Reset the employee's check-in status and outlet
-          const { error: employeeError } = await supabase
-              .from('employees')
-              .update({ 
-                  is_checked_in: false, 
-                  current_attendance_id: null,
-                  current_outlet_name: null 
-              })
-              .eq('id', requestToApprove.employee_id);
-
-          if (employeeError) throw employeeError;
-
-          alert(`Early checkout for ${requestToApprove.employee_name} approved and recorded.`);
-          setRequestToApprove(null);
-          setIsApprovalModalOpen(false);
-          fetchAttendance(); 
-      } catch (err: any) {
-          console.error('Approval Error:', err);
-          alert(`Failed to approve: ${err.message}`);
-      } finally {
-          setIsApproving(false);
-      }
-  };
-
-  // --- Handle Deny Early Checkout ---
-  const handleDenyEarlyCheckout = async () => {
-      if (!requestToApprove) return;
-
-      setIsApproving(true);
-
-      try {
-          // 1. Update the Attendance record: Reset the request flag to false
-          const { error: recordError } = await supabase
-              .from('attendance')
-              .update({
-                  early_checkout_requested: false,
-              })
-              .eq('id', requestToApprove.id);
-
-          if (recordError) throw recordError;
-
-          alert(`Early checkout request for ${requestToApprove.employee_name} denied. Employee remains checked in.`);
-          setRequestToApprove(null);
-          setIsApprovalModalOpen(false);
-          fetchAttendance(); 
-      } catch (err: any) {
-          console.error('Deny Error:', err);
-          alert(`Failed to deny request: ${err.message}`);
-      } finally {
-          setIsApproving(false);
-      }
-  };
-  
-  // --- NEW: Handle Outlet Transfer ---
   const handleOutletTransfer = async () => {
-      if (!recordToTransfer || !newOutletId) {
-          setTransferError('Please select a new outlet.');
-          return;
-      }
-      
-      setTransferError('');
-
-      // Admin password check
-      if (transferPassword !== ADMIN_PASSWORD) {
-        setTransferError('Incorrect password');
-        return;
-      }
-      
-      setIsTransferring(true);
-      const newOutlet = OUTLETS.find(o => o.id === newOutletId);
-      const newOutletName = newOutlet?.name || null;
-      
-      if (!newOutletName) {
-          setTransferError('Invalid new outlet selected.');
-          setIsTransferring(false);
-          return;
-      }
-
+      if (!recordToTransfer || !newOutletId || adminPassword !== ADMIN_PASSWORD) { setErrorMsg('Incorrect password'); return; }
+      setIsProcessing(true);
+      const newOutletName = OUTLETS.find(o => o.id === newOutletId)?.name;
       try {
-          // 1. Update the Attendance record (for historical accuracy)
-          const { error: recordError } = await supabase
-              .from('attendance')
-              .update({
-                  outlet_id: newOutletId,
-                  outlet_name: newOutletName,
-                  // Optionally log a note about the transfer
-                  status: `${recordToTransfer.status} (Transferred to ${newOutletName})`
-              })
-              .eq('id', recordToTransfer.id);
-          
-          if (recordError) throw recordError;
-
-          // 2. Update the Employee record (CRITICAL for client form dropdown)
-          const { error: employeeError } = await supabase
-              .from('employees')
-              .update({ 
-                  current_outlet_name: newOutletName,
-              })
-              .eq('id', recordToTransfer.employee_id);
-
-          if (employeeError) throw employeeError;
-
-          alert(`Successfully transferred ${recordToTransfer.employee_name} to ${newOutletName}.`);
-          
-          setRecordToTransfer(null);
+          await supabase.from('attendance').update({ outlet_id: newOutletId, outlet_name: newOutletName }).eq('id', recordToTransfer.id);
+          await supabase.from('employees').update({ current_outlet_name: newOutletName }).eq('id', recordToTransfer.employee_id);
           setIsOutletChangeModalOpen(false);
-          setNewOutletId('');
-          setTransferPassword('');
-          fetchAttendance(); // Refresh to show the change
-      } catch (err: any) {
-          console.error('Transfer Error:', err);
-          setTransferError(err.message || 'Failed to transfer outlet.');
-      } finally {
-          setIsTransferring(false);
-      }
+          setRecordToTransfer(null);
+          setAdminPassword('');
+          fetchAttendance();
+      } finally { setIsProcessing(false); }
   };
-  
-  // Helper to open the outlet change modal
-  const openOutletChangeModal = (record: AttendanceRecord) => {
-    setRecordToTransfer(record);
-    setNewOutletId(record.outlet_id); // Default to current outlet
-    setTransferError('');
-    setTransferPassword('');
-    setIsOutletChangeModalOpen(true);
-  };
-  // ------------------------------------
 
-
-  const combinedData = employees.map(emp => {
-    // Find the record matching the filter date
-    const record = records.find(r => r.employee_id === emp.id);
-    return {
-      employee: emp,
-      record: record || null
-    };
+  const filteredData = employees.map(emp => ({
+    employee: emp,
+    record: records.find(r => r.employee_id === emp.id) || null
+  })).filter(item => {
+    const outletMatch = outletFilter === 'all' || item.record?.outlet_id === outletFilter;
+    const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
+    return outletMatch && nameMatch;
   });
 
-  const filteredData = outletFilter === 'all' 
-    ? combinedData 
-    : combinedData.filter(item => item.record?.outlet_id === outletFilter);
-
-  // Helper function to open the delete modal
-  const openSingleDeleteModal = (record: AttendanceRecord) => {
-    setRecordToDelete(record);
-    setIsSingleDeleteModalOpen(true);
-  };
-
-
   return (
-    <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
-      {/* --- Header and Filters --- */}
-      <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
-        <h1 className="text-2xl font-bold text-gray-800">Staff Attendance Admin Panel</h1>
+    <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6 bg-slate-50/50 min-h-screen">
+      
+      {/* 1. HEADER */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Attendance Logs</h1>
+          <p className="text-sm text-slate-500 font-medium">Manage and monitor branch performance.</p>
+        </div>
         
-        <div className="flex gap-4 items-center">
-          <button 
-            onClick={() => setIsClearModalOpen(true)}
-            className="p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
-            title="Clear All History"
-          >
-            <Trash2 size={20} />
-          </button>
+        <div className="flex flex-wrap gap-3 items-center">
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input 
+                    type="text" 
+                    placeholder="Search staff..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500 w-full md:w-64 transition-all"
+                />
+            </div>
 
-          {/* Outlet Filter */}
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Filter Outlet</label>
             <select 
               value={outletFilter}
               onChange={(e) => setOutletFilter(e.target.value)}
-              className="p-2 border rounded-lg text-sm text-gray-800 bg-white outline-none w-40"
+              className="px-4 py-2 text-sm border border-slate-200 rounded-xl bg-white text-slate-900 font-medium outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer"
             >
               <option value="all">All Outlets</option>
-              {OUTLETS.map(o => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
+              {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
-          </div>
 
-          {/* Date Filter */}
-          <div>
-             <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
-             <input 
-              type="date" 
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="p-2 border rounded-lg text-sm text-gray-800 bg-white outline-none"
-              max={currentISTDate}
-            />
-          </div>
+            <div className="flex items-center px-4 py-2 border border-slate-200 rounded-xl bg-white gap-2">
+              <CalendarIcon size={16} className="text-slate-900" />
+              <input 
+                type="date" 
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="text-sm text-slate-900 font-bold outline-none bg-transparent"
+                max={currentISTDate}
+              />
+            </div>
         </div>
       </div>
-      {/* --- END Header and Filters --- */}
 
-      <div className="bg-white shadow rounded-lg overflow-hidden">
+      {/* 2. MAIN DATA TABLE */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Employee</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outlet</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check In</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Check Out</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-900">
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider">Employee</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider">Outlet</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider">In Time</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider">Out Time</th>
+                <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider">Status</th>
+                <th className="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={6} className="p-6 text-center text-gray-500">
-                    <Loader2 className="animate-spin mx-auto h-5 w-5 text-gray-500" />
-                </td></tr>
+                <tr><td colSpan={6} className="py-20 text-center"><Loader2 className="animate-spin mx-auto text-indigo-500" /></td></tr>
               ) : filteredData.length === 0 ? (
-                <tr><td colSpan={6} className="p-6 text-center text-gray-500">No records found for this date/outlet.</td></tr>
+                <tr><td colSpan={6} className="py-20 text-center text-slate-600 font-bold italic">No records found.</td></tr>
               ) : (
                 filteredData.map(({ employee, record }) => {
-                  const outletName = record?.outlet_name || '—';
-                  const inTime = record?.check_in_time ? formatTime(record.check_in_time) : '—';
-                  const outTime = record?.check_out_time ? formatTime(record.check_out_time) : '—';
+                  const isWorking = record?.check_in_time && !record?.check_out_time;
                   
-                  let statusDisplay = <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs rounded-full">Not Checked In</span>;
-                  if (record) {
-                    statusDisplay = getStatusBadge(record.status, record.check_out_time);
-                  }
-                  
-                  let actionElement = null;
-                  const isCheckedIn = record?.check_in_time && !record?.check_out_time;
-                  
-                  // Action Element Logic
-                  if (record && record.early_checkout_requested) {
-                      actionElement = (
-                          <button
-                              onClick={() => {
-                                  setRequestToApprove(record);
-                                  setIsApprovalModalOpen(true);
-                              }}
-                              className="flex items-center gap-1 px-3 py-1 text-xs font-medium bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition"
-                              title={`Review early checkout request from ${record.employee_name}`}
-                          >
-                              <Clock size={14} /> Review
-                          </button>
-                      );
-                  } else if (isCheckedIn && record) {
-                      // Currently Working: Allow transfer
-                      actionElement = (
-                          <button
-                              onClick={() => openOutletChangeModal(record)} 
-                              className="flex items-center gap-1 text-blue-600 hover:text-blue-800 transition-colors p-1 rounded-md"
-                              title={`Change current outlet for ${employee.name}`}
-                          >
-                              <MapPin size={16} /> Change
-                          </button>
-                      );
-                  } else if (record && record.id) {
-                      // Completed, old, or statutory leave: Allow delete
-                      actionElement = (
-                        <button
-                            onClick={() => openSingleDeleteModal(record)} 
-                            className="text-red-600 hover:text-red-900 transition-colors p-1 rounded-md"
-                            title={`Delete record for ${employee.name} on ${dateFilter}`}
-                         >
-                            <Trash2 size={16} />
-                         </button>
-                      );
-                  }
-
-
                   return (
-                    <tr key={employee.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                           <div>
-                              <div className="text-sm font-medium text-gray-900">{employee.name}</div>
-                              <div className="text-xs text-gray-500 capitalize">{employee.role || 'Therapist'}</div>
-                           </div>
+                    <tr key={employee.id} className="hover:bg-slate-50/30 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-sm">
+                                {employee.name.charAt(0)}
+                            </div>
+                            <div>
+                                <div className="text-sm font-bold text-slate-900">{employee.name}</div>
+                                <div className="text-[10px] text-slate-600 font-bold uppercase tracking-tight">{employee.role || 'Therapist'}</div>
+                            </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{outletName}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-medium">{inTime}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{outTime}</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {statusDisplay}
+                      <td className="px-6 py-4 text-sm font-bold text-slate-800">
+                        {record?.outlet_name || '—'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        {actionElement}
+                      <td className="px-6 py-4 text-sm font-bold text-emerald-700">
+                        {formatTime(record?.check_in_time)}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-900">
+                        {formatTime(record?.check_out_time)}
+                      </td>
+                      <td className="px-6 py-4">
+                         {!record ? (
+                           <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">Absent</span>
+                         ) : record.check_out_time ? (
+                           <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
+                         ) : (
+                           <span className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase border border-indigo-100 animate-pulse">On Duty</span>
+                         )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                            {record?.early_checkout_requested && (
+                                <button 
+                                  onClick={() => { setRequestToApprove(record); setIsApprovalModalOpen(true); }} 
+                                  className="px-3 py-1.5 bg-amber-500 text-black rounded-lg text-[10px] font-bold uppercase"
+                                >
+                                  Review
+                                </button>
+                            )}
+                            
+                            {isWorking && record && (
+                                <button 
+                                  onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} 
+                                  className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" 
+                                  title="Transfer Branch"
+                                >
+                                  <MapPin size={18} />
+                                </button>
+                            )}
+
+                            {record && (
+                                <button 
+                                    onClick={() => { setRecordToDelete(record); setErrorMsg(''); setAdminPassword(''); setIsSingleDeleteModalOpen(true); }}
+                                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                    title="Delete Log"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
+                            )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -621,207 +300,100 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* --- Clear ALL History Modal --- */}
-      {isClearModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
-            <button 
-              onClick={() => setIsClearModalOpen(false)} 
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X size={20} />
-            </button>
-            
-            <div className="flex flex-col items-center text-center mb-6">
-              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4">
-                <AlertTriangle className="text-red-600 h-6 w-6" />
-              </div>
-              <h2 className="text-xl font-bold text-gray-800">Clear All History?</h2>
-              <p className="text-sm text-gray-500 mt-2">
-                This will permanently delete ALL attendance records for all employees. This action cannot be undone.
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Admin Password</label>
-                <input 
-                  type="password" 
-                  value={clearPassword}
-                  onChange={(e) => setClearPassword(e.target.value)}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
-                  placeholder="Enter password"
-                />
-                {clearError && <p className="text-xs text-red-600 mt-1">{clearError}</p>}
-              </div>
-
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setIsClearModalOpen(false)}
-                  className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleClearHistory}
-                  disabled={isClearing || !clearPassword}
-                  className="flex-1 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {isClearing ? <Loader2 className="animate-spin h-4 w-4"/> : 'Confirm Clear'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- Single Record Delete Modal --- */}
-      {isSingleDeleteModalOpen && recordToDelete && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
-            <button 
-              onClick={() => setIsSingleDeleteModalOpen(false)} 
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X size={20} />
-            </button>
-            
-            <div className="flex flex-col items-center text-center mb-6">
-              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4">
-                <AlertTriangle className="text-red-600 h-6 w-6" />
-              </div>
-              <h2 className="text-xl font-bold text-gray-800">Delete Attendance Record?</h2>
-              <p className="text-sm text-gray-500 mt-2">
-                You are about to permanently delete the attendance record for **{recordToDelete.employee_name}** on **{recordToDelete.date}**.
-                {recordToDelete.check_out_time === null && <span className="font-semibold text-red-700 block mt-2">Deleting this record will also mark the employee as **Checked Out** and reset their active outlet.</span>}
-              </p>
-            </div>
-
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setIsSingleDeleteModalOpen(false)}
-                className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleSingleRecordDelete}
-                disabled={isSingleDeleting}
-                className="flex-1 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isSingleDeleting ? <Loader2 className="animate-spin h-4 w-4"/> : 'Confirm Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- Early Checkout Approval Modal --- */}
-      {isApprovalModalOpen && requestToApprove && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
-                  <button 
-                      onClick={() => setIsApprovalModalOpen(false)} 
-                      className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-                  >
-                      <X size={20} />
-                  </button>
-                  <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                    <Clock className="text-yellow-500 h-6 w-6"/> Review Early Checkout Request
-                  </h2>
-                  <p className="text-sm text-gray-700 mb-6">
-                      **{requestToApprove.employee_name}** is requesting to check out early. 
-                      The request was submitted at **{formatTime(requestToApprove.early_checkout_request_time)}**.
-                      <span className="font-semibold text-red-600 block mt-2">
-                          Approving logs them out now. Denying keeps them checked in.
-                      </span>
-                  </p>
-
-                  <div className="flex gap-3">
-                      <button 
-                          onClick={handleDenyEarlyCheckout}
-                          disabled={isApproving}
-                          className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium disabled:opacity-50"
-                      >
-                          {isApproving ? <Loader2 className="animate-spin h-4 w-4 mx-auto"/> : 'Deny Request'}
-                      </button>
-
-                      <button 
-                          onClick={handleApproveEarlyCheckout}
-                          disabled={isApproving}
-                          className="flex-1 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-                      >
-                          {isApproving ? <Loader2 className="animate-spin h-4 w-4"/> : 'Approve Checkout'}
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
+      {/* --- MODALS --- */}
       
-      {/* --- NEW: Change Outlet Modal --- */}
-      {isOutletChangeModalOpen && recordToTransfer && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 relative">
-                  <button 
-                      onClick={() => setIsOutletChangeModalOpen(false)} 
-                      className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-                  >
-                      <X size={20} />
-                  </button>
-                  
-                  <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                    <MapPin className="text-blue-500 h-6 w-6"/> Change Employee Outlet
-                  </h2>
-                  <p className="text-sm text-gray-700 mb-4">
-                      Transferring **{recordToTransfer.employee_name}** from **{recordToTransfer.outlet_name}**. This update will immediately change where they appear in the client check-in dropdowns.
-                  </p>
+      {/* DELETE MODAL */}
+      {isSingleDeleteModalOpen && recordToDelete && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="p-6 bg-rose-50 border-b border-rose-100 flex items-center gap-3 text-rose-900 font-bold">
+                <ShieldAlert size={20} />
+                <h2 className="text-slate-900">Security Confirmation</h2>
+            </div>
+            <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-900 font-medium">
+                    You are permanently deleting the attendance record for <strong className="text-black font-extrabold">{recordToDelete.employee_name}</strong> on {recordToDelete.date}.
+                </p>
 
-                  <div className="space-y-4">
-                      <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">New Outlet *</label>
-                          <select
-                              value={newOutletId}
-                              onChange={(e) => setNewOutletId(e.target.value)}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                              required
-                          >
-                              <option value="">Select a new outlet...</option>
-                              {OUTLETS.map(o => (
-                                  <option key={o.id} value={o.id}>{o.name}</option>
-                              ))}
-                          </select>
-                      </div>
-                      
-                      <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Admin Password</label>
-                          <input 
-                              type="password" 
-                              value={transferPassword}
-                              onChange={(e) => setTransferPassword(e.target.value)}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 outline-none"
-                              placeholder="Enter password"
-                          />
-                          {transferError && <p className="text-xs text-red-600 mt-1">{transferError}</p>}
-                      </div>
-                      
-                      <div className="flex gap-3 pt-2">
-                          <button 
-                              onClick={() => setIsOutletChangeModalOpen(false)}
-                              className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
-                          >
-                              Cancel
-                          </button>
-                          <button 
-                              onClick={handleOutletTransfer}
-                              disabled={isTransferring || !newOutletId || !transferPassword}
-                              className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-                          >
-                              {isTransferring ? <Loader2 className="animate-spin h-4 w-4"/> : 'Confirm Transfer'}
-                          </button>
-                      </div>
-                  </div>
-              </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
+                    <input 
+                        type="password" 
+                        value={adminPassword}
+                        onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none"
+                        placeholder="••••••••"
+                    />
+                    {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                    <button onClick={() => setIsSingleDeleteModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
+                    <button 
+                        onClick={handleSingleRecordDelete}
+                        disabled={isProcessing || !adminPassword}
+                        className="flex-1 py-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs uppercase"
+                    >
+                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Confirm Delete'}
+                    </button>
+                </div>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* TRANSFER MODAL */}
+      {isOutletChangeModalOpen && recordToTransfer && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="p-6 bg-slate-900 border-b border-slate-800 flex items-center gap-3 text-white">
+                <MapPin size={20} className="text-indigo-400" />
+                <h2 className="font-bold uppercase tracking-tight">Branch Transfer</h2>
+            </div>
+            <div className="p-6 space-y-4">
+                {/* Fixed grey text issue: all labels and paragraphs now use text-slate-900 or text-black */}
+                <p className="text-sm text-slate-900 font-bold leading-relaxed">
+                    Move <strong className="text-indigo-600 underline font-extrabold">{recordToTransfer.employee_name}</strong> to a different location for today.
+                </p>
+
+                <div className="space-y-4 pt-2">
+                    <div>
+                        <label className="text-[10px] font-extrabold text-slate-900 uppercase mb-1 block">New Destination</label>
+                        <select
+                            value={newOutletId}
+                            onChange={(e) => setNewOutletId(e.target.value)}
+                            className="w-full px-4 py-2.5 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none"
+                        >
+                            <option value="">Select Outlet...</option>
+                            {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-extrabold text-slate-900 uppercase mb-1 block">Security PIN</label>
+                        <input 
+                            type="password" 
+                            value={adminPassword}
+                            onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}}
+                            className="w-full px-4 py-3 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none"
+                            placeholder="••••••••"
+                        />
+                        {errorMsg && <p className="text-[10px] text-rose-600 font-extrabold mt-1 uppercase">{errorMsg}</p>}
+                    </div>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                    <button onClick={() => setIsOutletChangeModalOpen(false)} className="flex-1 py-2.5 text-slate-900 border-2 border-slate-900 font-bold text-xs uppercase bg-white rounded-xl transition-colors hover:bg-slate-50">Cancel</button>
+                    <button 
+                        onClick={handleOutletTransfer}
+                        disabled={isProcessing || !adminPassword || !newOutletId}
+                        className="flex-1 py-2.5 bg-slate-900 text-white font-bold text-xs uppercase rounded-xl transition-colors hover:bg-slate-800 shadow-lg"
+                    >
+                        Execute Transfer
+                    </button>
+                </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
