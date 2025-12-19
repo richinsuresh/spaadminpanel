@@ -142,14 +142,24 @@ const formatDuration = (hours: number | null | undefined) => {
 };
 
 const formatPaymentMethod = (method: string | null, tookPackage: boolean) => {
-  if (tookPackage) return 'Package';
-  if (method === 'card') return 'Card';
-  if (method === 'upi') return 'UPI';
-  if (method === 'cash') return 'Cash';
-  if (!method) return 'N/A';
-  return method.charAt(0).toUpperCase() + method.slice(1);
-};
+  // Map the raw method keys to readable labels
+  const labels: Record<string, string> = {
+    card: 'Card',
+    upi: 'UPI',
+    cash: 'Cash',
+    bank_transfer: 'Bank Transfer'
+  };
 
+  const methodName = method ? (labels[method] || method.charAt(0).toUpperCase() + method.slice(1)) : 'N/A';
+
+  // If it's a new package sale, show the method + " (Package)" 
+  // e.g., "UPI (Package)"
+  if (tookPackage) {
+    return `${methodName} (Package)`;
+  }
+
+  return methodName;
+};
 
 /* ===================== MODALS (UNMODIFIED) ===================== */
 // (Modal bodies are unchanged to save space, assuming they work correctly)
