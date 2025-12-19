@@ -3,7 +3,8 @@
 
 import React, { useState, useEffect, use } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Clock, Loader2, DollarSign, Timer, ArrowLeft } from 'lucide-react';
+// Added MapPin icon for the outlet display
+import { Clock, Loader2, DollarSign, Timer, ArrowLeft, MapPin } from 'lucide-react';
 import { notFound, useRouter } from 'next/navigation';
 
 // Type for the sale data
@@ -14,6 +15,7 @@ type SaleData = {
   session_hours: number | null;
   check_out_time: string | null;
   date: string;
+  outlet_name: string; // 1. Added outlet_name to type
 };
 
 /* ===================== HELPERS ===================== */
@@ -119,7 +121,6 @@ const AddonTimingOptions: React.FC<{ sale: SaleData }> = ({ sale }) => {
 /* ===================== MAIN PAGE ===================== */
 
 export default function SaleDashboard({ params }: { params: Promise<{ id: string }> }) {
-  // 🛑 FIX: Unwrapping the params Promise using the use() hook for Next.js 15/16
   const resolvedParams = use(params);
   const id = resolvedParams.id;
   
@@ -132,7 +133,8 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
       try {
         const { data, error } = await supabase
           .from('customers') 
-          .select('id, name, check_in_time, session_hours, check_out_time, date')
+          // 2. Added outlet_name to the select query
+          .select('id, name, check_in_time, session_hours, check_out_time, date, outlet_name')
           .eq('id', id)
           .single();
         
@@ -162,13 +164,13 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
   const isOverdue = !sale.check_out_time && expectedEnd && new Date() > expectedEnd;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8 text-slate-900">
       <div className="max-w-4xl mx-auto space-y-6">
         
         {/* Back Navigation */}
         <button 
             onClick={() => router.push('/dashboard/sales')}
-            className="flex items-center text-indigo-600 hover:text-indigo-800 transition"
+            className="flex items-center text-indigo-600 hover:text-indigo-800 transition font-bold"
         >
             <ArrowLeft size={20} className="mr-2" /> Back to Sales List
         </button>
@@ -176,7 +178,14 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-6 rounded-xl shadow-sm border border-gray-100 gap-4">
             <div>
                 <h1 className="text-3xl font-bold text-gray-900">{sale.name}</h1>
-                <p className="text-gray-500">Sale ID: {sale.id}</p>
+                {/* 3. Displaying Outlet Name in the header section */}
+                <div className="flex flex-col space-y-1 mt-1">
+                    <div className="flex items-center text-indigo-600 font-bold">
+                        <MapPin size={16} className="mr-1" />
+                        <span>{sale.outlet_name || "Unknown Outlet"}</span>
+                    </div>
+                    <p className="text-gray-500 text-sm">Sale ID: {sale.id}</p>
+                </div>
             </div>
             <span className={`px-4 py-2 rounded-full text-sm font-bold uppercase ${
                 sale.check_out_time ? 'bg-green-100 text-green-700' : 
@@ -193,15 +202,15 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
                 </h3>
                 <div className="space-y-4">
                     <div className="flex justify-between items-center py-2 border-b border-gray-50">
-                        <span className="text-gray-500">Check-in</span>
-                        <span className="font-mono font-medium">{fmtTime(sale.check_in_time)}</span>
+                        <span className="text-gray-500 font-bold">Check-in</span>
+                        <span className="font-mono font-bold text-slate-900">{fmtTime(sale.check_in_time)}</span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-gray-50">
-                        <span className="text-gray-500">Duration</span>
-                        <span className="font-mono font-medium">{sale.session_hours} hrs</span>
+                        <span className="text-gray-500 font-bold">Duration</span>
+                        <span className="font-mono font-bold text-slate-900">{sale.session_hours} hrs</span>
                     </div>
                     <div className={`flex justify-between items-center py-2 px-3 rounded-lg ${isOverdue ? 'bg-red-50' : 'bg-gray-50'}`}>
-                        <span className={isOverdue ? 'text-red-600 font-bold' : 'text-gray-500'}>Expected End</span>
+                        <span className={isOverdue ? 'text-red-600 font-bold' : 'text-gray-500 font-bold'}>Expected End</span>
                         <span className={`font-mono font-bold ${isOverdue ? 'text-red-700' : 'text-gray-900'}`}>
                             {fmtTime(expectedEnd?.toISOString() || null)}
                         </span>
@@ -218,7 +227,7 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
                             <DollarSign className="text-green-600 h-8 w-8" />
                         </div>
                         <h3 className="text-lg font-bold text-gray-800">Payment Completed</h3>
-                        <p className="text-gray-500 text-sm">This session was closed at {fmtTime(sale.check_out_time)}</p>
+                        <p className="text-gray-500 text-sm font-bold">This session was closed at {fmtTime(sale.check_out_time)}</p>
                     </div>
                 )}
             </div>

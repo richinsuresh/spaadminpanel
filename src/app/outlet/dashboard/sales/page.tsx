@@ -477,23 +477,25 @@ export default function OutletSalesPage() {
   }, [statusFilter, isOverdueFilterActive, today]);
 
 
-  /* -------- Fetch outlet info and employees -------- */
+/* -------- Fetch outlet info and employees -------- */
   const fetchOutletEmployees = useCallback(async (currentOutletId: string) => {
     try {
-        // Fetch all active employees (therapists/staff) regardless of check-in status for assignment
+        // Updated query to use lowercase 'therapist' to match the database schema
         const { data, error } = await supabase
             .from('employees')
             .select('id, name')
             .eq('is_active', true)
+            .eq('role', 'therapist') // Changed from 'Therapist' to 'therapist'
             .order('name', { ascending: true });
         
         if (error) throw error;
+        
+        console.log("Employees found:", data); // Debugging line to see results in console
         setEmployees((data as Employee[]) || []);
     } catch (err) {
         console.error('Error fetching employees:', err);
     }
   }, []);
-
   useEffect(() => {
     async function fetchOutletSession() {
       try {
