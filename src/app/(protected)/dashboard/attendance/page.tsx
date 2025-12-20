@@ -13,7 +13,8 @@ import {
   CheckCircle, 
   ShieldAlert,
   Search,
-  User
+  User,
+  LogOut 
 } from 'lucide-react';
 
 // --- Types ---
@@ -46,7 +47,6 @@ const getISTDateString = (date?: Date): string => {
     return istTime.toISOString().split('T')[0];
 };
 
-// Fixed formatTime to handle undefined values correctly for TypeScript
 const formatTime = (dateStr: string | null | undefined) => {
   if (!dateStr) return '—';
   return new Date(dateStr).toLocaleTimeString('en-IN', { 
@@ -71,11 +71,17 @@ export default function AttendancePage() {
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [isOutletChangeModalOpen, setIsOutletChangeModalOpen] = useState(false);
+  const [isForceLogoutModalOpen, setIsForceLogoutModalOpen] = useState(false);
   
+  // Bulk Action Modals
+  const [isBulkLogoutModalOpen, setIsBulkLogoutModalOpen] = useState(false);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
   // Data State
   const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
   const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
   const [recordToTransfer, setRecordToTransfer] = useState<AttendanceRecord | null>(null);
+  const [recordToLogout, setRecordToLogout] = useState<AttendanceRecord | null>(null);
   
   // Form/Action State
   const [adminPassword, setAdminPassword] = useState('');
@@ -108,6 +114,32 @@ export default function AttendancePage() {
     fetchAttendance();
   }, [fetchEmployees, fetchAttendance]);
 
+  // --- ACTIONS ---
+
+  const handleForceLogout = async () => {
+    if (!recordToLogout || adminPassword !== ADMIN_PASSWORD) {
+        setErrorMsg('Incorrect admin password');
+        return;
+    }
+    setIsProcessing(true);
+    try {
+        const now = new Date().toISOString();
+        const { error: attError } = await supabase.from('attendance').update({ check_out_time: now, status: 'Present' }).eq('id', recordToLogout.id);
+        if (attError) throw attError;
+        const { error: empError } = await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).eq('id', recordToLogout.employee_id);
+        if (empError) throw empError;
+
+        setIsForceLogoutModalOpen(false);
+        setRecordToLogout(null);
+        setAdminPassword('');
+        fetchAttendance();
+    } catch (err: any) {
+        setErrorMsg(err.message || 'Failed to logout employee');
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
   const handleSingleRecordDelete = async () => {
     if (!recordToDelete || adminPassword !== ADMIN_PASSWORD) {
         setErrorMsg('Incorrect admin password');
@@ -120,13 +152,8 @@ export default function AttendancePage() {
       if (delErr) throw delErr;
       
       if (emp?.current_attendance_id === recordToDelete.id) {
-        await supabase.from('employees').update({ 
-            is_checked_in: false, 
-            current_attendance_id: null,
-            current_outlet_name: null 
-        }).eq('id', recordToDelete.employee_id);
+        await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).eq('id', recordToDelete.employee_id);
       }
-
       setIsSingleDeleteModalOpen(false);
       setRecordToDelete(null);
       setAdminPassword('');
@@ -152,6 +179,73 @@ export default function AttendancePage() {
       } finally { setIsProcessing(false); }
   };
 
+  // --- BULK ACTIONS ---
+
+  const handleBulkLogout = async () => {
+    if (adminPassword !== ADMIN_PASSWORD) { setErrorMsg('Incorrect password'); return; }
+    setIsProcessing(true);
+    try {
+        const now = new Date().toISOString();
+        
+        // Find all active records for the current filter
+        let query = supabase.from('attendance').select('id, employee_id').eq('date', dateFilter).is('check_out_time', null);
+        if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
+        
+        const { data: activeRecords, error: fetchError } = await query;
+        if (fetchError) throw fetchError;
+
+        if (activeRecords && activeRecords.length > 0) {
+            const ids = activeRecords.map(r => r.id);
+            const empIds = activeRecords.map(r => r.employee_id);
+
+            // Close Attendance
+            await supabase.from('attendance').update({ check_out_time: now, status: 'Present' }).in('id', ids);
+            // Reset Employees
+            await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
+        }
+
+        setIsBulkLogoutModalOpen(false);
+        setAdminPassword('');
+        fetchAttendance();
+    } catch (err: any) {
+        setErrorMsg(err.message);
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (adminPassword !== ADMIN_PASSWORD) { setErrorMsg('Incorrect password'); return; }
+    setIsProcessing(true);
+    try {
+        // Find all records for current filter to reset employees if needed
+        let query = supabase.from('attendance').select('id, employee_id').eq('date', dateFilter);
+        if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
+        
+        const { data: targetRecords, error: fetchError } = await query;
+        if (fetchError) throw fetchError;
+
+        if (targetRecords && targetRecords.length > 0) {
+            const ids = targetRecords.map(r => r.id);
+            const empIds = targetRecords.map(r => r.employee_id);
+
+            // Delete Attendance
+            await supabase.from('attendance').delete().in('id', ids);
+            // Reset Employees (in case they were checked in on deleted records)
+            await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
+        }
+
+        setIsBulkDeleteModalOpen(false);
+        setAdminPassword('');
+        fetchAttendance();
+    } catch (err: any) {
+        setErrorMsg(err.message);
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
@@ -172,6 +266,23 @@ export default function AttendancePage() {
         </div>
         
         <div className="flex flex-wrap gap-3 items-center">
+            
+            {/* BULK ACTIONS */}
+            <button 
+                onClick={() => { setIsBulkLogoutModalOpen(true); setErrorMsg(''); setAdminPassword(''); }}
+                className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors border border-amber-200"
+            >
+                <LogOut size={16} /> Logout All
+            </button>
+            <button 
+                onClick={() => { setIsBulkDeleteModalOpen(true); setErrorMsg(''); setAdminPassword(''); }}
+                className="px-4 py-2 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors border border-rose-200"
+            >
+                <Trash2 size={16} /> Delete All
+            </button>
+
+            <div className="h-8 w-px bg-slate-200 mx-1 hidden md:block"></div>
+
             <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                 <input 
@@ -271,13 +382,23 @@ export default function AttendancePage() {
                             )}
                             
                             {isWorking && record && (
-                                <button 
-                                  onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} 
-                                  className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" 
-                                  title="Transfer Branch"
-                                >
-                                  <MapPin size={18} />
-                                </button>
+                                <>
+                                  <button 
+                                    onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }}
+                                    className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
+                                    title="Force Check-out (Log Out)"
+                                  >
+                                    <LogOut size={18} />
+                                  </button>
+
+                                  <button 
+                                    onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} 
+                                    className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" 
+                                    title="Transfer Branch"
+                                  >
+                                    <MapPin size={18} />
+                                  </button>
+                                </>
                             )}
 
                             {record && (
@@ -302,7 +423,91 @@ export default function AttendancePage() {
 
       {/* --- MODALS --- */}
       
-      {/* DELETE MODAL */}
+      {/* FORCE LOGOUT MODAL (SINGLE) */}
+      {isForceLogoutModalOpen && recordToLogout && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="p-6 bg-amber-50 border-b border-amber-100 flex items-center gap-3 text-amber-900 font-bold">
+                <LogOut size={20} />
+                <h2 className="text-slate-900">Force Staff Logout</h2>
+            </div>
+            <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-900 font-medium">
+                    Manually checking out <strong className="text-black font-extrabold">{recordToLogout.employee_name}</strong>.
+                </p>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
+                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none" placeholder="••••••••" />
+                    {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
+                </div>
+                <div className="flex gap-3 pt-2">
+                    <button onClick={() => setIsForceLogoutModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
+                    <button onClick={handleForceLogout} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-amber-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-amber-700">
+                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Confirm Logout'}
+                    </button>
+                </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK LOGOUT MODAL */}
+      {isBulkLogoutModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="p-6 bg-amber-50 border-b border-amber-100 flex items-center gap-3 text-amber-900 font-bold">
+                <LogOut size={20} />
+                <h2 className="text-slate-900">Bulk Logout</h2>
+            </div>
+            <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-900 font-medium">
+                    You are about to force logout <strong>ALL active staff</strong> visible in the current filter. This action cannot be undone.
+                </p>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
+                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none" placeholder="••••••••" />
+                    {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
+                </div>
+                <div className="flex gap-3 pt-2">
+                    <button onClick={() => setIsBulkLogoutModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
+                    <button onClick={handleBulkLogout} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-amber-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-amber-700">
+                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Logout All'}
+                    </button>
+                </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK DELETE MODAL */}
+      {isBulkDeleteModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="p-6 bg-rose-50 border-b border-rose-100 flex items-center gap-3 text-rose-900 font-bold">
+                <Trash2 size={20} />
+                <h2 className="text-slate-900">Delete All Logs</h2>
+            </div>
+            <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-900 font-medium">
+                    <strong>Warning:</strong> This will permanently delete ALL attendance records for the selected date/outlet. Employees will be reset to "Checked Out".
+                </p>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
+                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none" placeholder="••••••••" />
+                    {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
+                </div>
+                <div className="flex gap-3 pt-2">
+                    <button onClick={() => setIsBulkDeleteModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
+                    <button onClick={handleBulkDelete} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-rose-700">
+                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Delete All'}
+                    </button>
+                </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE MODAL (SINGLE) */}
       {isSingleDeleteModalOpen && recordToDelete && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -312,28 +517,16 @@ export default function AttendancePage() {
             </div>
             <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-900 font-medium">
-                    You are permanently deleting the attendance record for <strong className="text-black font-extrabold">{recordToDelete.employee_name}</strong> on {recordToDelete.date}.
+                    You are permanently deleting the attendance record for <strong className="text-black font-extrabold">{recordToDelete.employee_name}</strong>.
                 </p>
-
                 <div>
                     <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
-                    <input 
-                        type="password" 
-                        value={adminPassword}
-                        onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none"
-                        placeholder="••••••••"
-                    />
+                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none" placeholder="••••••••" />
                     {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
                 </div>
-
                 <div className="flex gap-3 pt-2">
                     <button onClick={() => setIsSingleDeleteModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
-                    <button 
-                        onClick={handleSingleRecordDelete}
-                        disabled={isProcessing || !adminPassword}
-                        className="flex-1 py-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs uppercase"
-                    >
+                    <button onClick={handleSingleRecordDelete} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs uppercase">
                         {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Confirm Delete'}
                     </button>
                 </div>
@@ -351,43 +544,26 @@ export default function AttendancePage() {
                 <h2 className="font-bold uppercase tracking-tight">Branch Transfer</h2>
             </div>
             <div className="p-6 space-y-4">
-                {/* Fixed grey text issue: all labels and paragraphs now use text-slate-900 or text-black */}
                 <p className="text-sm text-slate-900 font-bold leading-relaxed">
                     Move <strong className="text-indigo-600 underline font-extrabold">{recordToTransfer.employee_name}</strong> to a different location for today.
                 </p>
-
                 <div className="space-y-4 pt-2">
                     <div>
                         <label className="text-[10px] font-extrabold text-slate-900 uppercase mb-1 block">New Destination</label>
-                        <select
-                            value={newOutletId}
-                            onChange={(e) => setNewOutletId(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none"
-                        >
+                        <select value={newOutletId} onChange={(e) => setNewOutletId(e.target.value)} className="w-full px-4 py-2.5 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none">
                             <option value="">Select Outlet...</option>
                             {OUTLETS.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                         </select>
                     </div>
                     <div>
                         <label className="text-[10px] font-extrabold text-slate-900 uppercase mb-1 block">Security PIN</label>
-                        <input 
-                            type="password" 
-                            value={adminPassword}
-                            onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}}
-                            className="w-full px-4 py-3 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none"
-                            placeholder="••••••••"
-                        />
+                        <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-white border-2 border-slate-900 rounded-xl text-sm font-black text-black outline-none" placeholder="••••••••" />
                         {errorMsg && <p className="text-[10px] text-rose-600 font-extrabold mt-1 uppercase">{errorMsg}</p>}
                     </div>
                 </div>
-
                 <div className="flex gap-3 pt-4">
                     <button onClick={() => setIsOutletChangeModalOpen(false)} className="flex-1 py-2.5 text-slate-900 border-2 border-slate-900 font-bold text-xs uppercase bg-white rounded-xl transition-colors hover:bg-slate-50">Cancel</button>
-                    <button 
-                        onClick={handleOutletTransfer}
-                        disabled={isProcessing || !adminPassword || !newOutletId}
-                        className="flex-1 py-2.5 bg-slate-900 text-white font-bold text-xs uppercase rounded-xl transition-colors hover:bg-slate-800 shadow-lg"
-                    >
+                    <button onClick={handleOutletTransfer} disabled={isProcessing || !adminPassword || !newOutletId} className="flex-1 py-2.5 bg-slate-900 text-white font-bold text-xs uppercase rounded-xl transition-colors hover:bg-slate-800 shadow-lg">
                         Execute Transfer
                     </button>
                 </div>

@@ -16,7 +16,7 @@ function QRCodeComponent() {
   const amount = searchParams.get('amount');
 
   // Path to go back to the form
-  const clientFormPath = `/client-form/${outletId}`;
+  const clientFormPath = `/outlet/dashboard/sales`;
 
   const outlet = OUTLETS.find((o) => o.id === outletId);
   const outletName = outlet?.name.replace('Berry Spa - ', '') || 'Client Form';

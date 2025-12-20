@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link'; 
-import { Menu, X, LogOut, LayoutDashboard, Receipt, Package } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Receipt, Package, UserPlus } from 'lucide-react';
 
 export default function OutletDashboardLayout({
   children,
@@ -13,6 +13,7 @@ export default function OutletDashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const [outletName, setOutletName] = useState('Outlet Panel');
+  const [outletId, setOutletId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -22,6 +23,9 @@ export default function OutletDashboardLayout({
         const data = await res.json();
         if (data.outletName) {
           setOutletName(data.outletName);
+        }
+        if (data.outletId) {
+          setOutletId(data.outletId);
         }
       } catch (err) {
         console.error("Could not fetch outlet session", err);
@@ -37,13 +41,26 @@ export default function OutletDashboardLayout({
   };
   
   const navItems = [
+    { name: 'New Client', href: '/outlet/dashboard/client-form/[outletId]', icon: <UserPlus size={18} /> },
     { name: 'Sales & Check-out', href: '/outlet/dashboard/sales', icon: <LayoutDashboard size={18} /> },
     { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: <Receipt size={18} /> },
     { name: 'New Package Sale', href: '/outlet/dashboard/packages/new', icon: <Package size={18} /> },
   ];
   
-  const getLinkClass = (href: string) => {
-    const isActive = pathname === href || pathname.startsWith(href) || (href === '/outlet/dashboard/sales' && pathname === '/outlet/dashboard');
+  // Helper to resolve the [outletId] placeholder
+  const resolveHref = (href: string) => {
+    if (href.includes('[outletId]')) {
+      return href.replace('[outletId]', outletId || 'pending');
+    }
+    return href;
+  };
+
+  const getLinkClass = (rawHref: string) => {
+    const resolvedHref = resolveHref(rawHref);
+    const isActive = pathname === resolvedHref || 
+                     (resolvedHref !== '/outlet/dashboard/sales' && pathname.startsWith(resolvedHref)) || 
+                     (resolvedHref === '/outlet/dashboard/sales' && pathname === '/outlet/dashboard');
+                     
     return `flex items-center px-6 py-3 text-sm font-medium transition-colors ${
       isActive 
         ? 'bg-red-900/50 text-white border-r-4 border-red-500' 
@@ -79,7 +96,7 @@ export default function OutletDashboardLayout({
           {navItems.map((item) => (
             <Link
               key={item.href}
-              href={item.href}
+              href={resolveHref(item.href)}
               className={getLinkClass(item.href)}
               onClick={() => setIsSidebarOpen(false)} 
             >
@@ -116,7 +133,6 @@ export default function OutletDashboardLayout({
         </header>
         
         <main className="flex-1 bg-gray-100 overflow-y-auto">
-          {/* Main container with standard padding for all devices */}
           <div className="max-w-7xl mx-auto p-4 md:p-8">
             {children}
           </div>

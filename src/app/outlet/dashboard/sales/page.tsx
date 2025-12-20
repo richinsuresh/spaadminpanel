@@ -814,7 +814,7 @@ export default function OutletSalesPage() {
   }, [assignmentSale]);
 
 
-  /* -------- Totals (Unchanged) -------- */
+  /* -------- Totals (Fixed) -------- */
   const completedSales = useMemo(
     () => sales.filter((sale) => sale.check_out_time),
     [sales],
@@ -833,7 +833,8 @@ export default function OutletSalesPage() {
     () =>
       completedSales
         .filter((s) => s.payment_method === 'cash')
-        .reduce((a, s) => a + s.amount_paid, 0),
+        // FIX: Now uses package_amount if it's a package sale
+        .reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
     [completedSales],
   );
 
@@ -841,7 +842,8 @@ export default function OutletSalesPage() {
     () =>
       completedSales
         .filter((s) => s.payment_method === 'upi')
-        .reduce((a, s) => a + s.amount_paid, 0),
+        // FIX: Now uses package_amount if it's a package sale
+        .reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
     [completedSales],
   );
 
@@ -849,7 +851,8 @@ export default function OutletSalesPage() {
     () =>
       completedSales
         .filter((s) => s.payment_method === 'card')
-        .reduce((a, s) => a + s.amount_paid, 0),
+        // FIX: Now uses package_amount if it's a package sale
+        .reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
     [completedSales],
   );
 

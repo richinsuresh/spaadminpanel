@@ -29,7 +29,7 @@ function SuccessContent() {
       }
       
       // 2. Set the correct redirection path to the client form
-      path = `/client-form/${outletId}`;
+      path = `outlet/dashboard/sales`;
       setOutletName(name);
     }
     
