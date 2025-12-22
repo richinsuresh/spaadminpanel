@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link'; 
-import { Menu, X, LogOut, LayoutDashboard, Receipt, Package, UserPlus } from 'lucide-react';
+// ADDED: Clock icon import
+import { Menu, X, LogOut, LayoutDashboard, Receipt, Package, UserPlus, Clock } from 'lucide-react';
 
 export default function OutletDashboardLayout({
   children,
@@ -44,6 +45,8 @@ export default function OutletDashboardLayout({
     { name: 'New Client', href: '/outlet/dashboard/client-form/[outletId]', icon: <UserPlus size={18} /> },
     { name: 'Sales & Check-out', href: '/outlet/dashboard/sales', icon: <LayoutDashboard size={18} /> },
     { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: <Receipt size={18} /> },
+    // ADDED: Attendance Link
+    { name: 'Attendance', href: '/outlet/dashboard/attendance', icon: <Clock size={18} /> },
     { name: 'New Package Sale', href: '/outlet/dashboard/packages/new', icon: <Package size={18} /> },
   ];
   
