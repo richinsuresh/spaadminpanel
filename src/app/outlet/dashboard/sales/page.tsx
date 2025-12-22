@@ -278,28 +278,53 @@ function CheckoutConfirmModal({
 function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: StaffAssignmentModalProps) {
     if (!data) return null;
 
-    const [mainTherapist, setMainTherapist] = useState(data.initialTherapist || '');
-    const [mainRoom, setMainRoom] = useState(data.initialRoom || '');
-    const [groupAssignments, setGroupAssignments] = useState(data.groupCustomers ? 
-        data.groupCustomers.map(gc => ({
-            therapist: gc.therapist_name === 'CLIENT_FORM_PENDING' ? '' : gc.therapist_name || '',
-            room: gc.room === 'CLIENT_FORM_PENDING' ? '' : gc.room || ''
-        })) : []);
+    // Helper to split "Therapist 1 & Therapist 2"
+    const splitName = (name: string | null) => {
+        if (!name || name === 'CLIENT_FORM_PENDING') return { t1: '', t2: '' };
+        const parts = name.split(' & ');
+        return { t1: parts[0] || '', t2: parts[1] || '' };
+    };
 
-    const handleGroupChange = (index: number, field: 'therapist' | 'room', value: string) => {
+    const initMain = splitName(data.initialTherapist);
+    const [mainTherapist1, setMainTherapist1] = useState(initMain.t1);
+    const [mainTherapist2, setMainTherapist2] = useState(initMain.t2);
+    
+    const [mainRoom, setMainRoom] = useState(data.initialRoom || '');
+    
+    const [groupAssignments, setGroupAssignments] = useState(data.groupCustomers ? 
+        data.groupCustomers.map(gc => {
+            const parts = splitName(gc.therapist_name);
+            return {
+                therapist1: parts.t1,
+                therapist2: parts.t2,
+                room: gc.room === 'CLIENT_FORM_PENDING' ? '' : gc.room || ''
+            };
+        }) : []);
+
+    const handleGroupChange = (index: number, field: 'therapist1' | 'therapist2' | 'room', value: string) => {
         setGroupAssignments(prev => prev.map((item, i) => 
             i === index ? { ...item, [field]: value } : item
         ));
     };
 
     const handleSave = () => {
-        const groupUpdates = groupAssignments.map((assignment, index) => ({
-            index: index,
-            therapist: assignment.therapist.trim(),
-            room: assignment.room.trim(),
-        }));
+        // Combine main therapists
+        const combinedMain = mainTherapist1 
+            ? (mainTherapist2 ? `${mainTherapist1} & ${mainTherapist2}` : mainTherapist1) 
+            : '';
 
-        onSave(data.saleId, mainTherapist.trim(), mainRoom.trim(), groupUpdates);
+        const groupUpdates = groupAssignments.map((assignment, index) => {
+            const combinedGroup = assignment.therapist1 
+                ? (assignment.therapist2 ? `${assignment.therapist1} & ${assignment.therapist2}` : assignment.therapist1) 
+                : '';
+            return {
+                index: index,
+                therapist: combinedGroup.trim(),
+                room: assignment.room.trim(),
+            };
+        });
+
+        onSave(data.saleId, combinedMain.trim(), mainRoom.trim(), groupUpdates);
     };
 
     const needsAssignment = (data.initialTherapist === null || data.initialTherapist === 'CLIENT_FORM_PENDING') || 
@@ -325,18 +350,31 @@ function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: St
                     {/* Main Customer Assignment */}
                     <div className="border p-4 rounded-lg bg-gray-50">
                         <h3 className="text-lg font-semibold text-gray-800 mb-3">Main Customer</h3>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Therapist (Main)</label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-medium text-gray-700">Primary Therapist</label>
                                 <select
-                                    value={mainTherapist}
-                                    onChange={(e) => setMainTherapist(e.target.value)}
+                                    value={mainTherapist1}
+                                    onChange={(e) => setMainTherapist1(e.target.value)}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                                     disabled={isSaving}
                                 >
-                                    <option value="">— Select Therapist —</option>
+                                    <option value="">— Select Primary —</option>
                                     {employees.map(emp => (
                                         <option key={emp.id} value={emp.name}>{emp.name}</option>
+                                    ))}
+                                </select>
+                                
+                                <label className="block text-xs font-medium text-gray-500 mt-2">Secondary Therapist (Optional)</label>
+                                <select
+                                    value={mainTherapist2}
+                                    onChange={(e) => setMainTherapist2(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                                    disabled={isSaving}
+                                >
+                                    <option value="">— None —</option>
+                                    {employees.map(emp => (
+                                        <option key={`sec-${emp.id}`} value={emp.name}>{emp.name}</option>
                                     ))}
                                 </select>
                             </div>
@@ -363,18 +401,31 @@ function StaffAssignmentModal({ data, employees, onClose, onSave, isSaving }: St
                                     <p className="font-medium text-sm text-gray-700">
                                         {gc.name || `Guest ${index + 1}`} ({formatDuration(gc.sessionHours)} for {gc.treatment})
                                     </p>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-700 mb-1">Therapist</label>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="block text-xs font-medium text-gray-700">Primary Therapist</label>
                                             <select
-                                                value={groupAssignments[index].therapist}
-                                                onChange={(e) => handleGroupChange(index, 'therapist', e.target.value)}
+                                                value={groupAssignments[index].therapist1}
+                                                onChange={(e) => handleGroupChange(index, 'therapist1', e.target.value)}
                                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                                                 disabled={isSaving}
                                             >
-                                                <option value="">— Select Therapist —</option>
+                                                <option value="">— Select Primary —</option>
                                                 {employees.map(emp => (
                                                     <option key={emp.id} value={emp.name}>{emp.name}</option>
+                                                ))}
+                                            </select>
+
+                                            <label className="block text-xs font-medium text-gray-500">Secondary (Optional)</label>
+                                            <select
+                                                value={groupAssignments[index].therapist2}
+                                                onChange={(e) => handleGroupChange(index, 'therapist2', e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                                disabled={isSaving}
+                                            >
+                                                <option value="">— None —</option>
+                                                {employees.map(emp => (
+                                                    <option key={`grp-sec-${emp.id}`} value={emp.name}>{emp.name}</option>
                                                 ))}
                                             </select>
                                         </div>

@@ -59,6 +59,14 @@ type Employee = { id: string; name: string }; // Type for therapists
 
 /* ===================== HELPERS ===================== */
 
+// Helper to split decimal hours into { hrs, mins }
+const decimalToTime = (decimal: number) => {
+  const safeDecimal = Number(decimal) || 0;
+  const hrs = Math.floor(safeDecimal);
+  const mins = Math.round((safeDecimal - hrs) * 60);
+  return { hrs, mins };
+};
+
 const formatCurrency = (v: number) =>
   new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -100,9 +108,18 @@ const getExpectedCheckoutTime = (inTime: string | null, hrs: number | null) => {
 };
 
 const formatDuration = (h: number | null | undefined) => {
-  if (!h && h !== 0) return '—';
-  if (h < 1) return `${Math.round(h * 60)} mins`;
-  return `${h} hr`;
+  if (h === null || h === undefined) return '—';
+  const n = Number(h);
+  if (n === 0) return '—';
+
+  // Convert to total minutes to avoid decimal math errors
+  const totalMins = Math.round(n * 60);
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+
+  if (hrs === 0) return `${mins} mins`;
+  if (mins === 0) return `${hrs} hr${hrs > 1 ? 's' : ''}`;
+  return `${hrs}hr ${mins}m`;
 };
 
 const formatPaymentMethod = (m: string | null) => {
@@ -116,15 +133,40 @@ const formatService = (sale: Sale) => {
   return sale.treatment;
 };
 
+// Force HH:mm format (24h) regardless of locale
 const toInputTime = (d: string | null) => {
   if (!d) return '';
-  const t = new Date(d);
-  return isNaN(t.getTime())
-    ? ''
-    : t.toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return '';
+  const h = String(date.getHours()).padStart(2, '0');
+  const m = String(date.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+};
+
+// Robust calculation that returns strict HH:mm
+const calculateOutTime = (startTime: string, h: string | number, m: string | number) => {
+  if (!startTime) return '';
+  const [hoursStr, minutesStr] = startTime.split(':');
+  const startH = parseInt(hoursStr, 10);
+  const startM = parseInt(minutesStr, 10);
+
+  if (isNaN(startH) || isNaN(startM)) return '';
+
+  const date = new Date();
+  date.setHours(startH);
+  date.setMinutes(startM);
+
+  // Add Duration
+  const addH = Number(h) || 0;
+  const addM = Number(m) || 0;
+
+  date.setHours(date.getHours() + addH);
+  date.setMinutes(date.getMinutes() + addM);
+
+  // Format manually to ensure HH:mm
+  const finalH = String(date.getHours()).padStart(2, '0');
+  const finalM = String(date.getMinutes()).padStart(2, '0');
+  return `${finalH}:${finalM}`;
 };
 
 const toInputDate = (d: string | null): string => {
@@ -303,9 +345,36 @@ export default function AdminSalesPage() {
   
 
   /* ===================== EDIT ===================== */
+// Helper to calculate new Out Time based on In Time + Duration
+  const calculateOutTime = (startTime: string, h: string | number, m: string | number) => {
+    if (!startTime) return '';
+    const [hours, minutes] = startTime.split(':').map(Number);
+    if (isNaN(hours) || isNaN(minutes)) return '';
+    
+    const date = new Date();
+    date.setHours(hours);
+    date.setMinutes(minutes);
+    
+    // Add Duration
+    const addH = Number(h) || 0;
+    const addM = Number(m) || 0;
+    
+    date.setHours(date.getHours() + addH);
+    date.setMinutes(date.getMinutes() + addM);
+    
+    // Return HH:MM (24h format)
+    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  };
+
+
+
 
   const handleOpenEdit = (sale: Sale) => {
     setEditingSale(sale);
+    
+    // Split existing therapist names
+    const tParts = (sale.therapist_name || '').split(' & ');
+
     setEditForm({
       name: sale.name,
       mobile: sale.mobile,
@@ -315,7 +384,11 @@ export default function AdminSalesPage() {
       payment_method: sale.payment_method,
       amount:
         (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-      therapist_name: sale.therapist_name,
+      
+      // Store separate therapist fields
+      therapist_name1: tParts[0] || '',
+      therapist_name2: tParts[1] || '',
+
       room: sale.room,
       session_hours: sale.session_hours,
       check_in_time: toInputTime(sale.check_in_time),
@@ -325,12 +398,29 @@ export default function AdminSalesPage() {
     setSaveError(null);
     setIsEditModalOpen(true);
   };
-
   const handleEditFormChange = (e: any) => {
     const { name, value } = e.target;
     setEditForm((p: any) => ({ ...p, [name]: value }));
   };
 
+const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditForm((prev: any) => {
+      const updated = { ...prev, [name]: value };
+
+      // 🛑 FIX: Only update check_out_time if the sale is ALREADY checked out.
+      // If prev.check_out_time is empty (Active Sale), do NOT calculate it.
+      // This prevents the system from accidentally checking out the customer.
+      if (updated.check_in_time && prev.check_out_time) {
+         updated.check_out_time = calculateOutTime(
+            updated.check_in_time, 
+            updated.session_hours_h, 
+            updated.session_hours_m
+         );
+      }
+      return updated;
+    });
+  };
   const handleCloseEdit = () => {
     setIsEditModalOpen(false);
     setEditingSale(null);
@@ -339,11 +429,10 @@ export default function AdminSalesPage() {
     setSaveError(null);
   };
 
-  const handleSaveEdit = async (e: FormEvent) => {
+ const handleSaveEdit = async (e: FormEvent) => {
     e.preventDefault();
     setSaveError(null);
 
-    // NOTE: Hardcoded password 'admin123' should be replaced with proper authentication/role check
     if (editPassword !== 'admin123') {
       setSaveError('Wrong password');
       return;
@@ -354,14 +443,21 @@ export default function AdminSalesPage() {
     }
     if (!editingSale) return;
 
+    // 1. Calculate Total Hours first to validate
+    const totalHours = (Number(editForm.session_hours_h) || 0) + (Number(editForm.session_hours_m) || 0) / 60;
+
+    // Validation: Prevent saving if duration is 0
+    if (totalHours <= 0) {
+      setSaveError('Duration cannot be zero or empty.');
+      return;
+    }
+
     setIsSaving(true);
 
-    // BEFORE snapshot
     const before = { ...editingSale };
-
     const amountNumber = Number(editForm.amount || 0);
 
-    // Build new check_in_time from edited date + time (if provided)
+    // 2. Reconstruct Check-In Time
     let newCheckInTime: string | null = editingSale.check_in_time;
     if (editForm.date && editForm.check_in_time) {
       const combined = new Date(`${editForm.date}T${editForm.check_in_time}`);
@@ -370,6 +466,24 @@ export default function AdminSalesPage() {
       }
     }
 
+    // 3. Reconstruct Check-Out Time
+    let newCheckOutTime: string | null = editingSale.check_out_time;
+    if (editForm.check_out_time) {
+        if (editForm.date) {
+            const combinedOut = new Date(`${editForm.date}T${editForm.check_out_time}`);
+            if (!isNaN(combinedOut.getTime())) {
+                newCheckOutTime = combinedOut.toISOString();
+            }
+        }
+    } else {
+        newCheckOutTime = null;
+    }
+
+    // 4. Combine Therapist Names
+    const t1 = editForm.therapist_name1;
+    const t2 = editForm.therapist_name2;
+    const combinedTherapist = t1 ? (t2 ? `${t1} & ${t2}` : t1) : null;
+
     const updates: Partial<Sale> & {
       amount_paid: number;
       package_amount: number;
@@ -377,11 +491,12 @@ export default function AdminSalesPage() {
       name: editForm.name,
       mobile: editForm.mobile,
       treatment: editForm.treatment,
-      therapist_name: editForm.therapist_name || null, // Value comes from the dropdown selection
+      therapist_name: combinedTherapist,
       room: editForm.room || null,
-      session_hours: editForm.session_hours
-        ? Number(editForm.session_hours)
-        : null,
+      
+      // Save new duration
+      session_hours: totalHours,
+      
       payment_method: editForm.payment_method,
       amount_paid: editingSale.took_package
         ? 0
@@ -390,10 +505,14 @@ export default function AdminSalesPage() {
         ? Math.round(amountNumber * 100)
         : editingSale.package_amount,
 
-      // persist edited date, outlet, and check-in time
-      date: editForm.date, // "YYYY-MM-DD"
+      date: editForm.date,
       outlet_id: editForm.outlet_id,
       check_in_time: newCheckInTime,
+      check_out_time: newCheckOutTime,
+
+      // 🛑 FIX: Clear legacy manual text fields so the table uses the new calculated times
+      in_time: null,
+      out_time: null,
     };
 
     const { error } = await supabase
@@ -409,7 +528,6 @@ export default function AdminSalesPage() {
 
     const after = { ...before, ...updates };
 
-    // Log with before/after so Activity page can show diffs
     await supabase.from('activity_logs').insert({
       action_type: 'edit_sale',
       description: JSON.stringify({
@@ -417,7 +535,7 @@ export default function AdminSalesPage() {
         before,
         after,
       }),
-      username: 'admin', // TODO: replace with real logged-in user later
+      username: 'admin',
     });
 
     setIsEditModalOpen(false);
@@ -427,7 +545,6 @@ export default function AdminSalesPage() {
     await fetchSales();
     setIsSaving(false);
   };
-
   /* ===================== CHECK OUT ===================== */
 
   const handleCheckOut = async (id: string) => {
@@ -1164,18 +1281,17 @@ export default function AdminSalesPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
-              <div>
+            <div className="grid grid-cols-3 gap-4"> </div>
+              {/* Updated Therapist Selection: Spans 2 columns */}
+              <div className="col-span-2">
                 <label className="text-xs font-semibold text-black">
-                  Therapist
+                  Therapist 1
                 </label>
-                {/* // 🛑 NEW DROPDOWN MENU FOR THERAPIST 🛑
-                */}
                 <select
-                  name="therapist_name"
-                  value={editForm.therapist_name}
+                  name="therapist_name1"
+                  value={editForm.therapist_name1 ?? ''}
                   onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black"
+                  className="w-full p-2 border rounded bg-white text-black mb-2"
                 >
                   <option value="">— Select Therapist —</option>
                   {therapists.map((t) => (
@@ -1184,48 +1300,99 @@ export default function AdminSalesPage() {
                     </option>
                   ))}
                 </select>
+
+                <label className="text-xs font-semibold text-black">
+                  Therapist 2 (Optional)
+                </label>
+                <select
+                  name="therapist_name2"
+                  value={editForm.therapist_name2 ?? ''}
+                  onChange={handleEditFormChange}
+                  className="w-full p-2 border rounded bg-white text-black"
+                >
+                  <option value="">— None —</option>
+                  {therapists.map((t) => (
+                    <option key={`edit-sec-${t.id}`} value={t.name}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div>
+             <div>
                 <label className="text-xs font-semibold text-black">
                   Room
                 </label>
                 <input
                   type="text"
                   name="room"
-                  value={editForm.room}
+                  // 🛑 FIX: Use ?? '' to prevent null value error
+                  value={editForm.room ?? ''}
                   onChange={handleEditFormChange}
                   className="w-full p-2 border rounded text-black bg-white"
                 />
               </div>
 
+            {/* DURATION (Split into Hrs / Mins) */}
               <div>
                 <label className="text-xs font-semibold text-black">
-                  Duration (hrs)
+                  Duration
+                </label>
+                <div className="flex gap-2">
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Hrs"
+                      name="session_hours_h"
+                      value={editForm.session_hours_h ?? ''}
+                      onChange={handleDurationChange} // <--- MUST BE THIS HANDLER
+                      className="w-full p-2 border rounded text-black bg-white pr-8"
+                      min="0"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">HR</span>
+                  </div>
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Mins"
+                      name="session_hours_m"
+                      value={editForm.session_hours_m ?? ''}
+                      onChange={handleDurationChange} // <--- MUST BE THIS HANDLER
+                      className="w-full p-2 border rounded text-black bg-white pr-8"
+                      min="0"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">MIN</span>
+                  </div>
+                </div>
+              </div>
+
+            {/* TIME */}
+            {/* REPLACED: Time Inputs Grid */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-black">
+                  Check-In Time
                 </label>
                 <input
-                  type="number"
-                  step="0.1"
-                  name="session_hours"
-                  value={editForm.session_hours as number | ''}
+                  type="time"
+                  name="check_in_time"
+                  value={editForm.check_in_time || ''}
                   onChange={handleEditFormChange}
                   className="w-full p-2 border rounded text-black bg-white"
                 />
               </div>
-            </div>
-
-            {/* TIME */}
-            <div>
-              <label className="text-xs font-semibold text-black">
-                Check-In Time
-              </label>
-              <input
-                type="time"
-                name="check_in_time"
-                value={editForm.check_in_time || ''}
-                onChange={handleEditFormChange}
-                className="w-full p-2 border rounded text-black bg-white"
-              />
+              <div>
+                <label className="text-xs font-semibold text-black">
+                  Check-Out Time
+                </label>
+                <input
+                  type="time"
+                  name="check_out_time"
+                  value={editForm.check_out_time || ''}
+                  onChange={handleEditFormChange}
+                  className="w-full p-2 border rounded text-black bg-white"
+                />
+              </div>
             </div>
 
             {/* REQUIRED EDIT REMARK */}

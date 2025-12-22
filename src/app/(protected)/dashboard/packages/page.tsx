@@ -91,6 +91,13 @@ const fmtDuration = (h: number | null | undefined) => {
   const mins = m - hrs * 60;
   return mins === 0 ? `${hrs}h` : `${hrs}h ${mins}m`;
 };
+// Helper to split decimal hours into { hrs, mins }
+const decimalToTime = (decimal: number) => {
+  const safeDecimal = Number(decimal) || 0;
+  const hrs = Math.floor(safeDecimal);
+  const mins = Math.round((safeDecimal - hrs) * 60);
+  return { hrs, mins };
+};
 
 const normalizeHistoryRow = (r: any): HistoryRow => {
   const maybeStr = (v: any) =>
@@ -367,12 +374,22 @@ export default function PackagesPage() {
   ) => {
     e.stopPropagation();
     setSelectedPackage(pkg);
+
+    // Convert decimals to Hours & Minutes
+    const { hrs: totalH, mins: totalM } = decimalToTime(pkg.total_hours);
+    const { hrs: usedH, mins: usedM } = decimalToTime(pkg.used_hours);
+
     setEditFormData({
       name: pkg.name,
       mobile: pkg.mobile,
       package_amount: pkg.package_amount / 100,
-      total_hours: pkg.total_hours,
-      used_hours: pkg.used_hours,
+      
+      // Store split values for the form inputs
+      total_hours_h: totalH,
+      total_hours_m: totalM,
+      used_hours_h: usedH,
+      used_hours_m: usedM,
+
       remaining_hours: pkg.remaining_hours,
       start_date: toInputDate(pkg.start_date),
       expiry_date: toInputDate(pkg.expiry_date),
@@ -413,8 +430,10 @@ export default function PackagesPage() {
     try {
       const before = { ...selectedPackage };
 
-      const total_hours = Number(editFormData.total_hours) || 0;
-      const used_hours = Number(editFormData.used_hours) || 0;
+      // Re-calculate decimals from the split form fields
+      const total_hours = (Number(editFormData.total_hours_h) || 0) + (Number(editFormData.total_hours_m) || 0) / 60;
+      const used_hours = (Number(editFormData.used_hours_h) || 0) + (Number(editFormData.used_hours_m) || 0) / 60;
+      
       const remaining_hours = total_hours - used_hours;
 
       const updates: any = {
@@ -551,7 +570,7 @@ export default function PackagesPage() {
     }
   };
 
-  /* ========== NEW: FETCH HISTORY WHEN CLICKING A ROW ========== */
+  /* ========== FETCH HISTORY (FILTERED) ========== */
 
   const fetchHistoryForMobile = async (mobile: string) => {
     if (!mobile) return;
@@ -573,7 +592,17 @@ export default function PackagesPage() {
         return;
       }
 
-      const rows = (data ?? []).map(normalizeHistoryRow);
+      // Filter: Only show Package Usage or Package Purchase.
+      const rows = (data ?? [])
+        .map(normalizeHistoryRow)
+        .filter(r => {
+            const isRedemption = r.is_package_customer;
+            // Check raw data for purchase flag
+            const isPurchase = r._raw?.took_package || r._raw?.tookPackage;
+            
+            return isRedemption || isPurchase;
+        });
+
       setHistoryRows(rows);
     } catch (e: any) {
       console.error('Unexpected history fetch error:', e);
@@ -584,20 +613,19 @@ export default function PackagesPage() {
     }
   };
 
+  // This function was missing:
   const handleRowClick = (pkg: PackageCustomer) => {
     setSelectedPackage(pkg);
     setIsDetailsModalOpen(true);
     fetchHistoryForMobile(pkg.mobile);
   };
-
-  const closeDetailsModal = () => {
+const closeDetailsModal = () => {
     setIsDetailsModalOpen(false);
     setSelectedPackage(null);
     setHistoryRows([]);
     setHistoryLoading(false);
     setHistoryError(null);
   };
-
   return (
     <div>
       {/* Header & Filters */}
@@ -958,40 +986,64 @@ export default function PackagesPage() {
                 />
               </div>
 
+            {/* REPLACED: Total Hours Split Fields */}
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">
-                  Total Hours
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={editFormData.total_hours ?? 0}
-                  onChange={(e) =>
-                    setEditFormData({
-                      ...editFormData,
-                      total_hours: e.target.value,
-                    })
-                  }
-                  className="w-full p-2 border rounded text-black"
-                />
+                <label className="text-xs uppercase font-bold text-gray-500">Total Duration</label>
+                <div className="flex gap-2">
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Hrs"
+                      value={editFormData.total_hours_h ?? 0}
+                      onChange={(e) => setEditFormData({ ...editFormData, total_hours_h: e.target.value })}
+                      className="w-full p-2 border rounded text-black pr-8"
+                      min="0"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">HR</span>
+                  </div>
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Mins"
+                      value={editFormData.total_hours_m ?? 0}
+                      onChange={(e) => setEditFormData({ ...editFormData, total_hours_m: e.target.value })}
+                      className="w-full p-2 border rounded text-black pr-8"
+                      min="0"
+                      max="59"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">MIN</span>
+                  </div>
+                </div>
               </div>
 
+              {/* REPLACED: Used Hours Split Fields */}
               <div>
-                <label className="text-xs uppercase font-bold text-gray-500">
-                  Used Hours
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={editFormData.used_hours ?? 0}
-                  onChange={(e) =>
-                    setEditFormData({
-                      ...editFormData,
-                      used_hours: e.target.value,
-                    })
-                  }
-                  className="w-full p-2 border rounded text-black"
-                />
+                <label className="text-xs uppercase font-bold text-gray-500">Used Duration</label>
+                <div className="flex gap-2">
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Hrs"
+                      value={editFormData.used_hours_h ?? 0}
+                      onChange={(e) => setEditFormData({ ...editFormData, used_hours_h: e.target.value })}
+                      className="w-full p-2 border rounded text-black pr-8"
+                      min="0"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">HR</span>
+                  </div>
+                  <div className="relative w-1/2">
+                    <input
+                      type="number"
+                      placeholder="Mins"
+                      value={editFormData.used_hours_m ?? 0}
+                      onChange={(e) => setEditFormData({ ...editFormData, used_hours_m: e.target.value })}
+                      className="w-full p-2 border rounded text-black pr-8"
+                      min="0"
+                      max="59"
+                    />
+                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">MIN</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1253,50 +1305,64 @@ export default function PackagesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {historyRows.map((h, idx) => (
-                        <tr
-                          key={h.id || `${h.mobile}-${idx}`}
-                          className={
-                            h.is_package_customer
-                              ? 'bg-indigo-50/50'
-                              : 'hover:bg-gray-50'
-                          }
-                        >
-                          <td className="px-4 py-2 whitespace-nowrap">
-                            <div className="font-medium text-gray-900">
-                              {fmtDate(h.date)}
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {fmtTime(h.check_in_time)}
-                            </div>
-                          </td>
-                          <td className="px-4 py-2">
-                            <span className="text-gray-900">
-                              {h.treatment ?? '—'}
-                            </span>
-                            {h.is_package_customer && (
-                              <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
-                                Redeemed
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-                            {fmtDuration(h.session_hours)}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-                            {h.therapist_name ?? '—'}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-                            {h.outlet_name ?? '—'}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-right text-gray-900">
-                            {h.amount_paid
-                              ? `₹${(h.amount_paid / 100).toLocaleString()}`
-                              : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
+  {historyRows.map((h, idx) => {
+    const isPurchase = h._raw?.took_package || h._raw?.tookPackage;
+    
+    return (
+      <tr
+        key={h.id || `${h.mobile}-${idx}`}
+        className={
+          h.is_package_customer
+            ? 'bg-indigo-50/50'
+            : 'hover:bg-gray-50'
+        }
+      >
+        <td className="px-4 py-2 whitespace-nowrap">
+          <div className="font-medium text-gray-900">
+            {fmtDate(h.date)}
+          </div>
+          <div className="text-xs text-gray-500">
+            {fmtTime(h.check_in_time)}
+          </div>
+        </td>
+        <td className="px-4 py-2">
+          {/* 1. Show the actual treatment name */}
+          <span className="text-gray-900 font-medium">
+            {h.treatment ?? '—'}
+          </span>
+
+          {/* 2. Show "Package Taken" badge on the side if applicable */}
+          {isPurchase && (
+            <span className="ml-2 text-xs bg-green-100 text-green-800 border border-green-200 px-2 py-0.5 rounded-md font-bold">
+              Package Taken
+            </span>
+          )}
+
+          {/* 3. Show "Redeemed" badge if applicable */}
+          {h.is_package_customer && (
+            <span className="ml-2 text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-md">
+              Redeemed
+            </span>
+          )}
+        </td>
+        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+          {fmtDuration(h.session_hours)}
+        </td>
+        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+          {h.therapist_name ?? '—'}
+        </td>
+        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+          {h.outlet_name ?? '—'}
+        </td>
+        <td className="px-4 py-2 whitespace-nowrap text-right text-gray-900">
+          {h.amount_paid
+            ? `₹${(h.amount_paid / 100).toLocaleString()}`
+            : '—'}
+        </td>
+      </tr>
+    );
+  })}
+</tbody>
                   </table>
                 </div>
               )}
