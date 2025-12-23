@@ -42,7 +42,7 @@ type HistoryRow = {
   _raw?: any;
 };
 
-/* ===================== HELPERS ===================== */
+//* ===================== HELPERS ===================== */
 
 const toInputDate = (dateString: string | null): string => {
   if (!dateString) return '';
@@ -62,7 +62,7 @@ const formatDate = (dateString: string | null) => {
   });
 };
 
-// helpers similar to search page
+// Short date format for history table
 const fmtDate = (iso: string | null) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -70,6 +70,7 @@ const fmtDate = (iso: string | null) => {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
+// Time format for history table
 const fmtTime = (iso: string | null) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -81,17 +82,29 @@ const fmtTime = (iso: string | null) => {
   });
 };
 
+// 🛑 THIS IS THE KEY FUNCTION FOR "1h 30m" FORMAT
 const fmtDuration = (h: number | null | undefined) => {
-  if (h === null || h === undefined) return '—';
+  if (h === null || h === undefined) return '0h';
   const n = Number(h);
-  if (!Number.isFinite(n) || n === 0) return '—';
-  const m = Math.round(n * 60);
-  if (m < 60) return `${m}m`;
-  const hrs = Math.floor(m / 60);
-  const mins = m - hrs * 60;
-  return mins === 0 ? `${hrs}h` : `${hrs}h ${mins}m`;
+  if (!Number.isFinite(n)) return '0h';
+  
+  // Convert decimal hours (e.g. 1.5) to total minutes (90)
+  const totalMins = Math.round(n * 60);
+  
+  if (totalMins === 0) return '0h';
+  if (totalMins < 60) return `${totalMins}m`; // e.g. "45m"
+  
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  
+  // If exact hour (e.g. 2.0 hrs) -> "2h"
+  if (mins === 0) return `${hrs}h`;
+  
+  // If mixed (e.g. 1.5 hrs) -> "1h 30m"
+  return `${hrs}h ${mins}m`;
 };
-// Helper to split decimal hours into { hrs, mins }
+
+// Helper to split decimal hours into { hrs, mins } for the Edit Form inputs
 const decimalToTime = (decimal: number) => {
   const safeDecimal = Number(decimal) || 0;
   const hrs = Math.floor(safeDecimal);
@@ -352,9 +365,9 @@ export default function PackagesPage() {
       Mobile: p.mobile,
       Outlet: p.outlet,
       Status: p.status,
-      'Remaining Hours': p.remaining_hours.toFixed(1),
-      'Total Hours': p.total_hours,
-      'Used Hours': p.used_hours.toFixed(1),
+      'Remaining Hours': fmtDuration(p.remaining_hours),
+      'Total Hours': fmtDuration(p.total_hours),
+      'Used Hours': fmtDuration(p.used_hours),
       'Package Amount': p.package_amount / 100,
       'Expiry Date': formatDate(p.expiry_date),
     }));
@@ -755,11 +768,15 @@ const closeDetailsModal = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatCurrency(customer.package_amount)}
                     </td>
+                    
+                    {/* UPDATED: Total Hours using fmtDuration */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {customer.total_hours} hrs
+                      {fmtDuration(customer.total_hours)}
                     </td>
+                    
+                    {/* UPDATED: Used Hours using fmtDuration */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {customer.used_hours.toFixed(1)} hrs
+                      {fmtDuration(customer.used_hours)}
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -772,7 +789,8 @@ const closeDetailsModal = () => {
                                 : 'text-red-700'
                             }
                           >
-                            {customer.remaining_hours.toFixed(1)} hrs
+                            {/* UPDATED: Remaining Hours using fmtDuration */}
+                            {fmtDuration(customer.remaining_hours)}
                           </span>
                         </div>
                         <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -1226,7 +1244,8 @@ const closeDetailsModal = () => {
                   Remaining Hours
                 </p>
                 <p className="font-bold text-gray-800">
-                  {selectedPackage.remaining_hours.toFixed(1)} hrs
+                  {/* UPDATED: Remaining Hours in Modal */}
+                  {fmtDuration(selectedPackage.remaining_hours)}
                 </p>
               </div>
             </div>
@@ -1236,8 +1255,9 @@ const closeDetailsModal = () => {
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-600">Usage Progress</span>
                   <span className="font-medium text-gray-900">
-                    {selectedPackage.used_hours.toFixed(1)} /{' '}
-                    {selectedPackage.total_hours} Hours
+                    {/* UPDATED: Usage Progress in Modal */}
+                    {fmtDuration(selectedPackage.used_hours)} /{' '}
+                    {fmtDuration(selectedPackage.total_hours)}
                   </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-3">
