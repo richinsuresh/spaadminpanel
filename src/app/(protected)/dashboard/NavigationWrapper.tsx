@@ -19,10 +19,10 @@ import {
   Menu,
   X,
   History,
-  AlertCircle
+  Activity // <--- Added for Activity Log icon
 } from 'lucide-react';
 import { useUser } from '@/context/UserContext';
-import { supabase } from '@/lib/supabase'; // Import Supabase
+import { supabase } from '@/lib/supabase';
 
 export default function NavigationWrapper({ children }: { children: React.ReactNode }) {
   const { logout, user } = useUser();
@@ -43,9 +43,8 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
     setIsSidebarOpen(false);
   }, [pathname]);
 
-  // --- Developer Polling Logic ---
+  // --- Developer Polling Logic (Remains Developer Only) ---
   useEffect(() => {
-    // Only run for developers
     if (user?.role !== 'developer') return;
 
     const fetchDevStats = async () => {
@@ -53,7 +52,7 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
             const today = new Date().toISOString().split('T')[0];
             const now = new Date();
 
-            // 1. Calculate Overdue Checkouts (Active Sessions for TODAY)
+            // 1. Overdue Checkouts
             const { data: activeSessions } = await supabase
                 .from('customers')
                 .select('check_in_time, session_hours')
@@ -67,7 +66,6 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
                     if (s.check_in_time && s.session_hours) {
                         const startTime = new Date(s.check_in_time).getTime();
                         const durationMs = s.session_hours * 60 * 60 * 1000;
-                        // Buffer of 1 minute to avoid flickering
                         if (now.getTime() > startTime + durationMs + 60000) {
                             overdue++;
                         }
@@ -76,14 +74,13 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
             }
             setOverdueCount(overdue);
 
-            // 2. Calculate Pending Verifications (Redemptions for TODAY)
-            // Filter: Redemptions (is_package_customer) + Not Verified
+            // 2. Pending Verifications
             const { count } = await supabase
                 .from('customers')
                 .select('*', { count: 'exact', head: true })
                 .eq('date', today)
-                .eq('is_package_customer', true) // Only redemptions need verify
-                .eq('is_verified', false);       // Not yet verified
+                .eq('is_package_customer', true)
+                .eq('is_verified', false);
             
             setPendingVerifyCount(count || 0);
 
@@ -92,24 +89,11 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
         }
     };
 
-    // Initial Fetch
     fetchDevStats();
-
-    // Poll every 30 seconds
     const interval = setInterval(fetchDevStats, 30000);
     return () => clearInterval(interval);
 
-  }, [user]); // Re-run if user/role changes
-
-  // Helper to render badges
-  const renderBadge = (count: number, color: string = 'bg-rose-500') => {
-      if (count <= 0) return null;
-      return (
-          <span className={`${color} text-white text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto shadow-sm`}>
-              {count} {count === 1 ? 'Pending' : 'Pending'}
-          </span>
-      );
-  };
+  }, [user]);
 
   return (
     <div className="flex h-screen bg-gray-100 overflow-hidden">
@@ -148,7 +132,6 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
             Analytics
           </div>
           
-          {/* SALES REPORT (Overdue Badge) */}
           <SideNavItem 
             icon={<FileText size={20} />} 
             text="Sales Report" 
@@ -171,11 +154,12 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
           <SideNavItem icon={<Users size={20} />} text="Customer List" href="/dashboard/customers" />
           <SideNavItem icon={<Box size={20} />} text="Packages" href="/dashboard/packages" />
           
-          {/* PACKAGE ACTIVITY (Verification Badge) */}
+          {/* PACKAGE ACTIVITY: Public to all */}
           <SideNavItem 
             icon={<History size={20} />} 
             text="Package Activity" 
             href="/dashboard/packages/activity" 
+            // Badge is visible ONLY to developers
             badge={user?.role === 'developer' && pendingVerifyCount > 0 ? (
                 <span className="bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto shadow-sm">
                     {pendingVerifyCount} Verify
@@ -184,6 +168,21 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
           />
           
           <SideNavItem icon={<Building size={20} />} text="Outlets" href="/dashboard/outlets" />
+
+          {/* ACTIVITY LOGS: Developer ONLY */}
+          {user?.role === 'developer' && (
+             <>
+               <div className="pt-4 pb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                 System
+               </div>
+               <SideNavItem 
+                 icon={<Activity size={20} />} 
+                 text="Activity Logs" 
+                 href="/dashboard/activity" 
+               />
+             </>
+          )}
+
         </nav>
 
         <div className="p-4 border-t border-gray-200 absolute bottom-0 w-full bg-white">
@@ -245,7 +244,6 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
   );
 }
 
-// SideNavItem updated to accept 'badge'
 function SideNavItem({ 
     icon, 
     text, 
@@ -255,7 +253,7 @@ function SideNavItem({
     icon: React.ReactNode; 
     text: string; 
     href: string; 
-    badge?: React.ReactNode; // New Prop
+    badge?: React.ReactNode;
 }) {
   const pathname = usePathname();
   const isActive = pathname === href;
@@ -270,8 +268,8 @@ function SideNavItem({
       }`}
     >
       {icon}
-      <span className="ml-3 flex-1">{text}</span> {/* Added flex-1 to push badge to right */}
-      {badge} {/* Render Badge */}
+      <span className="ml-3 flex-1">{text}</span>
+      {badge}
     </Link>
   );
 }

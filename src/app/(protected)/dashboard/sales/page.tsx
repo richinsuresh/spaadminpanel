@@ -7,7 +7,9 @@ import React, {
   useCallback,
   useMemo,
   FormEvent,
+  
 } from 'react';
+import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
@@ -181,6 +183,7 @@ const getToday = () => new Date().toISOString().split('T')[0];
 
 export default function AdminSalesPage() {
   const { logActivity } = useActivityLog();
+  const { user } = useUser();
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
@@ -344,8 +347,8 @@ export default function AdminSalesPage() {
   );
   
 
-  /* ===================== EDIT ===================== */
-// Helper to calculate new Out Time based on In Time + Duration
+ /* ===================== EDIT ===================== */
+  // Helper to calculate new Out Time based on In Time + Duration
   const calculateOutTime = (startTime: string, h: string | number, m: string | number) => {
     if (!startTime) return '';
     const [hours, minutes] = startTime.split(':').map(Number);
@@ -365,9 +368,6 @@ export default function AdminSalesPage() {
     // Return HH:MM (24h format)
     return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   };
-
-
-
 
   const handleOpenEdit = (sale: Sale) => {
     setEditingSale(sale);
@@ -392,25 +392,25 @@ export default function AdminSalesPage() {
       room: sale.room,
       session_hours: sale.session_hours,
       check_in_time: toInputTime(sale.check_in_time),
+      check_out_time: toInputTime(sale.check_out_time),
     });
     setEditRemark('');
     setEditPassword('');
     setSaveError(null);
     setIsEditModalOpen(true);
   };
+
   const handleEditFormChange = (e: any) => {
     const { name, value } = e.target;
     setEditForm((p: any) => ({ ...p, [name]: value }));
   };
 
-const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setEditForm((prev: any) => {
       const updated = { ...prev, [name]: value };
 
       // 🛑 FIX: Only update check_out_time if the sale is ALREADY checked out.
-      // If prev.check_out_time is empty (Active Sale), do NOT calculate it.
-      // This prevents the system from accidentally checking out the customer.
       if (updated.check_in_time && prev.check_out_time) {
          updated.check_out_time = calculateOutTime(
             updated.check_in_time, 
@@ -421,6 +421,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       return updated;
     });
   };
+
   const handleCloseEdit = () => {
     setIsEditModalOpen(false);
     setEditingSale(null);
@@ -429,7 +430,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSaveError(null);
   };
 
- const handleSaveEdit = async (e: FormEvent) => {
+  const handleSaveEdit = async (e: FormEvent) => {
     e.preventDefault();
     setSaveError(null);
 
@@ -499,12 +500,11 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       outlet_id: editForm.outlet_id,
       check_in_time: newCheckInTime,
       check_out_time: newCheckOutTime,
-      // Clear manual legacy fields so the table calculates from new timestamps
       in_time: null,
       out_time: null,
     };
 
-    // 1. Update Customers Table (The Sale Record)
+    // 1. Update Customers Table
     const { error } = await supabase
       .from('customers')
       .update(updates)
@@ -516,10 +516,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       return;
     }
 
-    // ---------------------------------------------------------
-    // 2. SYNC PACKAGES (NEW LOGIC)
-    // If this entry was a "Package Sale", find and update the actual package too
-    // ---------------------------------------------------------
+    // 2. Sync Packages (If name/mobile changed for a package sale)
     if (editingSale.took_package) {
        const newName = editForm.name;
        const newMobile = editForm.mobile;
@@ -532,10 +529,9 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                 name: newName,
                 mobile: newMobile
              })
-             // Identify the package by the ORIGINAL details (before this edit)
              .eq('mobile', editingSale.mobile) 
              .eq('name', editingSale.name)
-             .eq('start_date', editingSale.date); // This ensures we target the specific package bought on that date
+             .eq('start_date', editingSale.date);
 
            if (pkgError) {
               console.error('Failed to sync package update:', pkgError);
@@ -544,10 +540,10 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
            }
        }
     }
-    // ---------------------------------------------------------
 
     const after = { ...before, ...updates };
 
+    // 3. Log Activity with Real Username
     await supabase.from('activity_logs').insert({
       action_type: 'edit_sale',
       description: JSON.stringify({
@@ -555,7 +551,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         before,
         after,
       }),
-      username: 'admin',
+      username: user?.username || 'System', // <--- UPDATED HERE
     });
 
     setIsEditModalOpen(false);
@@ -565,6 +561,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     await fetchSales();
     setIsSaving(false);
   };
+
   /* ===================== CHECK OUT ===================== */
 
   const handleCheckOut = async (id: string) => {
@@ -616,6 +613,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       return;
     }
 
+    // Log Activity with Real Username
     await supabase.from('activity_logs').insert({
       action_type: 'delete_sale',
       description: JSON.stringify({
@@ -623,7 +621,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         before,
         after: null,
       }),
-      username: 'admin', // TODO: replace with real logged-in user later
+      username: user?.username || 'System', // <--- UPDATED HERE
     });
 
     setIsDeleteModalOpen(false);
@@ -714,7 +712,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         };
       };
 
-      // ALL SALES (based on current filters)
+      // ALL SALES
       const allSalesRows = sales.map(buildRow);
 
       // OUTLET-WISE SHEETS
@@ -725,45 +723,17 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         outletSheets[key].push(buildRow(sale));
       });
 
-      // SUMMARY SHEET (only completed sales for totals)
+      // SUMMARY SHEET
       const summaryRows = [
-        {
-          Metric: 'Date Range',
-          Value: `${startDate} to ${endDate}`,
-        },
-        {
-          Metric: 'Outlet Filter',
-          Value:
-            selectedOutletId === 'all'
-              ? 'All Outlets'
-              : OUTLETS.find((o) => o.id === selectedOutletId)?.name ||
-                selectedOutletId,
-        },
+        { Metric: 'Date Range', Value: `${startDate} to ${endDate}` },
+        { Metric: 'Outlet Filter', Value: selectedOutletId === 'all' ? 'All Outlets' : OUTLETS.find((o) => o.id === selectedOutletId)?.name || selectedOutletId },
         {},
-        {
-          Metric: 'Total Completed Sales (₹)',
-          Value: totalSales / 100,
-        },
-        {
-          Metric: 'Total Cash Sales (₹)',
-          Value: totalCashSales / 100,
-        },
-        {
-          Metric: 'Total UPI Sales (₹)',
-          Value: totalUpiSales / 100,
-        },
-        {
-          Metric: 'Total Card Sales (₹)',
-          Value: totalCardSales / 100,
-        },
-        {
-          Metric: 'Total Package Value (₹)',
-          Value: totalPackageSales / 100,
-        },
-        {
-          Metric: 'Number of Completed Sessions',
-          Value: activeSalesCount,
-        },
+        { Metric: 'Total Completed Sales (₹)', Value: totalSales / 100 },
+        { Metric: 'Total Cash Sales (₹)', Value: totalCashSales / 100 },
+        { Metric: 'Total UPI Sales (₹)', Value: totalUpiSales / 100 },
+        { Metric: 'Total Card Sales (₹)', Value: totalCardSales / 100 },
+        { Metric: 'Total Package Value (₹)', Value: totalPackageSales / 100 },
+        { Metric: 'Number of Completed Sessions', Value: activeSalesCount },
       ];
 
       const workbookData: Record<string, any[]> = {
@@ -772,10 +742,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         ...outletSheets,
       };
 
-      exportToExcel(
-        workbookData,
-        `Sales_${startDate}_to_${endDate}.xlsx`,
-      );
+      exportToExcel(workbookData, `Sales_${startDate}_to_${endDate}.xlsx`);
       logActivity('export_sales', 'Downloaded Sales');
     } catch (e: any) {
       console.error(e);
@@ -784,7 +751,6 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setIsExporting(false);
     }
   };
-
   /* ===================== UI ===================== */
 
   return (
