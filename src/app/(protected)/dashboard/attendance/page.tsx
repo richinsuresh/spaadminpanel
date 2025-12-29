@@ -6,15 +6,14 @@ import { OUTLETS } from '@/lib/outlet';
 import { 
   Trash2, 
   Loader2, 
-  X, 
   Clock, 
   MapPin, 
   Calendar as CalendarIcon, 
-  CheckCircle, 
   ShieldAlert,
   Search,
-  User,
-  LogOut 
+  LogOut,
+  XCircle,
+  CalendarOff
 } from 'lucide-react';
 
 // --- Types ---
@@ -362,8 +361,17 @@ export default function AttendancePage() {
                         {formatTime(record?.check_out_time)}
                       </td>
                       <td className="px-6 py-4">
+                         {/* UPDATED ADMIN STATUS LOGIC */}
                          {!record ? (
-                           <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">Absent</span>
+                           <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">Absent (No Log)</span>
+                         ) : record.status === 'Absent' ? (
+                           <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
+                               <XCircle size={12} /> Absent
+                           </span>
+                         ) : record.status === 'Weekly Off' ? (
+                           <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
+                               <CalendarOff size={12} /> Weekly Off
+                           </span>
                          ) : record.check_out_time ? (
                            <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
                          ) : (
@@ -381,7 +389,8 @@ export default function AttendancePage() {
                                 </button>
                             )}
                             
-                            {isWorking && record && (
+                            {/* Actions only for real working records, not Absent/Off ones */}
+                            {isWorking && record && record.status !== 'Absent' && record.status !== 'Weekly Off' && (
                                 <>
                                   <button 
                                     onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }}
@@ -421,9 +430,9 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* --- MODALS --- */}
+      {/* --- MODALS (Unchanged logic, just keeping structure) --- */}
       
-      {/* FORCE LOGOUT MODAL (SINGLE) */}
+      {/* FORCE LOGOUT MODAL */}
       {isForceLogoutModalOpen && recordToLogout && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">

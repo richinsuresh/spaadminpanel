@@ -443,10 +443,8 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     }
     if (!editingSale) return;
 
-    // 1. Calculate Total Hours first to validate
+    // Validate Duration
     const totalHours = (Number(editForm.session_hours_h) || 0) + (Number(editForm.session_hours_m) || 0) / 60;
-
-    // Validation: Prevent saving if duration is 0
     if (totalHours <= 0) {
       setSaveError('Duration cannot be zero or empty.');
       return;
@@ -457,7 +455,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const before = { ...editingSale };
     const amountNumber = Number(editForm.amount || 0);
 
-    // 2. Reconstruct Check-In Time
+    // Reconstruct Check-In Time
     let newCheckInTime: string | null = editingSale.check_in_time;
     if (editForm.date && editForm.check_in_time) {
       const combined = new Date(`${editForm.date}T${editForm.check_in_time}`);
@@ -466,7 +464,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       }
     }
 
-    // 3. Reconstruct Check-Out Time
+    // Reconstruct Check-Out Time
     let newCheckOutTime: string | null = editingSale.check_out_time;
     if (editForm.check_out_time) {
         if (editForm.date) {
@@ -479,7 +477,7 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         newCheckOutTime = null;
     }
 
-    // 4. Combine Therapist Names
+    // Combine Therapist Names
     const t1 = editForm.therapist_name1;
     const t2 = editForm.therapist_name2;
     const combinedTherapist = t1 ? (t2 ? `${t1} & ${t2}` : t1) : null;
@@ -493,28 +491,20 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       treatment: editForm.treatment,
       therapist_name: combinedTherapist,
       room: editForm.room || null,
-      
-      // Save new duration
       session_hours: totalHours,
-      
       payment_method: editForm.payment_method,
-      amount_paid: editingSale.took_package
-        ? 0
-        : Math.round(amountNumber * 100),
-      package_amount: editingSale.took_package
-        ? Math.round(amountNumber * 100)
-        : editingSale.package_amount,
-
+      amount_paid: editingSale.took_package ? 0 : Math.round(amountNumber * 100),
+      package_amount: editingSale.took_package ? Math.round(amountNumber * 100) : editingSale.package_amount,
       date: editForm.date,
       outlet_id: editForm.outlet_id,
       check_in_time: newCheckInTime,
       check_out_time: newCheckOutTime,
-
-      // 🛑 FIX: Clear legacy manual text fields so the table uses the new calculated times
+      // Clear manual legacy fields so the table calculates from new timestamps
       in_time: null,
       out_time: null,
     };
 
+    // 1. Update Customers Table (The Sale Record)
     const { error } = await supabase
       .from('customers')
       .update(updates)
@@ -525,6 +515,36 @@ const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       setIsSaving(false);
       return;
     }
+
+    // ---------------------------------------------------------
+    // 2. SYNC PACKAGES (NEW LOGIC)
+    // If this entry was a "Package Sale", find and update the actual package too
+    // ---------------------------------------------------------
+    if (editingSale.took_package) {
+       const newName = editForm.name;
+       const newMobile = editForm.mobile;
+       
+       // Only update if critical info changed
+       if (newName !== editingSale.name || newMobile !== editingSale.mobile) {
+           const { error: pkgError } = await supabase
+             .from('packages')
+             .update({
+                name: newName,
+                mobile: newMobile
+             })
+             // Identify the package by the ORIGINAL details (before this edit)
+             .eq('mobile', editingSale.mobile) 
+             .eq('name', editingSale.name)
+             .eq('start_date', editingSale.date); // This ensures we target the specific package bought on that date
+
+           if (pkgError) {
+              console.error('Failed to sync package update:', pkgError);
+           } else {
+              console.log('Successfully synced package details.');
+           }
+       }
+    }
+    // ---------------------------------------------------------
 
     const after = { ...before, ...updates };
 

@@ -47,7 +47,6 @@ export default function OutletDashboardLayout({
     { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: <Receipt size={18} /> },
     // ADDED: Attendance Link
     { name: 'Attendance', href: '/outlet/dashboard/attendance', icon: <Clock size={18} /> },
-    { name: 'New Package Sale', href: '/outlet/dashboard/packages/new', icon: <Package size={18} /> },
   ];
   
   // Helper to resolve the [outletId] placeholder

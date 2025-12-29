@@ -20,6 +20,7 @@ type ClientInfo = {
 };
 
 type Employee = { id: string; name: string; role: string; };
+type Treatment = { id: string; name: string; }; // Added Treatment Type
 
 const outletsList = OUTLETS.map((o: any) => o.name);
 
@@ -29,8 +30,9 @@ export default function ClientForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   
-  // --- State for employees list ---
+  // --- State for lists ---
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [treatments, setTreatments] = useState<Treatment[]>([]); // Added Treatments State
 
   const [formData, setFormData] = useState({
     name: '',
@@ -48,6 +50,7 @@ export default function ClientForm() {
     sold_by: '',
     packageValidity: '3 months', 
     therapistName: '', 
+    therapistName2: '', // Added Second Therapist
     room: '',
   });
   
@@ -65,7 +68,7 @@ export default function ClientForm() {
     };
   }, []);
 
-  // --- Fetch ALL active employees with Role ---
+  // --- Fetch ALL active employees ---
   useEffect(() => {
     const fetchStaff = async () => {
       try {
@@ -84,13 +87,40 @@ export default function ClientForm() {
     fetchStaff();
   }, []);
 
+  // --- Fetch Treatments when Outlet Changes ---
+  useEffect(() => {
+    async function fetchTreatments() {
+        const selectedOutletObj = OUTLETS.find(o => o.name === formData.outlet);
+        if (!selectedOutletObj) return;
+
+        try {
+            const { data } = await supabase
+                .from('treatments')
+                .select('id, name')
+                .eq('outlet_id', selectedOutletObj.id)
+                .order('name');
+            setTreatments(data || []);
+            // Reset treatment selection if it's no longer valid
+            setFormData(prev => ({ ...prev, treatment: '' }));
+        } catch (error) {
+            console.error('Error fetching treatments:', error);
+            setTreatments([]);
+        }
+    }
+
+    if (formData.outlet) {
+        fetchTreatments();
+    }
+  }, [formData.outlet]);
+
   // --- Filter Lists ---
   const therapistOptions = useMemo(() => 
-    employees.filter(e => e.role === 'therapist'), 
+    employees.filter(e => e.role === 'therapist' || e.role === 'Therapist'), 
   [employees]);
 
   const allStaffOptions = employees;
 
+  // --- Client Lookup Logic ---
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -157,7 +187,7 @@ export default function ClientForm() {
     return (Number(formData.amountPaid) || 0) * 100;
   }, [formData.isPackageCustomer, formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
-  // --- UPDATED handleSubmit (robust server response handling) ---
+  // --- Submit Handler ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -170,9 +200,8 @@ export default function ClientForm() {
       return;
     }
     
-    // Validate Therapist Name if a session is happening
     if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
-      setInputError("Please select a Therapist.");
+      setInputError("Please select at least one Therapist.");
       setIsSubmitting(false);
       return;
     }
@@ -207,6 +236,12 @@ export default function ClientForm() {
     const outlet = OUTLETS.find(o => o.name === formData.outlet);
     const outlet_id = outlet ? outlet.id : 'unknown';
 
+    // Combine Therapists
+    let combinedTherapistName = formData.therapistName;
+    if (formData.therapistName2) {
+        combinedTherapistName = `${formData.therapistName} & ${formData.therapistName2}`;
+    }
+
     try {
       let checkInTime: string | null = null;
       if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.isPackageCustomer) {
@@ -221,7 +256,6 @@ export default function ClientForm() {
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
         isPackageCustomer: formData.isPackageCustomer,
-        // packageId if using package credits
         packageId: formData.isPackageCustomer ? (clientInfo?.packageId || null) : null,
         tookPackage: formData.tookPackage,
         packageAmount: formData.tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
@@ -233,7 +267,7 @@ export default function ClientForm() {
         check_in_time: checkInTime,
         packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
-        therapist_name: formData.therapistName, 
+        therapist_name: combinedTherapistName, // Send combined string
         room: formData.room, 
       };
 
@@ -243,16 +277,12 @@ export default function ClientForm() {
         body: JSON.stringify(payload)
       });
 
-      // robust body read
       const text = await response.text();
       let data: any = null;
       try { data = text ? JSON.parse(text) : null; } catch (parseErr) {
         console.warn('client-form-submit: response not JSON:', text);
       }
 
-      console.log('[client-form-submit] response', response.status, data ?? text);
-
-      // server sends { ok: true, result } on success, { ok: false, error } on failure
       if (response.ok) {
         if (data && typeof data.ok !== 'undefined') {
           if (data.ok) {
@@ -262,37 +292,14 @@ export default function ClientForm() {
               router.refresh();
               router.push('/dashboard/sales');
             }, 900);
-
-            setMobile('');
-            setClientInfo(null);
-            setFormData(prev => ({
-              ...prev,
-              name: '',
-              treatment: '',
-              amountPaid: 0,
-              sessionHours: 0,
-              sessionMinutes: 0,
-              tookPackage: false,
-              isPackageCustomer: false,
-              packageAmount: 0,
-              totalPackageHours: 0,
-              sold_by: '',
-              packageValidity: '3 months',
-              therapistName: '', 
-              room: '', 
-              paymentMethod: 'cash',
-            }));
             return;
           } else {
             const err = data.error || data.message || 'Server rejected the request';
-            console.error('Submission failed (api):', err, data);
             setInputError(String(err));
             setIsSubmitting(false);
             return;
           }
         }
-
-        // fallback: accept 200 as success if server didn't use ok flag
         setSuccess(true);
         setIsSubmitting(false);
         setTimeout(() => {
@@ -302,31 +309,14 @@ export default function ClientForm() {
         return;
       }
 
-      // non-2xx
       const serverMsg = data?.error ?? data?.message ?? text ?? `${response.status} ${response.statusText}`;
-      console.error('Submission failed (non-2xx):', serverMsg, data);
       setInputError(String(serverMsg));
       setIsSubmitting(false);
-
-      // OPTIONAL: save payload offline for later sync if you have offlineDb
-      // try {
-      //   await offlineDb.pending_clients.add({ ...payload, status: 'pending', created_local_at: new Date().toISOString() });
-      //   console.info('Saved submission locally for later sync');
-      // } catch (dbErr) {
-      //   console.warn('Failed to save submission locally', dbErr);
-      // }
 
     } catch (err: any) {
       console.error('Error saving record:', err);
       setInputError('An unexpected error occurred.');
       setIsSubmitting(false);
-
-      // OPTIONAL: save payload offline for later sync if you have offlineDb
-      // try {
-      //   await offlineDb.pending_clients.add({ ...payload, status: 'pending', created_local_at: new Date().toISOString() });
-      // } catch (dbErr) {
-      //   console.warn('Failed to save pending locally', dbErr);
-      // }
     }
   };
   
@@ -419,27 +409,17 @@ export default function ClientForm() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Treatment *</label>
-            <input
+            {/* UPDATED: Treatment Dropdown */}
+            <select
               name="treatment"
-              type="text"
               value={formData.treatment}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Therapist Name</label>
-            <select
-              name="therapistName"
-              value={formData.therapistName}
-              onChange={handleChange}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
             >
-              <option value="">-- Select Therapist --</option>
-              {therapistOptions.map((emp) => (
-                <option key={emp.id} value={emp.name}>{emp.name}</option>
+              <option value="">-- Select Treatment --</option>
+              {treatments.map((t) => (
+                <option key={t.id} value={t.name}>{t.name}</option>
               ))}
             </select>
           </div>
@@ -454,6 +434,37 @@ export default function ClientForm() {
               placeholder="Enter room no."
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
             />
+          </div>
+
+          {/* UPDATED: Therapist 1 & 2 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Primary Therapist</label>
+            <select
+              name="therapistName"
+              value={formData.therapistName}
+              onChange={handleChange}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
+            >
+              <option value="">-- Select Therapist --</option>
+              {therapistOptions.map((emp) => (
+                <option key={emp.id} value={emp.name}>{emp.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Secondary Therapist (Optional)</label>
+            <select
+              name="therapistName2"
+              value={formData.therapistName2}
+              onChange={handleChange}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
+            >
+              <option value="">-- None --</option>
+              {therapistOptions.map((emp) => (
+                <option key={`sec-${emp.id}`} value={emp.name}>{emp.name}</option>
+              ))}
+            </select>
           </div>
 
           {showAmountField && (

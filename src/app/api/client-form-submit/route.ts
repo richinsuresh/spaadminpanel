@@ -2,21 +2,17 @@
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
-/** helper unchanged **/
 function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPeriod: string): string {
   const parts = validityPeriod.split(' ');
   const amount = parts[0] || '0';
   const monthsToAdd = parseInt(amount, 10);
 
   let baseDate: Date;
-
   if (currentExpiryDateStr) {
     const currentExpiry = new Date(currentExpiryDateStr);
     currentExpiry.setHours(0, 0, 0, 0);
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
     baseDate = currentExpiry >= today ? currentExpiry : today;
   } else {
     baseDate = new Date();
@@ -24,13 +20,9 @@ function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPer
 
   const newExpiryDate = new Date(baseDate.getTime());
   newExpiryDate.setMonth(newExpiryDate.getMonth() + monthsToAdd);
-
   return newExpiryDate.toISOString().split('T')[0];
 }
 
-/** ---------------------------------------------------------
- * PROCESS SINGLE PAYLOAD
- * --------------------------------------------------------- */
 async function processPayload(payload: any) {
   const result: any = {
     client_uuid: payload && payload.client_uuid ? payload.client_uuid : null,
@@ -43,9 +35,7 @@ async function processPayload(payload: any) {
       return result;
     }
 
-    // -------------------------------
-    // Idempotency check by client_uuid
-    // -------------------------------
+    // Idempotency check
     if (payload.client_uuid) {
       const { data: existingSession, error: existingError } = await supabase
         .from('customers')
@@ -54,9 +44,8 @@ async function processPayload(payload: any) {
         .limit(1)
         .maybeSingle();
 
-      if (existingError) {
-        console.warn('[client-form-submit] existingSession check error:', existingError);
-      } else if (existingSession && existingSession.id) {
+      if (existingError) console.warn('[client-form-submit] existingSession check error:', existingError);
+      else if (existingSession && existingSession.id) {
         result.ok = true;
         result.skipped = true;
         result.message = 'Already exists (client_uuid)';
@@ -65,12 +54,9 @@ async function processPayload(payload: any) {
       }
     }
 
-    // -------------------------------
-    // 1. PACKAGE REDEMPTION (Usage of OLD package)
-    // -------------------------------
+    // 1. PACKAGE REDEMPTION
     if (payload.isPackageCustomer && payload.packageId) {
       const hoursToDeduct = Number(payload.sessionHours || 0);
-
       if (hoursToDeduct > 0) {
         const { data: activePackage, error: findError } = await supabase
           .from('packages')
@@ -82,53 +68,33 @@ async function processPayload(payload: any) {
           .maybeSingle();
 
         if (findError) {
-          console.warn('[client-form-submit] package lookup error:', findError);
-          result.package_warn =
-            'Package lookup error: ' +
-            (findError.message || JSON.stringify(findError));
+          result.package_warn = 'Package lookup error: ' + (findError.message || JSON.stringify(findError));
         } else if (activePackage && activePackage.id) {
           const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
           const currentUsed = parseFloat(activePackage.used_hours || '0');
-
           const newRemainingHours = currentRemaining - hoursToDeduct;
           const newUsedHours = currentUsed + hoursToDeduct;
           const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
           const { error: updateError } = await supabase
             .from('packages')
-            .update({
-              remaining_hours: newRemainingHours,
-              used_hours: newUsedHours,
-              status: newStatus,
-            })
+            .update({ remaining_hours: newRemainingHours, used_hours: newUsedHours, status: newStatus })
             .eq('id', payload.packageId);
 
-          if (updateError) {
-            console.error('[client-form-submit] package update error:', updateError);
-            throw new Error(
-              'Error updating package: ' +
-                (updateError.message || JSON.stringify(updateError)),
-            );
-          }
+          if (updateError) throw new Error('Error updating package: ' + updateError.message);
         } else {
-          result.package_warn =
-            'No active package available to redeem (skipped deduction)';
+          result.package_warn = 'No active package available to redeem (skipped deduction)';
         }
       }
     }
 
-    // -------------------------------
-    // 2. PACKAGE SALE (Always creates NEW package)
-    // -------------------------------
+    // 2. PACKAGE SALE (Always New)
     if (payload.tookPackage) {
       const newTotalHours = Number(payload.totalPackageHours || 0);
-      const sessionHours = Number(payload.sessionHours || 0); // Hours used immediately
+      const sessionHours = Number(payload.sessionHours || 0);
       const packagePrice = payload.packageAmount || 0;
       const validityPeriod = payload.packageValidity || '3 months';
 
-      // --- CHANGE START: REMOVED MERGING LOGIC ---
-      
-      // Calculate Expiry based on TODAY (pass null as currentExpiry)
       const newExpiry = calculateNewExpiryDate(null, validityPeriod);
 
       const basePkg: any = {
@@ -141,35 +107,19 @@ async function processPayload(payload: any) {
         outlet_name: payload.outlet,
         payment_method: payload.paymentMethod,
         status: 'active',
-        start_date: new Date().toISOString().split('T')[0], // Starts today
-        remaining_hours: newTotalHours - sessionHours,      // Subtract immediate usage
+        start_date: new Date().toISOString().split('T')[0],
+        remaining_hours: newTotalHours - sessionHours,
         total_hours: newTotalHours,
         used_hours: sessionHours,
         expiry_date: newExpiry
       };
 
-      const { error: insertError } = await supabase
-        .from('packages')
-        .insert([basePkg]);
-
-      if (insertError) {
-        console.error(
-          '[client-form-submit] new package insert error:',
-          insertError,
-        );
-        throw new Error(
-          'Error creating new package: ' +
-            (insertError.message || JSON.stringify(insertError)),
-        );
-      }
-      // --- CHANGE END ---
+      const { error: insertError } = await supabase.from('packages').insert([basePkg]);
+      if (insertError) throw new Error('Error creating new package: ' + insertError.message);
     }
 
-    // -------------------------------
-    // 3. INSERT CUSTOMER SESSION
-    // -------------------------------
+    // 3. INSERT SESSION
     const checkInTime: string = payload.check_in_time || new Date().toISOString();
-
     const customerInsert: any = {
       name: payload.name,
       mobile: payload.mobile,
@@ -190,15 +140,9 @@ async function processPayload(payload: any) {
       room: payload.room,
       in_time: payload.in_time ?? null,
       out_time: payload.out_time ?? null,
-      group_customers:
-        payload.group_customers && payload.group_customers.length
-          ? payload.group_customers
-          : null,
+      group_customers: payload.group_customers?.length ? payload.group_customers : null,
+      client_uuid: payload.client_uuid || null
     };
-
-    if (payload.client_uuid) {
-      customerInsert.client_uuid = payload.client_uuid;
-    }
 
     const { data: sessionData, error: sessionError } = await supabase
       .from('customers')
@@ -208,22 +152,14 @@ async function processPayload(payload: any) {
 
     if (sessionError) {
       const lower = (sessionError.message || '').toLowerCase();
-      console.error('[client-form-submit] session insert error:', sessionError);
-
-      if (
-        payload.client_uuid &&
-        (lower.includes('unique') ||
-          lower.includes('duplicate') ||
-          lower.includes('client_uuid'))
-      ) {
-        const { data: existing, error: findExistingErr } = await supabase
+      if (payload.client_uuid && (lower.includes('unique') || lower.includes('duplicate') || lower.includes('client_uuid'))) {
+        const { data: existing } = await supabase
           .from('customers')
           .select('id')
           .eq('client_uuid', payload.client_uuid)
           .limit(1)
           .maybeSingle();
-
-        if (!findExistingErr && existing && existing.id) {
+        if (existing?.id) {
           result.ok = true;
           result.skipped = true;
           result.customer_session_id = existing.id;
@@ -231,90 +167,48 @@ async function processPayload(payload: any) {
           return result;
         }
       }
-
-      throw new Error(
-        'Error saving session: ' +
-          (sessionError.message || JSON.stringify(sessionError)),
-      );
+      throw new Error('Error saving session: ' + sessionError.message);
     }
 
     result.ok = true;
-    result.customer_session_id = sessionData ? sessionData.id : null;
+    result.customer_session_id = sessionData?.id || null;
     result.message = 'Processed';
     return result;
-  } catch (err: any) {
-    const uuid = payload && payload.client_uuid ? payload.client_uuid : 'none';
-    console.error(
-      '[client-form-submit] Error processing payload (client_uuid=' +
-        uuid +
-        '):',
-      err,
-    );
 
+  } catch (err: any) {
+    console.error('[client-form-submit] Error:', err);
     result.ok = false;
-    result.error = err && err.message ? err.message : String(err);
+    result.error = err.message || String(err);
     return result;
   }
 }
 
-/** ---------------------------------------------------------
- * POST HANDLER
- * --------------------------------------------------------- */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-
-    const bulk = Array.isArray(body && body.bulk)
-      ? body.bulk
-      : Array.isArray(body)
-      ? body
-      : null;
+    const bulk = Array.isArray(body?.bulk) ? body.bulk : (Array.isArray(body) ? body : null);
     const single = !bulk ? body : null;
 
     if (bulk) {
-      const results: any[] = [];
+      const results = [];
       for (const item of bulk) {
         try {
           const r = await processPayload(item);
           results.push(r);
         } catch (e: any) {
-          console.error('[client-form-submit] fatal error in bulk:', e);
-          results.push({
-            ok: false,
-            error: e && e.message ? e.message : String(e),
-          });
+          results.push({ ok: false, error: e.message || String(e) });
         }
       }
       return NextResponse.json({ ok: true, results });
     }
 
     if (single) {
-      console.info('[client-form-submit] incoming single payload (safe log):', {
-        name: single.name,
-        mobile: single.mobile,
-        tookPackage: single.tookPackage,
-        isPackageCustomer: single.isPackageCustomer,
-        outlet: single.outlet,
-      });
-
       const res = await processPayload(single);
-
-      if (res.ok) {
-        return NextResponse.json({ ok: true, result: res });
-      } else {
-        return NextResponse.json(
-          { ok: false, error: res.error || 'Failed to process' },
-          { status: 500 },
-        );
-      }
+      return NextResponse.json(res.ok ? { ok: true, result: res } : { ok: false, error: res.error }, { status: res.ok ? 200 : 500 });
     }
 
     return NextResponse.json({ error: 'No payload' }, { status: 400 });
   } catch (err: any) {
-    console.error('[client-form-submit] top-level error:', err);
-    return NextResponse.json(
-      { error: err && err.message ? err.message : 'Unknown server error' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
