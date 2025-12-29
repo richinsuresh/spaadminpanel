@@ -1,4 +1,4 @@
-// app/api/client-form-submit/route.ts
+// src/app/api/client-form-submit/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -66,7 +66,7 @@ async function processPayload(payload: any) {
     }
 
     // -------------------------------
-    // 1. PACKAGE REDEMPTION
+    // 1. PACKAGE REDEMPTION (Usage of OLD package)
     // -------------------------------
     if (payload.isPackageCustomer && payload.packageId) {
       const hoursToDeduct = Number(payload.sessionHours || 0);
@@ -118,35 +118,18 @@ async function processPayload(payload: any) {
     }
 
     // -------------------------------
-    // 2. PACKAGE SALE / RENEWAL
+    // 2. PACKAGE SALE (Always creates NEW package)
     // -------------------------------
     if (payload.tookPackage) {
       const newTotalHours = Number(payload.totalPackageHours || 0);
-      const sessionHours = Number(payload.sessionHours || 0);
+      const sessionHours = Number(payload.sessionHours || 0); // Hours used immediately
       const packagePrice = payload.packageAmount || 0;
       const validityPeriod = payload.packageValidity || '3 months';
 
-      const { data: existingActivePackage, error: findActivePkgError } =
-        await supabase
-          .from('packages')
-          .select('id, remaining_hours, expiry_date, total_hours, used_hours')
-          .eq('mobile', payload.mobile)
-          .eq('status', 'active')
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-
-      if (findActivePkgError) {
-        console.error(
-          '[client-form-submit] find active package error:',
-          findActivePkgError,
-        );
-        throw new Error(
-          'Error finding active package: ' +
-            (findActivePkgError.message ||
-              JSON.stringify(findActivePkgError)),
-        );
-      }
+      // --- CHANGE START: REMOVED MERGING LOGIC ---
+      
+      // Calculate Expiry based on TODAY (pass null as currentExpiry)
+      const newExpiry = calculateNewExpiryDate(null, validityPeriod);
 
       const basePkg: any = {
         name: payload.name,
@@ -158,75 +141,33 @@ async function processPayload(payload: any) {
         outlet_name: payload.outlet,
         payment_method: payload.paymentMethod,
         status: 'active',
+        start_date: new Date().toISOString().split('T')[0], // Starts today
+        remaining_hours: newTotalHours - sessionHours,      // Subtract immediate usage
+        total_hours: newTotalHours,
+        used_hours: sessionHours,
+        expiry_date: newExpiry
       };
 
-      if (existingActivePackage && existingActivePackage.id) {
-        const currentRemaining = parseFloat(
-          existingActivePackage.remaining_hours || '0',
+      const { error: insertError } = await supabase
+        .from('packages')
+        .insert([basePkg]);
+
+      if (insertError) {
+        console.error(
+          '[client-form-submit] new package insert error:',
+          insertError,
         );
-        const currentTotal = parseFloat(existingActivePackage.total_hours || '0');
-        const currentUsed = parseFloat(existingActivePackage.used_hours || '0');
-
-        const finalRemaining = currentRemaining + newTotalHours - sessionHours;
-        const finalTotal = currentTotal + newTotalHours;
-        const finalUsed = currentUsed + sessionHours;
-
-        const newExpiry = calculateNewExpiryDate(
-          existingActivePackage.expiry_date,
-          validityPeriod,
+        throw new Error(
+          'Error creating new package: ' +
+            (insertError.message || JSON.stringify(insertError)),
         );
-
-        basePkg.remaining_hours = finalRemaining;
-        basePkg.total_hours = finalTotal;
-        basePkg.used_hours = finalUsed;
-        basePkg.expiry_date = newExpiry;
-
-        const { error: updateError } = await supabase
-          .from('packages')
-          .update(basePkg)
-          .eq('id', existingActivePackage.id);
-
-        if (updateError) {
-          console.error(
-            '[client-form-submit] package stacking error:',
-            updateError,
-          );
-          throw new Error(
-            'Error adding hours to existing package: ' +
-              (updateError.message || JSON.stringify(updateError)),
-          );
-        }
-      } else {
-        const newExpiry = calculateNewExpiryDate(null, validityPeriod);
-
-        basePkg.remaining_hours = newTotalHours - sessionHours;
-        basePkg.total_hours = newTotalHours;
-        basePkg.used_hours = sessionHours;
-        basePkg.expiry_date = newExpiry;
-        basePkg.start_date = new Date().toISOString().split('T')[0];
-
-        const { error: insertError } = await supabase
-          .from('packages')
-          .insert([basePkg]);
-
-        if (insertError) {
-          console.error(
-            '[client-form-submit] new package insert error:',
-            insertError,
-          );
-          throw new Error(
-            'Error creating new package: ' +
-              (insertError.message || JSON.stringify(insertError)),
-          );
-        }
       }
+      // --- CHANGE END ---
     }
 
     // -------------------------------
     // 3. INSERT CUSTOMER SESSION
     // -------------------------------
-    // Use check_in_time from payload if present (client already computed),
-    // otherwise default to "now".
     const checkInTime: string = payload.check_in_time || new Date().toISOString();
 
     const customerInsert: any = {
@@ -247,12 +188,8 @@ async function processPayload(payload: any) {
       check_in_time: checkInTime,
       therapist_name: payload.therapist_name,
       room: payload.room,
-
-      // 🔴 NEW: save manual / auto-calculated times from client form
-      in_time: payload.in_time ?? null,   // "HH:mm" (main customer)
-      out_time: payload.out_time ?? null, // "HH:mm" (main customer)
-
-      // 🔴 NEW: full group JSON sent from client form
+      in_time: payload.in_time ?? null,
+      out_time: payload.out_time ?? null,
       group_customers:
         payload.group_customers && payload.group_customers.length
           ? payload.group_customers
@@ -301,7 +238,6 @@ async function processPayload(payload: any) {
       );
     }
 
-    // success
     result.ok = true;
     result.customer_session_id = sessionData ? sessionData.id : null;
     result.message = 'Processed';
@@ -335,10 +271,8 @@ export async function POST(req: NextRequest) {
       : null;
     const single = !bulk ? body : null;
 
-    // BULK MODE
     if (bulk) {
       const results: any[] = [];
-
       for (const item of bulk) {
         try {
           const r = await processPayload(item);
@@ -351,11 +285,9 @@ export async function POST(req: NextRequest) {
           });
         }
       }
-
       return NextResponse.json({ ok: true, results });
     }
 
-    // SINGLE MODE
     if (single) {
       console.info('[client-form-submit] incoming single payload (safe log):', {
         name: single.name,

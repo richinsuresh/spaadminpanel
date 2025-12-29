@@ -17,7 +17,8 @@ import {
   Briefcase,
   User,
   Menu,
-  X
+  X,
+  History // <--- Added Icon
 } from 'lucide-react';
 import { useUser } from '@/context/UserContext';
 
@@ -87,6 +88,9 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
           <SideNavItem icon={<Search size={20} />} text="Search Customers" href="/dashboard/search" />
           <SideNavItem icon={<Users size={20} />} text="Customer List" href="/dashboard/customers" />
           <SideNavItem icon={<Box size={20} />} text="Packages" href="/dashboard/packages" />
+          {/* NEW LINK ADDED HERE */}
+          <SideNavItem icon={<History size={20} />} text="Package Activity" href="/dashboard/packages/activity" />
+          
           <SideNavItem icon={<Building size={20} />} text="Outlets" href="/dashboard/outlets" />
         </nav>
 
