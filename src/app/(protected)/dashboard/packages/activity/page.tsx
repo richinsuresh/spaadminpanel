@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, CheckCircle, ShieldCheck } from 'lucide-react'; // Added Icons
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
 
@@ -33,6 +33,9 @@ type PackageActivity = {
   therapist_name: string | null;
   payment_method: string | null;
   check_in_time: string | null;
+  
+  // Verification
+  is_verified?: boolean; // New field
 };
 
 /* ===================== HELPERS ===================== */
@@ -74,6 +77,7 @@ export default function PackageActivityPage() {
   const [data, setData] = useState<PackageActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null); // Loading state for specific button
 
   const [startDate, setStartDate] = useState<string>(getToday());
   const [endDate, setEndDate] = useState<string>(getToday());
@@ -143,6 +147,37 @@ export default function PackageActivityPage() {
     };
   }, [fetchActivity]);
 
+  /* ===================== ACTIONS ===================== */
+
+  const handleToggleVerify = async (id: string, currentStatus: boolean) => {
+    setVerifyingId(id);
+    try {
+        const newStatus = !currentStatus;
+        const { error } = await supabase
+            .from('customers')
+            .update({ is_verified: newStatus })
+            .eq('id', id);
+
+        if (error) throw error;
+
+        // Optimistic update locally to feel instant
+        setData(prev => prev.map(item => 
+            item.id === id ? { ...item, is_verified: newStatus } : item
+        ));
+
+        // Log the action if verifying
+        if (newStatus) {
+            logActivity('verify_redemption', `Verified package redemption for ID ${id}`);
+        }
+
+    } catch (err) {
+        console.error("Failed to verify:", err);
+        alert("Failed to update status");
+    } finally {
+        setVerifyingId(null);
+    }
+  };
+
   /* ===================== EXPORT ===================== */
 
   const handleExport = async () => {
@@ -167,7 +202,8 @@ export default function PackageActivityPage() {
           'Hours Used': !isPurchase ? row.session_hours : 0,
           'Amount Paid': isPurchase ? (row.package_amount / 100) : 0,
           Therapist: row.therapist_name,
-          Payment: row.payment_method?.toUpperCase() || ''
+          Payment: row.payment_method?.toUpperCase() || '',
+          Verified: row.is_verified ? 'Yes' : 'No' // Added to export
         };
       });
 
@@ -258,21 +294,23 @@ export default function PackageActivityPage() {
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Details</th>
                 <th className="px-4 py-3 text-right text-xs font-bold text-gray-600 uppercase">Impact</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase pl-6">Therapist</th>
+                <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th> {/* New Column */}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="p-6 text-center text-gray-500">Loading...</td>
+                  <td colSpan={8} className="p-6 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-6 text-center text-gray-500">No package activity found in this range.</td>
+                  <td colSpan={8} className="p-6 text-center text-gray-500">No package activity found in this range.</td>
                 </tr>
               ) : (
                 data.map((row) => {
                   const isPurchase = row.took_package; // True if they BOUGHT a package
                   const isRedemption = row.is_package_customer; // True if they REDEEMED a session
+                  const isProcessing = verifyingId === row.id;
                   
                   return (
                     <tr key={row.id} className="hover:bg-gray-50">
@@ -315,6 +353,33 @@ export default function PackageActivityPage() {
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500 pl-6">
                         {row.therapist_name || '—'}
+                      </td>
+                      
+                      {/* VERIFY BUTTON COLUMN */}
+                      <td className="px-4 py-3 text-sm text-center">
+                        {isRedemption && (
+                            <button
+                                onClick={() => handleToggleVerify(row.id, !!row.is_verified)}
+                                disabled={isProcessing}
+                                className={`
+                                    inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border
+                                    ${row.is_verified 
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' 
+                                        : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50 hover:text-gray-900 shadow-sm'}
+                                    ${isProcessing ? 'opacity-50 cursor-wait' : ''}
+                                `}
+                            >
+                                {isProcessing ? (
+                                    '...'
+                                ) : row.is_verified ? (
+                                    <>
+                                        <ShieldCheck size={14} /> Verified
+                                    </>
+                                ) : (
+                                    'Verify'
+                                )}
+                            </button>
+                        )}
                       </td>
                     </tr>
                   );
