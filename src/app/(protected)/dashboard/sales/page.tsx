@@ -250,7 +250,8 @@ export default function AdminSalesPage() {
       .select('*')
       .gte('date', startDate)
       .lte('date', endDate)
-      .order('check_in_time', { ascending: false });
+      .order('check_in_time', { ascending: false })
+      .limit(10000); // <--- ADDED: Increases limit from default 1000 to 10,000
 
     if (selectedOutletId !== 'all') {
       query = query.eq('outlet_id', selectedOutletId);

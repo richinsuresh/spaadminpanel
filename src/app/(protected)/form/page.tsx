@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
+import { Trash2, UserPlus } from 'lucide-react';
 
 // --- Type Definitions ---
 type ClientInfo = {
@@ -20,7 +21,18 @@ type ClientInfo = {
 };
 
 type Employee = { id: string; name: string; role: string; };
-type Treatment = { id: string; name: string; }; // Added Treatment Type
+type Treatment = { id: string; name: string; };
+
+type AdditionalCustomer = {
+  id: string;
+  name: string;
+  treatment: string;
+  sessionHours: number;
+  sessionMinutes: number;
+  therapistName: string;
+  therapistName2: string;
+  room: string;
+};
 
 const outletsList = OUTLETS.map((o: any) => o.name);
 
@@ -30,9 +42,8 @@ export default function ClientForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   
-  // --- State for lists ---
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [treatments, setTreatments] = useState<Treatment[]>([]); // Added Treatments State
+  const [treatments, setTreatments] = useState<Treatment[]>([]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -50,9 +61,11 @@ export default function ClientForm() {
     sold_by: '',
     packageValidity: '3 months', 
     therapistName: '', 
-    therapistName2: '', // Added Second Therapist
+    therapistName2: '', 
     room: '',
   });
+
+  const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -68,16 +81,10 @@ export default function ClientForm() {
     };
   }, []);
 
-  // --- Fetch ALL active employees ---
   useEffect(() => {
     const fetchStaff = async () => {
       try {
-        const { data } = await supabase
-          .from('employees')
-          .select('id, name, role')
-          .eq('is_active', true)
-          .order('name');
-        
+        const { data } = await supabase.from('employees').select('id, name, role').eq('is_active', true).order('name');
         setEmployees(data || []);
       } catch (e) {
         console.error('Failed to fetch employees', e);
@@ -87,40 +94,30 @@ export default function ClientForm() {
     fetchStaff();
   }, []);
 
-  // --- Fetch Treatments when Outlet Changes ---
   useEffect(() => {
     async function fetchTreatments() {
         const selectedOutletObj = OUTLETS.find(o => o.name === formData.outlet);
         if (!selectedOutletObj) return;
-
         try {
-            const { data } = await supabase
-                .from('treatments')
-                .select('id, name')
-                .eq('outlet_id', selectedOutletObj.id)
-                .order('name');
+            const { data } = await supabase.from('treatments').select('id, name').eq('outlet_id', selectedOutletObj.id).order('name');
             setTreatments(data || []);
-            // Reset treatment selection if it's no longer valid
             setFormData(prev => ({ ...prev, treatment: '' }));
         } catch (error) {
             console.error('Error fetching treatments:', error);
             setTreatments([]);
         }
     }
-
     if (formData.outlet) {
         fetchTreatments();
     }
   }, [formData.outlet]);
 
-  // --- Filter Lists ---
   const therapistOptions = useMemo(() => 
     employees.filter(e => e.role === 'therapist' || e.role === 'Therapist'), 
   [employees]);
 
   const allStaffOptions = employees;
 
-  // --- Client Lookup Logic ---
   useEffect(() => {
     if (lookupTimeout.current) clearTimeout(lookupTimeout.current);
     setClientInfo(null);
@@ -139,11 +136,7 @@ export default function ClientForm() {
           const data: ClientInfo | null = await res.json();
           setClientInfo(data);
           if (data) {
-            setFormData(prev => ({ 
-              ...prev, 
-              name: data.name, 
-              isPackageCustomer: data.status === 'active' 
-            }));
+            setFormData(prev => ({ ...prev, name: data.name, isPackageCustomer: data.status === 'active' }));
           } else {
             setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
           }
@@ -173,6 +166,30 @@ export default function ClientForm() {
     });
   };
 
+  const addAdditionalCustomer = () => {
+    setAdditionalCustomers(prev => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        name: '',
+        treatment: '',
+        sessionHours: formData.sessionHours,
+        sessionMinutes: formData.sessionMinutes,
+        therapistName: '',
+        therapistName2: '',
+        room: ''
+      }
+    ]);
+  };
+
+  const removeAdditionalCustomer = (id: string) => {
+    setAdditionalCustomers(prev => prev.filter(c => c.id !== id));
+  };
+
+  const updateAdditionalCustomer = <K extends keyof AdditionalCustomer>(id: string, field: K, value: AdditionalCustomer[K]) => {
+    setAdditionalCustomers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
+  };
+
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
     const minutes = Number(formData.sessionMinutes) || 0;
@@ -187,7 +204,6 @@ export default function ClientForm() {
     return (Number(formData.amountPaid) || 0) * 100;
   }, [formData.isPackageCustomer, formData.tookPackage, formData.packageAmount, formData.amountPaid]);
 
-  // --- Submit Handler ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -201,9 +217,24 @@ export default function ClientForm() {
     }
     
     if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
-      setInputError("Please select at least one Therapist.");
+      setInputError("Please select at least one Therapist for the Main Customer.");
       setIsSubmitting(false);
       return;
+    }
+
+    for (let i = 0; i < additionalCustomers.length; i++) {
+        const c = additionalCustomers[i];
+        const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+        if (!c.name || !c.treatment || dur <= 0) {
+            setInputError(`Please complete details for Guest ${i + 1} (Name, Treatment, Duration).`);
+            setIsSubmitting(false);
+            return;
+        }
+        if(!c.therapistName) {
+            setInputError(`Please select a therapist for Guest ${i + 1} (${c.name}).`);
+            setIsSubmitting(false);
+            return;
+        }
     }
 
     if (formData.tookPackage) {
@@ -236,16 +267,44 @@ export default function ClientForm() {
     const outlet = OUTLETS.find(o => o.name === formData.outlet);
     const outlet_id = outlet ? outlet.id : 'unknown';
 
-    // Combine Therapists
     let combinedTherapistName = formData.therapistName;
     if (formData.therapistName2) {
         combinedTherapistName = `${formData.therapistName} & ${formData.therapistName2}`;
     }
 
+    // --- Time Calculation Logic ---
+    const now = new Date();
+    // Helper to format as "HH:mm" (24h)
+    const formatTimeHM = (date: Date) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+    // Main Customer Times
+    const mainCheckInStr = formatTimeHM(now);
+    const mainOutTime = new Date(now.getTime() + sessionHours * 60 * 60 * 1000);
+    const mainCheckOutStr = formatTimeHM(mainOutTime);
+
+    // Build Group Payload
+    const groupCustomersPayload = additionalCustomers.map(c => {
+        const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+        const checkOut = new Date(now.getTime() + dur * 60 * 60 * 1000);
+        
+        let groupTherapist = c.therapistName;
+        if(c.therapistName2) groupTherapist = `${c.therapistName} & ${c.therapistName2}`;
+
+        return {
+            name: c.name,
+            treatment: c.treatment,
+            sessionHours: dur,
+            therapist_name: groupTherapist,
+            room: c.room,
+            in_time: mainCheckInStr,
+            out_time: formatTimeHM(checkOut),
+        }
+    });
+
     try {
       let checkInTime: string | null = null;
       if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.isPackageCustomer) {
-        checkInTime = new Date().toISOString();
+        checkInTime = now.toISOString();
       }
       
       const payload: any = {
@@ -267,8 +326,14 @@ export default function ClientForm() {
         check_in_time: checkInTime,
         packageSoldBy: formData.tookPackage ? formData.sold_by : null, 
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
-        therapist_name: combinedTherapistName, // Send combined string
-        room: formData.room, 
+        therapist_name: combinedTherapistName, 
+        room: formData.room,
+        
+        // --- ADDED: Send calculated strings for Main Customer ---
+        in_time: mainCheckInStr,
+        out_time: mainCheckOutStr, 
+
+        group_customers: groupCustomersPayload.length > 0 ? groupCustomersPayload : null
       };
 
       const response = await fetch('/api/client-form-submit', {
@@ -381,7 +446,7 @@ export default function ClientForm() {
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name (Main Customer) *</label>
             <input
               name="name"
               type="text"
@@ -409,7 +474,6 @@ export default function ClientForm() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Treatment *</label>
-            {/* UPDATED: Treatment Dropdown */}
             <select
               name="treatment"
               value={formData.treatment}
@@ -436,7 +500,6 @@ export default function ClientForm() {
             />
           </div>
 
-          {/* UPDATED: Therapist 1 & 2 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Primary Therapist</label>
             <select
@@ -494,7 +557,8 @@ export default function ClientForm() {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
               >
                 <option value="cash">Cash</option>
-                <option value="card">UPI / Card</option>
+                <option value="card">Card</option>
+                <option value="upi">UPI</option>
               </select>
             </div>
           )}
@@ -529,6 +593,101 @@ export default function ClientForm() {
             </div>
           </div>
         </div>
+
+        {/* --- GROUP CUSTOMERS UI --- */}
+        {!formData.tookPackage && (
+            <div className="border border-gray-200 bg-gray-50 rounded-lg p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h3 className="text-sm font-bold text-gray-700">Additional Customers (Group)</h3>
+                        <p className="text-xs text-gray-500">Same bill, different treatments.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={addAdditionalCustomer}
+                        className="text-xs px-3 py-1.5 rounded-md border border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white transition flex items-center gap-1"
+                    >
+                        <UserPlus size={14} /> Add Guest
+                    </button>
+                </div>
+
+                {additionalCustomers.map((c, index) => (
+                    <div key={c.id} className="p-3 bg-white border border-gray-200 rounded-lg space-y-3 relative">
+                        <div className="flex justify-between items-center mb-1">
+                            <span className="text-xs font-bold text-gray-500 uppercase">Guest {index + 1}</span>
+                            <button type="button" onClick={() => removeAdditionalCustomer(c.id)} className="text-red-500 hover:text-red-700">
+                                <Trash2 size={16} />
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600">Guest Name</label>
+                                <input
+                                    type="text"
+                                    className="w-full px-2 py-1.5 border rounded text-sm text-black"
+                                    value={c.name}
+                                    onChange={(e) => updateAdditionalCustomer(c.id, 'name', e.target.value)}
+                                    placeholder="Name"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600">Treatment</label>
+                                <select
+                                    className="w-full px-2 py-1.5 border rounded text-sm text-black bg-white"
+                                    value={c.treatment}
+                                    onChange={(e) => updateAdditionalCustomer(c.id, 'treatment', e.target.value)}
+                                >
+                                    <option value="">Select...</option>
+                                    {treatments.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600">Therapist 1</label>
+                                <select
+                                    className="w-full px-2 py-1.5 border rounded text-sm text-black bg-white"
+                                    value={c.therapistName}
+                                    onChange={(e) => updateAdditionalCustomer(c.id, 'therapistName', e.target.value)}
+                                >
+                                    <option value="">Select...</option>
+                                    {therapistOptions.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600">Therapist 2 (Opt)</label>
+                                <select
+                                    className="w-full px-2 py-1.5 border rounded text-sm text-black bg-white"
+                                    value={c.therapistName2}
+                                    onChange={(e) => updateAdditionalCustomer(c.id, 'therapistName2', e.target.value)}
+                                >
+                                    <option value="">None</option>
+                                    {therapistOptions.map(e => <option key={`g-${e.id}`} value={e.name}>{e.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600">Room</label>
+                                <input
+                                    type="text"
+                                    className="w-full px-2 py-1.5 border rounded text-sm text-black"
+                                    value={c.room}
+                                    onChange={(e) => updateAdditionalCustomer(c.id, 'room', e.target.value)}
+                                    placeholder="Room No"
+                                />
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="flex-1">
+                                    <label className="block text-xs font-medium text-gray-600">Hrs</label>
+                                    <input type="number" min="0" className="w-full px-2 py-1.5 border rounded text-sm text-black" value={c.sessionHours} onChange={(e) => updateAdditionalCustomer(c.id, 'sessionHours', Number(e.target.value))} />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="block text-xs font-medium text-gray-600">Mins</label>
+                                    <input type="number" min="0" step="15" className="w-full px-2 py-1.5 border rounded text-sm text-black" value={c.sessionMinutes} onChange={(e) => updateAdditionalCustomer(c.id, 'sessionMinutes', Number(e.target.value))} />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        )}
 
         <div className="pt-4 border-t border-gray-200 space-y-3">
           <label className="flex items-center cursor-pointer">
@@ -623,14 +782,8 @@ export default function ClientForm() {
                   required={formData.tookPackage}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
                 >
-                  <option value="1 months">1 Months</option>
-                  <option value="2 months">2 Months</option>
                   <option value="3 months">3 Months</option>
-                  <option value="4 months">4 Months</option>
-                  <option value="5 months">5 Months</option>
                   <option value="6 months">6 Months</option>
-                  <option value="7 months">7 Months</option>
-                  <option value="8 months">8 Months</option>
                   <option value="9 months">9 Months</option>
                 </select>
               </div>
