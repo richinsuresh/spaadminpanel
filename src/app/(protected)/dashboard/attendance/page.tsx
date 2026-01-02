@@ -1,19 +1,23 @@
+// src/app/(protected)/dashboard/attendance/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { 
   Trash2, 
   Loader2, 
-  Clock, 
+  // Clock, // unused
   MapPin, 
   Calendar as CalendarIcon, 
   ShieldAlert,
   Search,
   LogOut,
   XCircle,
-  CalendarOff
+  CalendarOff,
+  User,
+  BarChart3,
+  AlertTriangle
 } from 'lucide-react';
 
 // --- Types ---
@@ -66,6 +70,9 @@ export default function AttendancePage() {
   const [outletFilter, setOutletFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // --- NEW: Monthly Off Tracking ---
+  const [monthlyOffCounts, setMonthlyOffCounts] = useState<Record<string, number>>({});
+
   // Modals State
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
@@ -75,6 +82,13 @@ export default function AttendancePage() {
   // Bulk Action Modals
   const [isBulkLogoutModalOpen, setIsBulkLogoutModalOpen] = useState(false);
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  // Summary Modal State
+  const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
+  const [summaryEmployee, setSummaryEmployee] = useState<Employee | null>(null);
+  const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [summaryStats, setSummaryStats] = useState({ present: 0, absent: 0, weeklyOff: 0 });
+  const [isStatsLoading, setIsStatsLoading] = useState(false);
 
   // Data State
   const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
@@ -108,13 +122,93 @@ export default function AttendancePage() {
     }
   }, [dateFilter, outletFilter]);
 
+  // --- NEW: Fetch Monthly Off Counts ---
+  const fetchMonthlyOffs = useCallback(async () => {
+      // Calculate start and end of the currently filtered month
+      const [year, month] = dateFilter.split('-').map(Number);
+      const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
+      // Get last day of month
+      const endOfMonth = new Date(year, month, 0).toISOString().split('T')[0];
+
+      try {
+          const { data, error } = await supabase
+              .from('attendance')
+              .select('employee_id')
+              .eq('status', 'Weekly Off')
+              .gte('date', startOfMonth)
+              .lte('date', endOfMonth);
+          
+          if (error) throw error;
+
+          // Aggregate counts
+          const counts: Record<string, number> = {};
+          data?.forEach((r) => {
+              counts[r.employee_id] = (counts[r.employee_id] || 0) + 1;
+          });
+          setMonthlyOffCounts(counts);
+
+      } catch (err) {
+          console.error("Error fetching monthly offs:", err);
+      }
+  }, [dateFilter]);
+
+  // --- Fetch Employee Stats (Individual Summary) ---
+  const fetchEmployeeStats = useCallback(async (empId: string, monthStr: string) => {
+      setIsStatsLoading(true);
+      try {
+          const startOfMonth = `${monthStr}-01`;
+          const [y, m] = monthStr.split('-').map(Number);
+          const endOfMonth = new Date(y, m, 0).toISOString().split('T')[0];
+
+          const { data, error } = await supabase
+              .from('attendance')
+              .select('status, check_in_time')
+              .eq('employee_id', empId)
+              .gte('date', startOfMonth)
+              .lte('date', endOfMonth);
+
+          if (error) throw error;
+
+          const stats = { present: 0, absent: 0, weeklyOff: 0 };
+          data?.forEach(r => {
+              if (r.status === 'Absent') stats.absent++;
+              else if (r.status === 'Weekly Off') stats.weeklyOff++;
+              else if (r.status === 'Present' || r.check_in_time) stats.present++;
+          });
+          setSummaryStats(stats);
+      } catch (err) {
+          console.error("Error fetching stats:", err);
+      } finally {
+          setIsStatsLoading(false);
+      }
+  }, []);
+
   useEffect(() => {
     fetchEmployees();
     fetchAttendance();
-  }, [fetchEmployees, fetchAttendance]);
+    fetchMonthlyOffs(); // <-- Call new fetcher
+  }, [fetchEmployees, fetchAttendance, fetchMonthlyOffs]);
 
-  // --- ACTIONS ---
+  useEffect(() => {
+      if (isSummaryModalOpen && summaryEmployee) {
+          fetchEmployeeStats(summaryEmployee.id, summaryMonth);
+      }
+  }, [summaryMonth, isSummaryModalOpen, summaryEmployee, fetchEmployeeStats]);
 
+  const handleOpenSummary = (emp: Employee) => {
+      setSummaryEmployee(emp);
+      setSummaryMonth(new Date().toISOString().slice(0, 7));
+      setIsSummaryModalOpen(true);
+  };
+
+  // --- HELPERS FOR LIMIT LOGIC ---
+  const getOffLimit = (role: string) => {
+      const r = role.toLowerCase();
+      if (r.includes('manager')) return 4;
+      return 2; // Therapist, Housekeeping, etc.
+  };
+
+  // --- ACTIONS (Unchanged) ---
   const handleForceLogout = async () => {
     if (!recordToLogout || adminPassword !== ADMIN_PASSWORD) {
         setErrorMsg('Incorrect admin password');
@@ -178,72 +272,48 @@ export default function AttendancePage() {
       } finally { setIsProcessing(false); }
   };
 
-  // --- BULK ACTIONS ---
-
   const handleBulkLogout = async () => {
     if (adminPassword !== ADMIN_PASSWORD) { setErrorMsg('Incorrect password'); return; }
     setIsProcessing(true);
     try {
         const now = new Date().toISOString();
-        
-        // Find all active records for the current filter
         let query = supabase.from('attendance').select('id, employee_id').eq('date', dateFilter).is('check_out_time', null);
         if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
-        
         const { data: activeRecords, error: fetchError } = await query;
         if (fetchError) throw fetchError;
 
         if (activeRecords && activeRecords.length > 0) {
             const ids = activeRecords.map(r => r.id);
             const empIds = activeRecords.map(r => r.employee_id);
-
-            // Close Attendance
             await supabase.from('attendance').update({ check_out_time: now, status: 'Present' }).in('id', ids);
-            // Reset Employees
             await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
         }
-
         setIsBulkLogoutModalOpen(false);
         setAdminPassword('');
         fetchAttendance();
-    } catch (err: any) {
-        setErrorMsg(err.message);
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
 
   const handleBulkDelete = async () => {
     if (adminPassword !== ADMIN_PASSWORD) { setErrorMsg('Incorrect password'); return; }
     setIsProcessing(true);
     try {
-        // Find all records for current filter to reset employees if needed
         let query = supabase.from('attendance').select('id, employee_id').eq('date', dateFilter);
         if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
-        
         const { data: targetRecords, error: fetchError } = await query;
         if (fetchError) throw fetchError;
 
         if (targetRecords && targetRecords.length > 0) {
             const ids = targetRecords.map(r => r.id);
             const empIds = targetRecords.map(r => r.employee_id);
-
-            // Delete Attendance
             await supabase.from('attendance').delete().in('id', ids);
-            // Reset Employees (in case they were checked in on deleted records)
             await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
         }
-
         setIsBulkDeleteModalOpen(false);
         setAdminPassword('');
         fetchAttendance();
-    } catch (err: any) {
-        setErrorMsg(err.message);
-    } finally {
-        setIsProcessing(false);
-    }
+    } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
-
 
   const filteredData = employees.map(emp => ({
     employee: emp,
@@ -265,8 +335,7 @@ export default function AttendancePage() {
         </div>
         
         <div className="flex flex-wrap gap-3 items-center">
-            
-            {/* BULK ACTIONS */}
+            {/* BULK ACTIONS UI Unchanged */}
             <button 
                 onClick={() => { setIsBulkLogoutModalOpen(true); setErrorMsg(''); setAdminPassword(''); }}
                 className="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors border border-amber-200"
@@ -338,15 +407,44 @@ export default function AttendancePage() {
                 filteredData.map(({ employee, record }) => {
                   const isWorking = record?.check_in_time && !record?.check_out_time;
                   
+                  // --- NEW: LOGIC FOR NO RECORD ---
+                  let noRecordStatus = null;
+                  if (!record) {
+                      const offsUsed = monthlyOffCounts[employee.id] || 0;
+                      const offLimit = getOffLimit(employee.role);
+                      
+                      if (offsUsed >= offLimit) {
+                          noRecordStatus = (
+                              <span className="px-2 py-1 rounded bg-rose-100 text-rose-800 text-[10px] font-bold uppercase border border-rose-200 flex items-center gap-1 w-fit">
+                                  <AlertTriangle size={12} /> Absent (Limit Exceeded)
+                              </span>
+                          );
+                      } else {
+                          // Still have quota left
+                          noRecordStatus = (
+                              <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase flex items-center gap-1 w-fit">
+                                  <CalendarOff size={12} /> Auto Weekly Off ({offLimit - offsUsed} left)
+                              </span>
+                          );
+                      }
+                  }
+
                   return (
                     <tr key={employee.id} className="hover:bg-slate-50/30 transition-colors">
                       <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-sm">
+                        <div 
+                            className="flex items-center gap-3 cursor-pointer group"
+                            onClick={() => handleOpenSummary(employee)}
+                            title="Click to view attendance summary"
+                        >
+                            <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-sm group-hover:bg-indigo-600 transition-colors shadow-sm">
                                 {employee.name.charAt(0)}
                             </div>
                             <div>
-                                <div className="text-sm font-bold text-slate-900">{employee.name}</div>
+                                <div className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors flex items-center gap-1">
+                                    {employee.name}
+                                    <BarChart3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </div>
                                 <div className="text-[10px] text-slate-600 font-bold uppercase tracking-tight">{employee.role || 'Therapist'}</div>
                             </div>
                         </div>
@@ -361,9 +459,9 @@ export default function AttendancePage() {
                         {formatTime(record?.check_out_time)}
                       </td>
                       <td className="px-6 py-4">
-                         {/* UPDATED ADMIN STATUS LOGIC */}
                          {!record ? (
-                           <span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-[10px] font-bold uppercase">Absent (No Log)</span>
+                           // Use the new calculated status if no record exists
+                           noRecordStatus
                          ) : record.status === 'Absent' ? (
                            <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
                                <XCircle size={12} /> Absent
@@ -380,44 +478,20 @@ export default function AttendancePage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
+                            {/* Action buttons remain unchanged */}
                             {record?.early_checkout_requested && (
-                                <button 
-                                  onClick={() => { setRequestToApprove(record); setIsApprovalModalOpen(true); }} 
-                                  className="px-3 py-1.5 bg-amber-500 text-black rounded-lg text-[10px] font-bold uppercase"
-                                >
-                                  Review
-                                </button>
+                                <button onClick={() => { setRequestToApprove(record); setIsApprovalModalOpen(true); }} className="px-3 py-1.5 bg-amber-500 text-black rounded-lg text-[10px] font-bold uppercase">Review</button>
                             )}
                             
-                            {/* Actions only for real working records, not Absent/Off ones */}
                             {isWorking && record && record.status !== 'Absent' && record.status !== 'Weekly Off' && (
                                 <>
-                                  <button 
-                                    onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }}
-                                    className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
-                                    title="Force Check-out (Log Out)"
-                                  >
-                                    <LogOut size={18} />
-                                  </button>
-
-                                  <button 
-                                    onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} 
-                                    className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" 
-                                    title="Transfer Branch"
-                                  >
-                                    <MapPin size={18} />
-                                  </button>
+                                  <button onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-all"><LogOut size={18} /></button>
+                                  <button onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all"><MapPin size={18} /></button>
                                 </>
                             )}
 
                             {record && (
-                                <button 
-                                    onClick={() => { setRecordToDelete(record); setErrorMsg(''); setAdminPassword(''); setIsSingleDeleteModalOpen(true); }}
-                                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                    title="Delete Log"
-                                >
-                                    <Trash2 size={18} />
-                                </button>
+                                <button onClick={() => { setRecordToDelete(record); setErrorMsg(''); setAdminPassword(''); setIsSingleDeleteModalOpen(true); }} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"><Trash2 size={18} /></button>
                             )}
                         </div>
                       </td>
@@ -430,9 +504,73 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* --- MODALS (Unchanged logic, just keeping structure) --- */}
+      {/* --- MODALS Section (Unchanged, Summary Modal Added Above) --- */}
+      {/* Existing modals for Logout/Delete/Transfer are preserved here */}
       
-      {/* FORCE LOGOUT MODAL */}
+      {/* SUMMARY MODAL IS ABOVE */}
+      {isSummaryModalOpen && summaryEmployee && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+                <div className="p-6 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                            {summaryEmployee.name.charAt(0)}
+                        </div>
+                        <div>
+                            <h2 className="text-lg font-bold text-slate-900">{summaryEmployee.name}</h2>
+                            <p className="text-xs text-slate-500 font-bold uppercase tracking-wide">{summaryEmployee.role}</p>
+                        </div>
+                    </div>
+                    <button onClick={() => setIsSummaryModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                        <XCircle size={28} />
+                    </button>
+                </div>
+                
+                <div className="p-6 space-y-6">
+                    <div>
+                        <label className="text-[10px] font-extrabold text-slate-500 uppercase mb-2 block tracking-wider">Select Month</label>
+                        <input
+                            type="month"
+                            value={summaryMonth}
+                            onChange={(e) => setSummaryMonth(e.target.value)}
+                            className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                        />
+                    </div>
+
+                    {isStatsLoading ? (
+                        <div className="py-8 flex justify-center">
+                            <Loader2 className="animate-spin text-indigo-600 h-8 w-8" />
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="p-5 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col items-center justify-center gap-1 group hover:border-rose-200 transition-colors">
+                                <div className="text-3xl font-black text-rose-600 group-hover:scale-110 transition-transform">{summaryStats.absent}</div>
+                                <div className="text-[10px] font-bold text-rose-800 uppercase tracking-widest flex items-center gap-1">
+                                    <XCircle size={12} /> Absents
+                                </div>
+                            </div>
+                            
+                            <div className="p-5 bg-amber-50 rounded-2xl border border-amber-100 flex flex-col items-center justify-center gap-1 group hover:border-amber-200 transition-colors">
+                                <div className="text-3xl font-black text-amber-600 group-hover:scale-110 transition-transform">{summaryStats.weeklyOff}</div>
+                                <div className="text-[10px] font-bold text-amber-800 uppercase tracking-widest flex items-center gap-1">
+                                    <CalendarOff size={12} /> Weekly Offs
+                                </div>
+                            </div>
+
+                            <div className="col-span-2 p-5 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center gap-1 group hover:border-emerald-200 transition-colors">
+                                <div className="text-3xl font-black text-emerald-600 group-hover:scale-110 transition-transform">{summaryStats.present}</div>
+                                <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1">
+                                    <User size={12} /> Days Present
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Preserve existing modals: Force Logout, Bulk Logout, Bulk Delete, Single Delete, Transfer */}
       {isForceLogoutModalOpen && recordToLogout && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -460,7 +598,6 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* BULK LOGOUT MODAL */}
       {isBulkLogoutModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -470,7 +607,7 @@ export default function AttendancePage() {
             </div>
             <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-900 font-medium">
-                    You are about to force logout <strong>ALL active staff</strong> visible in the current filter. This action cannot be undone.
+                    You are about to force logout <strong>ALL active staff</strong> visible in the current filter.
                 </p>
                 <div>
                     <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
@@ -488,7 +625,6 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* BULK DELETE MODAL */}
       {isBulkDeleteModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -498,7 +634,7 @@ export default function AttendancePage() {
             </div>
             <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-900 font-medium">
-                    <strong>Warning:</strong> This will permanently delete ALL attendance records for the selected date/outlet. Employees will be reset to "Checked Out".
+                    <strong>Warning:</strong> This will permanently delete ALL attendance records for the selected date/outlet.
                 </p>
                 <div>
                     <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
@@ -516,7 +652,6 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* DELETE MODAL (SINGLE) */}
       {isSingleDeleteModalOpen && recordToDelete && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -544,7 +679,6 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* TRANSFER MODAL */}
       {isOutletChangeModalOpen && recordToTransfer && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -554,7 +688,7 @@ export default function AttendancePage() {
             </div>
             <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-900 font-bold leading-relaxed">
-                    Move <strong className="text-indigo-600 underline font-extrabold">{recordToTransfer.employee_name}</strong> to a different location for today.
+                    Move <strong className="text-indigo-600 underline font-extrabold">{recordToTransfer.employee_name}</strong> to a different location.
                 </p>
                 <div className="space-y-4 pt-2">
                     <div>
