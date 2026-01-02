@@ -1,10 +1,10 @@
-// src/components/SaleReminderPoller.tsx - UNIVERSAL REMINDER SYSTEM (FINAL LOOP & CLOSE FIX)
+// src/components/SaleReminderPoller.tsx
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Clock, Loader2 } from 'lucide-react';
+import { AlertTriangle, Clock } from 'lucide-react';
 
 // ====================================================================
 // === TYPES AND UTILITY FUNCTIONS ===
@@ -48,14 +48,11 @@ const getTodayDate = () => new Date().toISOString().split('T')[0];
 // ====================================================================
 // === CONFIGURATION ===
 // ====================================================================
-// 🛑 UPDATED: Polling every 10 seconds
 const POLLING_INTERVAL_MS = 10000; 
 const SNOOZE_DURATION_MS = 300000; // 5 minutes
-const CLOSE_SNOOZE_DURATION_MS = 5000; // 5 seconds (to break the loop)
-const NAVIGATION_DELAY_MS = 50; // Critical delay for router.push()
-
-// 🛑 UPDATED: New audio file path
-const AUDIO_ALERT_PATH = '/audio/alert-outlet.mp3'; 
+const CLOSE_SNOOZE_DURATION_MS = 5000; // 5 seconds
+const NAVIGATION_DELAY_MS = 50; 
+const BUFFER_MINUTES = 10; // 10 Minute Buffer
 
 // ====================================================================
 // === MAIN COMPONENT ===
@@ -63,24 +60,16 @@ const AUDIO_ALERT_PATH = '/audio/alert-outlet.mp3';
 
 export default function SaleReminderPoller() {
   const [dueSales, setDueSales] = useState<DueSale[]>([]); 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const router = useRouter(); 
   
   const snoozedClients = useRef<Set<string>>(new Set());
   const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Setup Audio
-  useEffect(() => {
-    if (typeof window !== 'undefined' && AUDIO_ALERT_PATH) {
-      audioRef.current = new Audio(AUDIO_ALERT_PATH);
-    }
-  }, []);
-
-
-  // 2. Data Fetching and Polling Logic
+  // 1. Data Fetching and Polling Logic
   const fetchDueSales = useCallback(async () => {
     const now = new Date();
     const today = getTodayDate();
+    const bufferMs = BUFFER_MINUTES * 60 * 1000; // Calculate buffer in ms
     
     try {
       const { data, error } = await supabase
@@ -104,25 +93,20 @@ export default function SaleReminderPoller() {
               ) {
                   const expected = getExpectedCheckoutTime(s.check_in_time, s.session_hours);
                   
-                  if (expected && now >= expected) {
-                      salesToAlert.push(s);
+                  if (expected) {
+                      // Add buffer: Alert only if Current Time >= Expected Time + 10 mins
+                      const alertTriggerTime = new Date(expected.getTime() + bufferMs);
+                      
+                      if (now >= alertTriggerTime) {
+                          salesToAlert.push(s);
+                      }
                   }
               }
           }
       }
 
       if (salesToAlert.length > 0) {
-        const oldSaleIds = new Set(dueSales.map(s => s.id));
-        const hasNewAlerts = salesToAlert.some(s => !oldSaleIds.has(s.id));
-
-        if (hasNewAlerts) {
-            if (audioRef.current) {
-                audioRef.current.currentTime = 0;
-                audioRef.current.play().catch(e => console.log("Audio play failed (User interaction needed):", e));
-            }
-        }
         setDueSales(salesToAlert);
-
       } else if (dueSales.length > 0) {
         setDueSales([]); 
       }
@@ -133,7 +117,7 @@ export default function SaleReminderPoller() {
   }, [dueSales]); 
 
   
-  // 3. Start Polling Interval and Cleanup
+  // 2. Start Polling Interval and Cleanup
   useEffect(() => {
     if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
     
@@ -148,7 +132,7 @@ export default function SaleReminderPoller() {
   }, [fetchDueSales]);
 
   
-  // 4. Handle Snooze/Dismiss
+  // 3. Handle Snooze/Dismiss
   const handleModalClose = useCallback(() => {
     // Standard 5-minute Snooze
     if (dueSales.length > 0) {
@@ -200,7 +184,7 @@ export default function SaleReminderPoller() {
   }, [router, dueSales]);
 
 
-  // 5. Component Gate
+  // 4. Component Gate
   if (dueSales.length === 0) {
     return null;
   }
@@ -211,7 +195,7 @@ export default function SaleReminderPoller() {
       ? fmtTime(getExpectedCheckoutTime(saleToDisplay.check_in_time, saleToDisplay.session_hours)?.toISOString() || null)
       : 'N/A';
   
-  // 6. Modal UI
+  // 5. Modal UI
   return (
     <div 
       className="fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4" 
