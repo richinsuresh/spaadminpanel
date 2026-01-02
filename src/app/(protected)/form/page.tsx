@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
-import { Trash2, UserPlus } from 'lucide-react';
+import { Trash2, UserPlus, Calendar, Clock } from 'lucide-react';
 
 // --- Type Definitions ---
 type ClientInfo = {
@@ -45,9 +45,16 @@ export default function ClientForm() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
 
+  // Helper for current time HH:mm
+  const getCurrentTime = () => {
+    const now = new Date();
+    return now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  };
+
   const [formData, setFormData] = useState({
     name: '',
     date: new Date().toISOString().split('T')[0],
+    checkInTime: getCurrentTime(), // Added Check-In Time State
     treatment: '',
     amountPaid: 0,
     sessionHours: 0,
@@ -272,20 +279,27 @@ export default function ClientForm() {
         combinedTherapistName = `${formData.therapistName} & ${formData.therapistName2}`;
     }
 
-    // --- Time Calculation Logic ---
-    const now = new Date();
-    // Helper to format as "HH:mm" (24h)
+    // --- Time Calculation Logic (Calculated from Form Inputs) ---
+    // Combine Date + CheckInTime
+    const checkInDateTime = new Date(`${formData.date}T${formData.checkInTime}`);
+    
+    if (isNaN(checkInDateTime.getTime())) {
+        setInputError("Invalid Date or Time selection.");
+        setIsSubmitting(false);
+        return;
+    }
+
     const formatTimeHM = (date: Date) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
     // Main Customer Times
-    const mainCheckInStr = formatTimeHM(now);
-    const mainOutTime = new Date(now.getTime() + sessionHours * 60 * 60 * 1000);
+    const mainCheckInStr = formData.checkInTime;
+    const mainOutTime = new Date(checkInDateTime.getTime() + sessionHours * 60 * 60 * 1000);
     const mainCheckOutStr = formatTimeHM(mainOutTime);
 
-    // Build Group Payload
+    // Build Group Payload (Uses Base Check-In Time)
     const groupCustomersPayload = additionalCustomers.map(c => {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
-        const checkOut = new Date(now.getTime() + dur * 60 * 60 * 1000);
+        const checkOut = new Date(checkInDateTime.getTime() + dur * 60 * 60 * 1000);
         
         let groupTherapist = c.therapistName;
         if(c.therapistName2) groupTherapist = `${c.therapistName} & ${c.therapistName2}`;
@@ -304,7 +318,7 @@ export default function ClientForm() {
     try {
       let checkInTime: string | null = null;
       if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.isPackageCustomer) {
-        checkInTime = now.toISOString();
+        checkInTime = checkInDateTime.toISOString();
       }
       
       const payload: any = {
@@ -329,7 +343,7 @@ export default function ClientForm() {
         therapist_name: combinedTherapistName, 
         room: formData.room,
         
-        // --- ADDED: Send calculated strings for Main Customer ---
+        // --- Send calculated strings for Dashboard display ---
         in_time: mainCheckInStr,
         out_time: mainCheckOutStr, 
 
@@ -563,33 +577,63 @@ export default function ClientForm() {
             </div>
           )}
 
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration {formData.isPackageCustomer ? '*' : ''}</label>
-            <div className="flex space-x-3">
-              <div className="flex-1">
-                <input
-                  name="sessionHours"
-                  type="number"
-                  min="0"
-                  placeholder="Hrs"
-                  value={formData.sessionHours || ''}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-                />
-              </div>
-              <div className="flex-1">
-                <input
-                  name="sessionMinutes"
-                  type="number"
-                  min="0"
-                  max="59"
-                  step="15"
-                  placeholder="Mins"
-                  value={formData.sessionMinutes || ''}
-                  onChange={handleChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-                />
-              </div>
+          {/* DURATION + TIME FIELDS */}
+          <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration {formData.isPackageCustomer ? '*' : ''}</label>
+                <div className="flex space-x-3">
+                <div className="flex-1">
+                    <input
+                    name="sessionHours"
+                    type="number"
+                    min="0"
+                    placeholder="Hrs"
+                    value={formData.sessionHours || ''}
+                    onChange={handleChange}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+                    />
+                </div>
+                <div className="flex-1">
+                    <input
+                    name="sessionMinutes"
+                    type="number"
+                    min="0"
+                    max="59"
+                    step="15"
+                    placeholder="Mins"
+                    value={formData.sessionMinutes || ''}
+                    onChange={handleChange}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+                    />
+                </div>
+                </div>
+            </div>
+
+            <div className="flex gap-3">
+                <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                        <Calendar size={14} /> Date
+                    </label>
+                    <input
+                        name="date"
+                        type="date"
+                        value={formData.date}
+                        onChange={handleChange}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    />
+                </div>
+                <div className="flex-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                        <Clock size={14} /> Check In
+                    </label>
+                    <input
+                        name="checkInTime"
+                        type="time"
+                        value={formData.checkInTime}
+                        onChange={handleChange}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black"
+                    />
+                </div>
             </div>
           </div>
         </div>

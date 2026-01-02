@@ -539,24 +539,42 @@ export default function OutletSalesPage() {
 
 
 /* -------- Fetch outlet info and employees -------- */
-  const fetchOutletEmployees = useCallback(async (currentOutletId: string) => {
+ /* -------- Fetch Employees Based on Attendance (UPDATED) -------- */
+  const fetchOutletEmployees = useCallback(async () => {
+    if (!outletId) return;
+    
     try {
-        // Updated query to use lowercase 'therapist' to match the database schema
+        // Query Attendance table: Get employees logged into this outlet for the selected date
+        // Exclude Absent/Weekly Off
         const { data, error } = await supabase
-            .from('employees')
-            .select('id, name')
-            .eq('is_active', true)
-            .eq('role', 'therapist') // Changed from 'Therapist' to 'therapist'
-            .order('name', { ascending: true });
+            .from('attendance')
+            .select('employee_id, employee_name')
+            .eq('outlet_id', outletId)
+            .eq('date', dateFilter)
+            .neq('status', 'Absent')
+            .neq('status', 'Weekly Off');
         
         if (error) throw error;
         
-        console.log("Employees found:", data); // Debugging line to see results in console
-        setEmployees((data as Employee[]) || []);
+        // Map to Employee type and remove duplicates
+        const uniqueStaffMap = new Map();
+        data?.forEach((r) => {
+            if (!uniqueStaffMap.has(r.employee_id)) {
+                uniqueStaffMap.set(r.employee_id, {
+                    id: r.employee_id,
+                    name: r.employee_name,
+                });
+            }
+        });
+        
+        setEmployees(Array.from(uniqueStaffMap.values()));
     } catch (err) {
-        console.error('Error fetching employees:', err);
+        console.error('Error fetching employees from attendance:', err);
+        setEmployees([]);
     }
-  }, []);
+  }, [outletId, dateFilter]);
+
+ /* -------- Init Outlet -------- */
   useEffect(() => {
     async function fetchOutletSession() {
       try {
@@ -565,7 +583,6 @@ export default function OutletSalesPage() {
         if (data.outletId) {
           setOutletId(data.outletId);
           setOutletName(data.outletName);
-          fetchOutletEmployees(data.outletId); // Fetch employees once ID is known
         } else {
           console.error('Outlet ID not found in session data.');
         }
@@ -574,7 +591,13 @@ export default function OutletSalesPage() {
       }
     }
     fetchOutletSession();
-  }, [fetchOutletEmployees]); // Dependency added
+  }, []);
+
+  /* -------- Trigger Employee Fetch -------- */
+  // This was causing the error. It needs to be wrapped in useEffect.
+  useEffect(() => {
+      fetchOutletEmployees();
+  }, [fetchOutletEmployees]);
 
   /* -------- Fetch sales -------- */
   const fetchSales = useCallback(async () => {
