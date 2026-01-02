@@ -1,4 +1,3 @@
-// src/app/(protected)/dashboard/attendance/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -7,7 +6,6 @@ import { OUTLETS } from '@/lib/outlet';
 import { 
   Trash2, 
   Loader2, 
-  // Clock, // unused
   MapPin, 
   Calendar as CalendarIcon, 
   ShieldAlert,
@@ -25,6 +23,7 @@ type Employee = {
   id: string;
   name: string;
   role: string;
+  outlet_id?: string; // Added to help assign attendance when filter is 'All'
 };
 
 type AttendanceRecord = {
@@ -101,9 +100,11 @@ export default function AttendancePage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [newOutletId, setNewOutletId] = useState('');
+  const [markingId, setMarkingId] = useState<string | null>(null); // For marking absent/off loading state
 
   const fetchEmployees = useCallback(async () => {
-    const { data } = await supabase.from('employees').select('id, name, role').eq('is_active', true).order('name');
+    // Added outlet_id to selection
+    const { data } = await supabase.from('employees').select('id, name, role, outlet_id').eq('is_active', true).order('name');
     setEmployees(data || []);
   }, []);
 
@@ -183,10 +184,49 @@ export default function AttendancePage() {
       }
   }, []);
 
+  // --- NEW: Mark Status Manually ---
+  const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off') => {
+    setMarkingId(emp.id);
+    try {
+        // Determine correct outlet. 
+        // 1. Use the filter if selected. 
+        // 2. Use employee's default outlet if filter is 'all'.
+        const targetOutletId = outletFilter !== 'all' ? outletFilter : emp.outlet_id;
+        
+        if (!targetOutletId) {
+            alert("Please select a specific Outlet Filter to mark attendance for this employee, or ensure they have a default outlet assigned.");
+            setMarkingId(null);
+            return;
+        }
+
+        const targetOutlet = OUTLETS.find(o => o.id === targetOutletId);
+
+        const { error } = await supabase.from('attendance').insert({
+            employee_id: emp.id,
+            employee_name: emp.name,
+            outlet_id: targetOutletId,
+            outlet_name: targetOutlet?.name || 'Unknown',
+            date: dateFilter,
+            status: status,
+            check_in_time: null,
+            check_out_time: null
+        });
+
+        if (error) throw error;
+        
+        await fetchAttendance();
+        fetchMonthlyOffs(); // Refresh limits
+    } catch (err: any) {
+        alert('Failed to mark status: ' + err.message);
+    } finally {
+        setMarkingId(null);
+    }
+  };
+
   useEffect(() => {
     fetchEmployees();
     fetchAttendance();
-    fetchMonthlyOffs(); // <-- Call new fetcher
+    fetchMonthlyOffs(); 
   }, [fetchEmployees, fetchAttendance, fetchMonthlyOffs]);
 
   useEffect(() => {
@@ -460,8 +500,28 @@ export default function AttendancePage() {
                       </td>
                       <td className="px-6 py-4">
                          {!record ? (
-                           // Use the new calculated status if no record exists
-                           noRecordStatus
+                           <div className="flex flex-col gap-2">
+                                {/* Auto Status Display */}
+                                <div>{noRecordStatus}</div>
+                                
+                                {/* Manual Mark Buttons */}
+                                <div className="flex items-center gap-2">
+                                   <button 
+                                       disabled={!!markingId}
+                                       onClick={() => handleMarkStatus(employee, 'Absent')}
+                                       className="px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded text-[10px] font-bold uppercase hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                   >
+                                       {markingId === employee.id ? '...' : 'Mark Absent'}
+                                   </button>
+                                   <button 
+                                       disabled={!!markingId}
+                                       onClick={() => handleMarkStatus(employee, 'Weekly Off')}
+                                       className="px-2 py-1 bg-white border border-gray-300 text-gray-700 rounded text-[10px] font-bold uppercase hover:bg-gray-100 transition-colors disabled:opacity-50"
+                                   >
+                                       Mark Off
+                                   </button>
+                               </div>
+                           </div>
                          ) : record.status === 'Absent' ? (
                            <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
                                <XCircle size={12} /> Absent
