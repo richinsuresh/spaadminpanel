@@ -48,11 +48,14 @@ const getTodayDate = () => new Date().toISOString().split('T')[0];
 // ====================================================================
 // === CONFIGURATION ===
 // ====================================================================
-const POLLING_INTERVAL_MS = 30000; 
+// 🛑 UPDATED: Polling every 10 seconds
+const POLLING_INTERVAL_MS = 10000; 
 const SNOOZE_DURATION_MS = 300000; // 5 minutes
 const CLOSE_SNOOZE_DURATION_MS = 5000; // 5 seconds (to break the loop)
 const NAVIGATION_DELAY_MS = 50; // Critical delay for router.push()
-const AUDIO_ALERT_PATH = '/audio/alert.mp3'; 
+
+// 🛑 UPDATED: New audio file path
+const AUDIO_ALERT_PATH = '/audio/alert-outlet.mp3'; 
 
 // ====================================================================
 // === MAIN COMPONENT ===
@@ -115,7 +118,7 @@ export default function SaleReminderPoller() {
         if (hasNewAlerts) {
             if (audioRef.current) {
                 audioRef.current.currentTime = 0;
-                audioRef.current.play().catch(e => console.log("Audio play failed:", e));
+                audioRef.current.play().catch(e => console.log("Audio play failed (User interaction needed):", e));
             }
         }
         setDueSales(salesToAlert);
@@ -125,7 +128,7 @@ export default function SaleReminderPoller() {
       }
 
     } catch (e) {
-      console.error("Error fetching due sales (Check RLS on 'customers' table!):", e);
+      console.error("Error fetching due sales:", e);
     }
   }, [dueSales]); 
 
@@ -134,7 +137,9 @@ export default function SaleReminderPoller() {
   useEffect(() => {
     if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
     
+    // Check immediately on mount
     fetchDueSales(); 
+    // Then poll at the configured interval
     pollingTimerRef.current = setInterval(fetchDueSales, POLLING_INTERVAL_MS);
     
     return () => {
@@ -173,7 +178,7 @@ export default function SaleReminderPoller() {
     setDueSales([]);
   }, [dueSales]);
 
-  // 🛑 FIX: Handler for "Review Sales" button (now navigates to a specific sale page)
+  // Handler for "Review Sales" button
   const handleReviewSales = useCallback(() => {
     const saleId = dueSales[0]?.id; // Get the ID of the first due sale
     if (!saleId) {
@@ -187,13 +192,11 @@ export default function SaleReminderPoller() {
     // 2. Dismiss the modal state IMMEDIATELY
     setDueSales([]); 
     
-    // 3. Navigate after a brief delay (CRITICAL FIX for the looping issue)
+    // 3. Navigate after a brief delay
     setTimeout(() => {
-        // Navigate to the new dynamic sale dashboard page
         router.push(`/dashboard/sales/${saleId}`); 
     }, NAVIGATION_DELAY_MS);
     
-    // Polling will restart when the sales page loads and the poller component remounts.
   }, [router, dueSales]);
 
 
@@ -246,7 +249,7 @@ export default function SaleReminderPoller() {
           </div>
           <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
             
-            {/* Review Button (Navigates to the specific Sale Dashboard) */}
+            {/* Review Button */}
             <button
               type="button"
               className="inline-flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-indigo-700 sm:ml-3 sm:w-auto sm:text-sm"

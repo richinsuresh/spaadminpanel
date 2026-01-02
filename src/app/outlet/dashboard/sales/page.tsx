@@ -599,6 +599,7 @@ export default function OutletSalesPage() {
       fetchOutletEmployees();
   }, [fetchOutletEmployees]);
 
+
   /* -------- Fetch sales -------- */
   const fetchSales = useCallback(async () => {
     if (!outletId) return;
@@ -717,6 +718,18 @@ export default function OutletSalesPage() {
   );
 
   /* -------- Warning system (Unmodified) -------- */
+ // 1. ADD: Audio Reference
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // 2. ADD: Initialize Audio on Mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      // Ensure this file exists at public/audio/alert.mp3
+      audioRef.current = new Audio('/audio/alert-outlet.mp3');
+    }
+  }, []);
+
+  /* -------- Warning System (UPDATED) -------- */
   useEffect(() => {
     if (!isToday) {
       if (warningTimerRef.current) clearInterval(warningTimerRef.current);
@@ -725,25 +738,42 @@ export default function OutletSalesPage() {
 
     const checkWarnings = () => {
       const now = new Date();
+      // If modal is already open, don't keep firing
       if (warningModalOpen) return;
 
-      for (const sale of sales.filter(
-        (s) => s.check_in_time && !s.check_out_time && s.session_hours,
-      )) {
+      // Filter for active sessions
+      const activeSales = sales.filter(
+        (s) => s.check_in_time && !s.check_out_time && s.session_hours
+      );
+
+      for (const sale of activeSales) {
         if (!snoozedClients.current.has(sale.id)) {
           const expected = getExpectedCheckoutTime(
             sale.check_in_time,
             sale.session_hours,
           );
+          
           if (expected && now >= expected) {
             setWarningSale(sale);
             setWarningExpectedTime(formatTime(expected.toISOString()));
             setWarningModalOpen(true);
-            break;
+
+            // 3. ADD: Play Sound
+            if (audioRef.current) {
+                audioRef.current.currentTime = 0;
+                audioRef.current.play().catch((e) => 
+                  console.warn("Audio play blocked (User interaction needed):", e)
+                );
+            }
+
+            break; // Stop after finding the first overdue sale
           }
         }
       }
     };
+
+    // 4. ADD: Run check IMMEDIATELY when sales data updates
+    checkWarnings();
 
     if (warningTimerRef.current) clearInterval(warningTimerRef.current);
     warningTimerRef.current = setInterval(checkWarnings, 30000);
