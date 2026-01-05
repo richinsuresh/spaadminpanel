@@ -312,7 +312,8 @@ export default function PackagesPage() {
     if (amountFilter !== 'all') {
         result = result.filter((p) => {
             const amt = p.package_amount / 100; // stored as paise
-            if (amountFilter === '0-10000') return amt <= 10000;
+            if (amountFilter === '0-5000') return amt <= 5000;
+            if (amountFilter === '5000-10000') return amt > 5000 && amt <= 10000;
             if (amountFilter === '10000-25000') return amt > 10000 && amt <= 25000;
             if (amountFilter === '25000-50000') return amt > 25000 && amt <= 50000;
             if (amountFilter === '50000+') return amt > 50000;
@@ -743,7 +744,8 @@ export default function PackagesPage() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white"
             >
                 <option value="all">All Values</option>
-                <option value="0-10000">Up to ₹10,000</option>
+                <option value="0-5000">Up to ₹5,000</option>
+                <option value="5000-10000">₹5,000 - ₹10,000</option>
                 <option value="10000-25000">₹10,000 - ₹25,000</option>
                 <option value="25000-50000">₹25,000 - ₹50,000</option>
                 <option value="50000+">Above ₹50,000</option>

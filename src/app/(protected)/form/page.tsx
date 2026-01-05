@@ -1,4 +1,3 @@
-// src/app/(protected)/form/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -54,7 +53,7 @@ export default function ClientForm() {
   const [formData, setFormData] = useState({
     name: '',
     date: new Date().toISOString().split('T')[0],
-    checkInTime: getCurrentTime(), // Added Check-In Time State
+    checkInTime: getCurrentTime(), 
     treatment: '',
     amountPaid: 0,
     sessionHours: 0,
@@ -223,6 +222,7 @@ export default function ClientForm() {
       return;
     }
     
+    // Therapist required only if there is a session duration OR is package redemption
     if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
       setInputError("Please select at least one Therapist for the Main Customer.");
       setIsSubmitting(false);
@@ -280,7 +280,6 @@ export default function ClientForm() {
     }
 
     // --- Time Calculation Logic (Calculated from Form Inputs) ---
-    // Combine Date + CheckInTime
     const checkInDateTime = new Date(`${formData.date}T${formData.checkInTime}`);
     
     if (isNaN(checkInDateTime.getTime())) {
@@ -296,7 +295,7 @@ export default function ClientForm() {
     const mainOutTime = new Date(checkInDateTime.getTime() + sessionHours * 60 * 60 * 1000);
     const mainCheckOutStr = formatTimeHM(mainOutTime);
 
-    // Build Group Payload (Uses Base Check-In Time)
+    // Build Group Payload
     const groupCustomersPayload = additionalCustomers.map(c => {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         const checkOut = new Date(checkInDateTime.getTime() + dur * 60 * 60 * 1000);
@@ -321,11 +320,14 @@ export default function ClientForm() {
         checkInTime = checkInDateTime.toISOString();
       }
       
+      // Auto-fill treatment for package purchases if empty
+      const finalTreatment = formData.tookPackage && !formData.treatment ? "Package Purchase" : formData.treatment;
+
       const payload: any = {
         name: String(formData.name || '').trim(),
         mobile: mobile,
         date: formData.date,
-        treatment: formData.treatment,
+        treatment: finalTreatment,
         amountPaid: (formData.isPackageCustomer || formData.tookPackage) ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
         isPackageCustomer: formData.isPackageCustomer,
@@ -343,7 +345,6 @@ export default function ClientForm() {
         therapist_name: combinedTherapistName, 
         room: formData.room,
         
-        // --- Send calculated strings for Dashboard display ---
         in_time: mainCheckInStr,
         out_time: mainCheckOutStr, 
 
@@ -486,13 +487,16 @@ export default function ClientForm() {
             </select>
           </div>
 
+          {/* Treatment: Optional if taking package */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Treatment *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+                Treatment {formData.tookPackage ? '' : '*'}
+            </label>
             <select
               name="treatment"
               value={formData.treatment}
               onChange={handleChange}
-              required
+              required={!formData.tookPackage} 
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
             >
               <option value="">-- Select Treatment --</option>
@@ -826,10 +830,12 @@ export default function ClientForm() {
                   required={formData.tookPackage}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
                 >
-                  <option value="3 months">1 Months</option>
-                  <option value="3 months">3 Months</option>
-                  <option value="6 months">6 Months</option>
-                  <option value="9 months">9 Months</option>
+                  {/* GENERATE OPTIONS 1 to 12 */}
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <option key={m} value={`${m} month${m > 1 ? 's' : ''}`}>
+                      {m} Month{m > 1 ? 's' : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
