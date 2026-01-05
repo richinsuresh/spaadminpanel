@@ -1,11 +1,10 @@
-// src/app/(protected)/dashboard/packages/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { User } from 'lucide-react';
+import { User, Calendar as CalendarIcon, CheckSquare, Square } from 'lucide-react'; // Added icons
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 /* ===================== TYPES ===================== */
@@ -82,29 +81,23 @@ const fmtTime = (iso: string | null) => {
   });
 };
 
-// 🛑 THIS IS THE KEY FUNCTION FOR "1h 30m" FORMAT
 const fmtDuration = (h: number | null | undefined) => {
   if (h === null || h === undefined) return '0h';
   const n = Number(h);
   if (!Number.isFinite(n)) return '0h';
   
-  // Convert decimal hours (e.g. 1.5) to total minutes (90)
   const totalMins = Math.round(n * 60);
   
   if (totalMins === 0) return '0h';
-  if (totalMins < 60) return `${totalMins}m`; // e.g. "45m"
+  if (totalMins < 60) return `${totalMins}m`; 
   
   const hrs = Math.floor(totalMins / 60);
   const mins = totalMins % 60;
   
-  // If exact hour (e.g. 2.0 hrs) -> "2h"
   if (mins === 0) return `${hrs}h`;
-  
-  // If mixed (e.g. 1.5 hrs) -> "1h 30m"
   return `${hrs}h ${mins}m`;
 };
 
-// Helper to split decimal hours into { hrs, mins } for the Edit Form inputs
 const decimalToTime = (decimal: number) => {
   const safeDecimal = Number(decimal) || 0;
   const hrs = Math.floor(safeDecimal);
@@ -146,21 +139,27 @@ export default function PackagesPage() {
   const [packages, setPackages] = useState<PackageCustomer[]>([]);
   const [filteredPackages, setFilteredPackages] = useState<PackageCustomer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] =
-    useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
+  
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
+  const [amountFilter, setAmountFilter] = useState<string>('all'); // NEW: Amount Filter
+  const [outletFilter, setOutletFilter] = useState('all');
+  
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const outlets = ['all', ...OUTLETS.map((o) => o.name)];
-  const [outletFilter, setOutletFilter] = useState('all');
+
+  // Selection State (NEW)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [selectedPackage, setSelectedPackage] =
-    useState<PackageCustomer | null>(null);
+  const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false); // NEW: Bulk Edit Modal
+  const [selectedPackage, setSelectedPackage] = useState<PackageCustomer | null>(null);
 
   // Form States
   const [editFormData, setEditFormData] = useState<any>({});
@@ -171,6 +170,14 @@ export default function PackagesPage() {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteRemark, setDeleteRemark] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  
+  // Bulk Edit Form States (NEW)
+  const [bulkExpiryDate, setBulkExpiryDate] = useState('');
+  const [bulkPassword, setBulkPassword] = useState('');
+  const [bulkRemark, setBulkRemark] = useState('');
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -259,62 +266,10 @@ export default function PackagesPage() {
     };
   }, [fetchPackages]);
 
-  // === NEW: Listen for package-update events from other clients
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    let bc: BroadcastChannel | null = null;
-
-    try {
-      if ('BroadcastChannel' in window) {
-        bc = new BroadcastChannel('spa_events');
-        bc.onmessage = (ev) => {
-          try {
-            if (ev?.data?.type === 'packages-updated') {
-              console.log(
-                '[spa_events] packages-updated received — refreshing packages'
-              );
-              fetchPackages();
-            }
-          } catch (e) {
-            /* ignore malformed event */
-          }
-        };
-      }
-    } catch (err) {
-      console.warn('BroadcastChannel unavailable', err);
-      bc = null;
-    }
-
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'spa_packages_update' && e.newValue) {
-        try {
-          const msg = JSON.parse(e.newValue);
-          if (msg?.type === 'packages-updated') {
-            console.log(
-              '[localStorage] spa_packages_update detected — refreshing packages'
-            );
-            fetchPackages();
-          }
-        } catch (err) {
-          /* ignore */
-        }
-      }
-    };
-
-    window.addEventListener('storage', onStorage);
-
-    return () => {
-      try {
-        if (bc) bc.close();
-      } catch {}
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [fetchPackages]);
-  // === END NEW BLOCK
-
   useEffect(() => {
     let result = [...packages];
+    
+    // Search
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       result = result.filter(
@@ -323,6 +278,8 @@ export default function PackagesPage() {
           (p.mobile ?? '').includes(term)
       );
     }
+
+    // Status Filter
     if (statusFilter === 'expiring_soon') {
       const today = new Date();
       const thirtyDaysFromNow = new Date();
@@ -342,14 +299,96 @@ export default function PackagesPage() {
         (p) => (p.status ?? '').toLowerCase() === statusFilter
       );
     }
+
+    // Outlet Filter
     if (outletFilter !== 'all') {
       result = result.filter(
         (p) =>
           (p.outlet ?? '').toLowerCase() === outletFilter.toLowerCase()
       );
     }
+
+    // NEW: Amount Filter Logic
+    if (amountFilter !== 'all') {
+        result = result.filter((p) => {
+            const amt = p.package_amount / 100; // stored as paise
+            if (amountFilter === '0-10000') return amt <= 10000;
+            if (amountFilter === '10000-25000') return amt > 10000 && amt <= 25000;
+            if (amountFilter === '25000-50000') return amt > 25000 && amt <= 50000;
+            if (amountFilter === '50000+') return amt > 50000;
+            return true;
+        });
+    }
+
     setFilteredPackages(result);
-  }, [searchTerm, statusFilter, outletFilter, packages]);
+  }, [searchTerm, statusFilter, outletFilter, amountFilter, packages]);
+
+  // NEW: Selection Handlers
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+        setSelectedIds(new Set(filteredPackages.map(p => p.id)));
+    } else {
+        setSelectedIds(new Set());
+    }
+  };
+
+  const handleSelectRow = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  // NEW: Bulk Edit Handler
+  const handleBulkEditSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (selectedIds.size === 0) return;
+    
+    setIsBulkSaving(true);
+    setBulkError(null);
+
+    if (bulkPassword !== 'admin123') {
+        setBulkError('Incorrect Admin Password');
+        setIsBulkSaving(false);
+        return;
+    }
+    if (!bulkRemark.trim()) {
+        setBulkError('Remark required for audit logs');
+        setIsBulkSaving(false);
+        return;
+    }
+    if (!bulkExpiryDate) {
+        setBulkError('Please select a new expiry date');
+        setIsBulkSaving(false);
+        return;
+    }
+
+    try {
+        const ids = Array.from(selectedIds);
+        const { error } = await supabase
+            .from('packages')
+            .update({ expiry_date: bulkExpiryDate })
+            .in('id', ids);
+
+        if (error) throw error;
+
+        logActivity('bulk_edit_package', `Updated expiry for ${ids.length} packages to ${bulkExpiryDate}. Remark: ${bulkRemark}`);
+        
+        await fetchPackages();
+        setIsBulkEditModalOpen(false);
+        setSelectedIds(new Set()); // Clear selection
+        setBulkPassword('');
+        setBulkRemark('');
+        setBulkExpiryDate('');
+        
+    } catch (err: any) {
+        setBulkError(err.message || 'Bulk update failed');
+    } finally {
+        setIsBulkSaving(false);
+    }
+  };
+
 
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat('en-IN', {
@@ -484,24 +523,6 @@ export default function PackagesPage() {
 
       logActivity('edit_package', description);
 
-      try {
-        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-          try {
-            new BroadcastChannel('spa_events').postMessage({
-              type: 'packages-updated',
-            });
-          } catch {}
-        }
-        try {
-          localStorage.setItem(
-            'spa_packages_update',
-            JSON.stringify({ type: 'packages-updated', ts: Date.now() })
-          );
-        } catch {}
-      } catch (e) {
-        /* ignore */
-      }
-
       await fetchPackages();
       handleCloseEditModal();
     } catch (err: any) {
@@ -556,24 +577,6 @@ export default function PackagesPage() {
         `Deleted package for ${selectedPackage.name}. Remark: ${deleteRemark}`
       );
 
-      try {
-        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-          try {
-            new BroadcastChannel('spa_events').postMessage({
-              type: 'packages-updated',
-            });
-          } catch {}
-        }
-        try {
-          localStorage.setItem(
-            'spa_packages_update',
-            JSON.stringify({ type: 'packages-updated', ts: Date.now() })
-          );
-        } catch {}
-      } catch (e) {
-        /* ignore */
-      }
-
       await fetchPackages();
       handleCloseDeleteModal();
     } catch (err: any) {
@@ -626,25 +629,43 @@ export default function PackagesPage() {
     }
   };
 
-  // This function was missing:
   const handleRowClick = (pkg: PackageCustomer) => {
     setSelectedPackage(pkg);
     setIsDetailsModalOpen(true);
     fetchHistoryForMobile(pkg.mobile);
   };
-const closeDetailsModal = () => {
+  
+  const closeDetailsModal = () => {
     setIsDetailsModalOpen(false);
     setSelectedPackage(null);
     setHistoryRows([]);
     setHistoryLoading(false);
     setHistoryError(null);
   };
+
   return (
     <div>
       {/* Header & Filters */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-8 gap-4">
         <h1 className="text-2xl font-bold text-gray-800">All Package Clients</h1>
         <div className="flex flex-col sm:flex-row gap-3">
+          
+          {/* NEW: Bulk Edit Button */}
+          {selectedIds.size > 0 && (
+              <button
+                onClick={() => {
+                    setBulkPassword('');
+                    setBulkRemark('');
+                    setBulkExpiryDate('');
+                    setBulkError(null);
+                    setIsBulkEditModalOpen(true);
+                }}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 flex items-center gap-2 animate-pulse"
+              >
+                <CalendarIcon size={16} /> Edit Expiry ({selectedIds.size})
+              </button>
+          )}
+
           <button
             onClick={fetchPackages}
             disabled={loading}
@@ -667,7 +688,7 @@ const closeDetailsModal = () => {
               placeholder="Search..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-black"
+              className="pl-4 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-black"
             />
           </div>
         </div>
@@ -710,6 +731,25 @@ const closeDetailsModal = () => {
               ))}
             </select>
           </div>
+          
+          {/* NEW: Amount Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Package Value
+            </label>
+            <select
+              value={amountFilter}
+              onChange={(e) => setAmountFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-black bg-white"
+            >
+                <option value="all">All Values</option>
+                <option value="0-10000">Up to ₹10,000</option>
+                <option value="10000-25000">₹10,000 - ₹25,000</option>
+                <option value="25000-50000">₹25,000 - ₹50,000</option>
+                <option value="50000+">Above ₹50,000</option>
+            </select>
+          </div>
+
         </div>
       </div>
 
@@ -728,6 +768,15 @@ const closeDetailsModal = () => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  {/* NEW: Checkbox Header */}
+                  <th className="px-4 py-3 text-left">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 text-blue-600 rounded"
+                        onChange={handleSelectAll}
+                        checked={filteredPackages.length > 0 && selectedIds.size === filteredPackages.length}
+                      />
+                  </th>
                   {[
                     'Name',
                     'Mobile',
@@ -753,9 +802,20 @@ const closeDetailsModal = () => {
                 {filteredPackages.map((customer) => (
                   <tr
                     key={customer.id}
-                    className="hover:bg-gray-50 cursor-pointer"
+                    className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(customer.id) ? 'bg-blue-50' : ''}`}
                     onClick={() => handleRowClick(customer)}
                   >
+                    {/* NEW: Checkbox Row */}
+                    <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                        <input 
+                            type="checkbox"
+                            checked={selectedIds.has(customer.id)}
+                            onChange={(e) => {}} // handled by div click or manual separate handler
+                            onClick={(e) => handleSelectRow(customer.id, e)}
+                            className="w-4 h-4 text-blue-600 rounded cursor-pointer"
+                        />
+                    </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {customer.name}
                     </td>
@@ -769,12 +829,10 @@ const closeDetailsModal = () => {
                       {formatCurrency(customer.package_amount)}
                     </td>
                     
-                    {/* UPDATED: Total Hours using fmtDuration */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {fmtDuration(customer.total_hours)}
                     </td>
                     
-                    {/* UPDATED: Used Hours using fmtDuration */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {fmtDuration(customer.used_hours)}
                     </td>
@@ -789,7 +847,6 @@ const closeDetailsModal = () => {
                                 : 'text-red-700'
                             }
                           >
-                            {/* UPDATED: Remaining Hours using fmtDuration */}
                             {fmtDuration(customer.remaining_hours)}
                           </span>
                         </div>
@@ -855,7 +912,89 @@ const closeDetailsModal = () => {
         </div>
       )}
 
-      {/* Edit Modal */}
+      {/* NEW: Bulk Edit Modal */}
+      {isBulkEditModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleBulkEditSubmit}
+            className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4"
+          >
+            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <CalendarIcon className="text-purple-600" />
+                Bulk Edit Expiry
+            </h2>
+            <p className="text-sm text-gray-600">
+              Updating expiry date for <strong>{selectedIds.size}</strong> selected packages.
+            </p>
+
+            {bulkError && (
+              <div className="p-2 bg-red-100 text-red-700 rounded text-sm font-bold">
+                {bulkError}
+              </div>
+            )}
+
+            <div>
+                <label className="text-xs uppercase font-bold text-gray-500">
+                  New Expiry Date
+                </label>
+                <input
+                  type="date"
+                  value={bulkExpiryDate}
+                  onChange={(e) => setBulkExpiryDate(e.target.value)}
+                  className="w-full p-2 border rounded text-black"
+                  required
+                />
+            </div>
+
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Remark (Required)
+              </label>
+              <textarea
+                value={bulkRemark}
+                onChange={(e) => setBulkRemark(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                rows={2}
+                placeholder="Why are you changing these dates?"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs uppercase font-bold text-gray-500">
+                Admin Password
+              </label>
+              <input
+                type="password"
+                value={bulkPassword}
+                onChange={(e) => setBulkPassword(e.target.value)}
+                className="w-full p-2 border rounded text-black"
+                placeholder="Enter admin123"
+                required
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkEditModalOpen(false)}
+                className="px-4 py-2 bg-gray-200 rounded text-black font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isBulkSaving}
+                className="px-4 py-2 bg-purple-600 text-white rounded font-medium hover:bg-purple-700"
+              >
+                {isBulkSaving ? 'Updating...' : 'Confirm Update'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Edit Modal (Single) */}
       {isEditModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <form
@@ -1004,7 +1143,7 @@ const closeDetailsModal = () => {
                 />
               </div>
 
-            {/* REPLACED: Total Hours Split Fields */}
+            {/* Total Hours Split Fields */}
               <div>
                 <label className="text-xs uppercase font-bold text-gray-500">Total Duration</label>
                 <div className="flex gap-2">
@@ -1034,7 +1173,7 @@ const closeDetailsModal = () => {
                 </div>
               </div>
 
-              {/* REPLACED: Used Hours Split Fields */}
+              {/* Used Hours Split Fields */}
               <div>
                 <label className="text-xs uppercase font-bold text-gray-500">Used Duration</label>
                 <div className="flex gap-2">
@@ -1244,7 +1383,6 @@ const closeDetailsModal = () => {
                   Remaining Hours
                 </p>
                 <p className="font-bold text-gray-800">
-                  {/* UPDATED: Remaining Hours in Modal */}
                   {fmtDuration(selectedPackage.remaining_hours)}
                 </p>
               </div>
@@ -1255,7 +1393,6 @@ const closeDetailsModal = () => {
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-600">Usage Progress</span>
                   <span className="font-medium text-gray-900">
-                    {/* UPDATED: Usage Progress in Modal */}
                     {fmtDuration(selectedPackage.used_hours)} /{' '}
                     {fmtDuration(selectedPackage.total_hours)}
                   </span>
