@@ -111,8 +111,10 @@ export default function AttendancePage() {
   const fetchAttendance = useCallback(async () => {
     setLoading(true);
     try {
+      // Fetch ALL records for the date, regardless of outlet filter.
+      // This ensures we know if an employee is working at a DIFFERENT outlet.
       let query = supabase.from('attendance').select(`*`).eq('date', dateFilter);
-      if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
+      
       const { data, error } = await query;
       if (error) throw error;
       setRecords(data || []);
@@ -121,7 +123,7 @@ export default function AttendancePage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFilter, outletFilter]);
+  }, [dateFilter]);
 
   // --- NEW: Fetch Monthly Off Counts ---
   const fetchMonthlyOffs = useCallback(async () => {
@@ -359,9 +361,17 @@ export default function AttendancePage() {
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
   })).filter(item => {
-    const outletMatch = outletFilter === 'all' || item.record?.outlet_id === outletFilter;
     const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
-    return outletMatch && nameMatch;
+    
+    if (outletFilter === 'all') return nameMatch;
+
+    // Check if employee belongs to this view
+    // 1. They are logged in at this outlet
+    const loggedInHere = item.record?.outlet_id === outletFilter;
+    // 2. They are assigned to this outlet (regardless of where they are logged in or if they are absent)
+    const assignedHere = item.employee.outlet_id === outletFilter;
+
+    return nameMatch && (loggedInHere || assignedHere);
   });
 
   return (
