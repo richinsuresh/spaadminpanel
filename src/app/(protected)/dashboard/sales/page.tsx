@@ -373,28 +373,35 @@ export default function AdminSalesPage() {
   const handleOpenEdit = (sale: Sale) => {
     setEditingSale(sale);
     
-    // Split existing therapist names
+    // 1. Split existing therapist names
     const tParts = (sale.therapist_name || '').split(' & ');
 
+    // 2. Split decimal hours into Hrs & Mins for the form
+    const { hrs, mins } = decimalToTime(sale.session_hours || 0);
+
     setEditForm({
-      name: sale.name,
-      mobile: sale.mobile,
+      name: sale.name || '',
+      mobile: sale.mobile || '',
       date: toInputDate(sale.date),
-      outlet_id: sale.outlet_id,
-      treatment: sale.treatment,
-      payment_method: sale.payment_method,
-      amount:
-        (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
+      outlet_id: sale.outlet_id || '',
+      treatment: sale.treatment || '',
+      payment_method: sale.payment_method || 'cash',
+      amount: (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
       
       // Store separate therapist fields
       therapist_name1: tParts[0] || '',
       therapist_name2: tParts[1] || '',
 
-      room: sale.room,
-      session_hours: sale.session_hours,
+      room: sale.room || '',
+      
+      // 🛑 FIX: Populate split duration fields
+      session_hours_h: hrs,
+      session_hours_m: mins,
+
       check_in_time: toInputTime(sale.check_in_time),
       check_out_time: toInputTime(sale.check_out_time),
     });
+    
     setEditRemark('');
     setEditPassword('');
     setSaveError(null);
