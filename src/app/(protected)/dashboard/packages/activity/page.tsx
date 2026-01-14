@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { ArrowUpRight, ArrowDownLeft, CheckCircle, ShieldCheck } from 'lucide-react'; // Added Icons
+import { ArrowUpRight, ArrowDownLeft, ShieldCheck, Filter, SortAsc, SortDesc } from 'lucide-react'; // Added Icons
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
 
@@ -33,10 +33,14 @@ type PackageActivity = {
   therapist_name: string | null;
   payment_method: string | null;
   check_in_time: string | null;
+  package_sold_by: string | null; // Added field
   
   // Verification
-  is_verified?: boolean; // New field
+  is_verified?: boolean;
 };
+
+type ActivityFilter = 'all' | 'purchase' | 'redemption';
+type SortOption = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 
 /* ===================== HELPERS ===================== */
 
@@ -77,34 +81,59 @@ export default function PackageActivityPage() {
   const [data, setData] = useState<PackageActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
-  const [verifyingId, setVerifyingId] = useState<string | null>(null); // Loading state for specific button
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
 
+  // Filters & Sorting
   const [startDate, setStartDate] = useState<string>(getToday());
   const [endDate, setEndDate] = useState<string>(getToday());
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
+  const [activityType, setActivityType] = useState<ActivityFilter>('all'); // New Filter
+  const [sortBy, setSortBy] = useState<SortOption>('date_desc'); // New Sort
 
   /* ===================== FETCH ===================== */
 
   const fetchActivity = useCallback(async () => {
     setLoading(true);
     
-    // Build query: Filter by date range first
+    // 1. Base Query
     let query = supabase
       .from('customers')
       .select('*')
       .gte('date', startDate)
-      .lte('date', endDate)
-      .order('date', { ascending: false })
-      .order('check_in_time', { ascending: false });
+      .lte('date', endDate);
 
+    // 2. Outlet Filter
     if (selectedOutletId !== 'all') {
       query = query.eq('outlet_id', selectedOutletId);
     }
 
-    // Filter specifically for Package interactions:
-    // Either they BOUGHT a package (took_package = true)
-    // OR they REDEEMED a package (is_package_customer = true)
-    query = query.or('took_package.eq.true,is_package_customer.eq.true');
+    // 3. Activity Type Filter
+    if (activityType === 'purchase') {
+      query = query.eq('took_package', true);
+    } else if (activityType === 'redemption') {
+      query = query.eq('is_package_customer', true);
+    } else {
+      // Default: 'all' (fetch both)
+      query = query.or('took_package.eq.true,is_package_customer.eq.true');
+    }
+
+    // 4. Sorting
+    switch (sortBy) {
+      case 'date_asc':
+        query = query.order('date', { ascending: true }).order('check_in_time', { ascending: true });
+        break;
+      case 'amount_desc':
+        // Sort by package_amount (for purchases this is the value)
+        query = query.order('package_amount', { ascending: false });
+        break;
+      case 'amount_asc':
+        query = query.order('package_amount', { ascending: true });
+        break;
+      case 'date_desc':
+      default:
+        query = query.order('date', { ascending: false }).order('check_in_time', { ascending: false });
+        break;
+    }
 
     const { data: rows, error } = await query;
     
@@ -114,36 +143,25 @@ export default function PackageActivityPage() {
     
     setData((rows as PackageActivity[]) || []);
     setLoading(false);
-  }, [startDate, endDate, selectedOutletId]);
+  }, [startDate, endDate, selectedOutletId, activityType, sortBy]);
 
   useEffect(() => {
     fetchActivity();
   }, [fetchActivity]);
 
-  // 🔄 Realtime auto-refresh when any customer row changes
+  // 🔄 Realtime auto-refresh
   useEffect(() => {
     const channel = supabase
       .channel('admin-package-activity')
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'customers',
-        },
-        () => {
-          // Re-fetch when database changes
-          fetchActivity();
-        },
+        { event: '*', schema: 'public', table: 'customers' },
+        () => fetchActivity(),
       )
       .subscribe();
 
     return () => {
-      try {
-        supabase.removeChannel(channel);
-      } catch (e) {
-        console.warn('Failed to remove realtime channel', e);
-      }
+      supabase.removeChannel(channel);
     };
   }, [fetchActivity]);
 
@@ -160,16 +178,13 @@ export default function PackageActivityPage() {
 
         if (error) throw error;
 
-        // Optimistic update locally to feel instant
         setData(prev => prev.map(item => 
             item.id === id ? { ...item, is_verified: newStatus } : item
         ));
 
-        // Log the action if verifying
         if (newStatus) {
             logActivity('verify_redemption', `Verified package redemption for ID ${id}`);
         }
-
     } catch (err) {
         console.error("Failed to verify:", err);
         alert("Failed to update status");
@@ -199,11 +214,12 @@ export default function PackageActivityPage() {
           Mobile: row.mobile,
           Type: type,
           Treatment: row.treatment,
+          'Sold By': row.package_sold_by || '',
           'Hours Used': !isPurchase ? row.session_hours : 0,
           'Amount Paid': isPurchase ? (row.package_amount / 100) : 0,
           Therapist: row.therapist_name,
           Payment: row.payment_method?.toUpperCase() || '',
-          Verified: row.is_verified ? 'Yes' : 'No' // Added to export
+          Verified: row.is_verified ? 'Yes' : 'No'
         };
       });
 
@@ -225,60 +241,97 @@ export default function PackageActivityPage() {
         Package Sales & Redemptions
       </h1>
 
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Outlet
-          </label>
-          <select
-            value={selectedOutletId}
-            onChange={(e) => setSelectedOutletId(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg bg-white text-black"
-          >
-            <option value="all">All Outlets</option>
-            {OUTLETS.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name}
-              </option>
-            ))}
-          </select>
+      {/* Filters Container */}
+      <div className="bg-white p-4 rounded-xl shadow-sm space-y-4">
+        
+        {/* Row 1: Primary Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Outlet</label>
+            <select
+              value={selectedOutletId}
+              onChange={(e) => setSelectedOutletId(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg bg-white text-black"
+            >
+              <option value="all">All Outlets</option>
+              {OUTLETS.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-black bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-black bg-white"
+            />
+          </div>
+
+           <div className="flex items-end">
+            <button
+              onClick={handleExport}
+              disabled={loading || isExporting}
+              className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              {isExporting ? 'Exporting…' : 'Export to Excel'}
+            </button>
+          </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Start Date
-          </label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg text-black bg-white"
-          />
-        </div>
+        {/* Row 2: Secondary Filters & Sort */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 border-t pt-4">
+          
+          {/* Activity Type Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+              <Filter size={14} /> Activity Type
+            </label>
+            <select
+              value={activityType}
+              onChange={(e) => setActivityType(e.target.value as ActivityFilter)}
+              className="w-full px-3 py-2 border rounded-lg bg-white text-black"
+            >
+              <option value="all">All Activity</option>
+              <option value="purchase">New Packages Only</option>
+              <option value="redemption">Redemptions Only</option>
+            </select>
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            End Date
-          </label>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg text-black bg-white"
-          />
+          {/* Sorting */}
+          <div>
+             <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+              {sortBy.includes('asc') ? <SortAsc size={14} /> : <SortDesc size={14} />} Sort By
+            </label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              className="w-full px-3 py-2 border rounded-lg bg-white text-black"
+            >
+              <option value="date_desc">Date (Newest First)</option>
+              <option value="date_asc">Date (Oldest First)</option>
+              <option value="amount_desc">Sold: Most (High to Low)</option>
+              <option value="amount_asc">Sold: Least (Low to High)</option>
+            </select>
+          </div>
+          
+          {/* Empty columns to align if needed, or remove */}
+          <div className="hidden lg:block lg:col-span-2"></div>
         </div>
-
-        <div className="flex flex-col gap-1">
-          <button
-            onClick={handleExport}
-            disabled={loading || isExporting}
-            className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-          >
-            {isExporting ? 'Exporting…' : 'Export to Excel'}
-          </button>
-          <LastAction actionType="export_package_activity" />
-        </div>
+        
+        <LastAction actionType="export_package_activity" />
       </div>
 
       {/* Table */}
@@ -292,24 +345,25 @@ export default function PackageActivityPage() {
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Outlet</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Details</th>
+                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Sold By</th> {/* New Column */}
                 <th className="px-4 py-3 text-right text-xs font-bold text-gray-600 uppercase">Impact</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase pl-6">Therapist</th>
-                <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th> {/* New Column */}
+                <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-gray-500">Loading...</td>
+                  <td colSpan={9} className="p-6 text-center text-gray-500">Loading...</td>
                 </tr>
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-gray-500">No package activity found in this range.</td>
+                  <td colSpan={9} className="p-6 text-center text-gray-500">No package activity found with current filters.</td>
                 </tr>
               ) : (
                 data.map((row) => {
-                  const isPurchase = row.took_package; // True if they BOUGHT a package
-                  const isRedemption = row.is_package_customer; // True if they REDEEMED a session
+                  const isPurchase = row.took_package; 
+                  const isRedemption = row.is_package_customer; 
                   const isProcessing = verifyingId === row.id;
                   
                   return (
@@ -340,6 +394,12 @@ export default function PackageActivityPage() {
                       <td className="px-4 py-3 text-sm text-gray-700">
                         {row.treatment}
                       </td>
+                      
+                      {/* SOLD BY COLUMN */}
+                      <td className="px-4 py-3 text-sm text-gray-600 font-medium">
+                        {row.package_sold_by || '—'}
+                      </td>
+
                       <td className="px-4 py-3 text-sm text-right font-medium">
                         {isPurchase ? (
                           <div className="text-green-600">
@@ -355,7 +415,6 @@ export default function PackageActivityPage() {
                         {row.therapist_name || '—'}
                       </td>
                       
-                      {/* VERIFY BUTTON COLUMN */}
                       <td className="px-4 py-3 text-sm text-center">
                         {isRedemption && (
                             <button
