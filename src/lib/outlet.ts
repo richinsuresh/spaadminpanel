@@ -74,14 +74,14 @@ export const OUTLETS: Outlet[] = [
     qrCodeUrl: '/qr-codes/cunningham-upi.png',
     minTreatmentAmount: 1800, // Default
   },
-  {
-    id: '5',
-    name: 'HSR-2',
-    password: 'hsr2-123',
-    location: 'HSR Layout 2, Bangalore',
-    qrCodeUrl: '/qr-codes/hsr-2-upi.png',
-    minTreatmentAmount: 1500, // Custom
-  },
+  //{
+    //id: '5',
+    //name: 'HSR-2',
+    //password: 'hsr2-123',
+    //location: 'HSR Layout 2, Bangalore',
+    //qrCodeUrl: '/qr-codes/hsr-2-upi.png',
+    //minTreatmentAmount: 1500, // Custom
+  //},
   {
     id: '6',
     name: 'V-ONE',
