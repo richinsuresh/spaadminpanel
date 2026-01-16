@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
-import { ALL_THERAPISTS } from '@/lib/therapists'; 
+// Removed static import: import { ALL_THERAPISTS } from '@/lib/therapists'; 
 import { exportToExcel } from '@/lib/exportToExcel';
 import { 
   ArrowUpRight, 
@@ -608,9 +608,9 @@ export default function PackageActivityPage() {
                     className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-gray-50/30 hover:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none text-sm transition-all appearance-none text-gray-900"
                   >
                     <option value="">-- Select Therapist --</option>
-                    {ALL_THERAPISTS.map((therapist) => (
-                      <option key={therapist} value={therapist}>
-                        {therapist}
+                    {allEmployees.map((empName) => (
+                      <option key={empName} value={empName}>
+                        {empName}
                       </option>
                     ))}
                   </select>
