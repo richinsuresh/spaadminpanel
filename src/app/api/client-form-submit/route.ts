@@ -120,6 +120,21 @@ async function processPayload(payload: any) {
 
     // 3. INSERT SESSION
     const checkInTime: string = payload.check_in_time || new Date().toISOString();
+
+    // FIX: Determine Check-Out Time Automatically
+    // If it's a package purchase with NO session duration (just buying credits), 
+    // mark it as checked out immediately so it counts as a completed sale.
+    let finalCheckOutTime = null;
+    
+    // Check if check_out_time was explicitly sent (e.g. from an outlet form)
+    if (payload.check_out_time) {
+        finalCheckOutTime = payload.check_out_time;
+    } 
+    // Otherwise, auto-checkout if it's a pure package purchase (no session hours)
+    else if (payload.tookPackage && (!payload.sessionHours || Number(payload.sessionHours) <= 0)) {
+        finalCheckOutTime = checkInTime;
+    }
+
     const customerInsert: any = {
       name: payload.name,
       mobile: payload.mobile,
@@ -136,6 +151,7 @@ async function processPayload(payload: any) {
       outlet_name: payload.outlet,
       payment_method: payload.paymentMethod,
       check_in_time: checkInTime,
+      check_out_time: finalCheckOutTime, // <--- ADDED THIS FIELD
       therapist_name: payload.therapist_name,
       room: payload.room,
       in_time: payload.in_time ?? null,
