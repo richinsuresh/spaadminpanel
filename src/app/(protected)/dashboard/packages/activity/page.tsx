@@ -4,7 +4,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
-// Removed static import: import { ALL_THERAPISTS } from '@/lib/therapists'; 
 import { exportToExcel } from '@/lib/exportToExcel';
 import { 
   ArrowUpRight, 
@@ -109,7 +108,10 @@ export default function PackageActivityPage() {
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<PackageActivity | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [allEmployees, setAllEmployees] = useState<string[]>([]);
+  
+  // Dropdown Lists
+  const [allActiveEmployees, setAllActiveEmployees] = useState<string[]>([]); // For "Sold By" (includes managers)
+  const [activeTherapists, setActiveTherapists] = useState<string[]>([]);     // For "Therapist" (only therapists)
   
   // Form State for Editing
   const [editForm, setEditForm] = useState({
@@ -124,15 +126,25 @@ export default function PackageActivityPage() {
   // Fetch Employees List for Dropdown
   useEffect(() => {
     const fetchEmployees = async () => {
+      // Fetch name and role for all ACTIVE employees
       const { data: empData } = await supabase
         .from('employees')
-        .select('name')
+        .select('name, role')
+        .eq('is_active', true) // Only fetch currently active employees
         .order('name', { ascending: true });
       
       if (empData) {
-        // Create a unique list of names just in case
-        const names = Array.from(new Set(empData.map((e: any) => e.name)));
-        setAllEmployees(names);
+        // 1. All Active Staff (for Sold By - managers can sell too)
+        const allNames = Array.from(new Set(empData.map((e: any) => e.name)));
+        setAllActiveEmployees(allNames);
+
+        // 2. Active Therapists Only (for Therapist dropdown)
+        const therapistNames = Array.from(new Set(
+          empData
+            .filter((e: any) => e.role === 'therapist')
+            .map((e: any) => e.name)
+        ));
+        setActiveTherapists(therapistNames);
       }
     };
     fetchEmployees();
@@ -572,7 +584,7 @@ export default function PackageActivityPage() {
                 </div>
               </div>
 
-              {/* Row 2: Sales Person (DROPDOWN) */}
+              {/* Row 2: Sales Person (DROPDOWN) - Shows ALL ACTIVE Staff */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-gray-500 uppercase flex items-center gap-1.5">
                    <Briefcase size={12} /> Sold By (Staff Name)
@@ -584,7 +596,7 @@ export default function PackageActivityPage() {
                     className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-gray-50/30 hover:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none text-sm transition-all appearance-none text-gray-900"
                   >
                     <option value="">-- Select Staff --</option>
-                    {allEmployees.map((empName) => (
+                    {allActiveEmployees.map((empName) => (
                       <option key={empName} value={empName}>
                         {empName}
                       </option>
@@ -596,7 +608,7 @@ export default function PackageActivityPage() {
                 </div>
               </div>
 
-              {/* Row 3: Therapist Dropdown */}
+              {/* Row 3: Therapist Dropdown - Shows ONLY ACTIVE THERAPISTS */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-gray-500 uppercase flex items-center gap-1.5">
                   <User size={12} /> Therapist
@@ -608,9 +620,9 @@ export default function PackageActivityPage() {
                     className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-gray-50/30 hover:bg-white focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none text-sm transition-all appearance-none text-gray-900"
                   >
                     <option value="">-- Select Therapist --</option>
-                    {allEmployees.map((empName) => (
-                      <option key={empName} value={empName}>
-                        {empName}
+                    {activeTherapists.map((therapist) => (
+                      <option key={therapist} value={therapist}>
+                        {therapist}
                       </option>
                     ))}
                   </select>
