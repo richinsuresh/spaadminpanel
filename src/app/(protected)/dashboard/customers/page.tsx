@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
+import { useRouter } from 'next/navigation'; // Import useRouter
 
 // --- Types ---
 type CustomerVisit = {
@@ -13,52 +14,11 @@ type CustomerVisit = {
   date: string;
   treatment: string;
   session_hours: number;
-  outlet_name: string; // <-- FIX: Use new column
+  outlet_name: string;
   therapist_name?: string;
 };
 
-// --- FIX: This type now matches the API response ---
-type PackageInfo = {
-  id?: string;
-  name: string;
-  mobile: string;
-  packageAmount: number;
-  totalPackageHours: number;
-  usedPackageHours: number;
-  remainingHours: number;
-  expiryDate: string;
-  status: 'active' | 'expired';
-  outlet?: string;
-};
-
-type CustomerDetails = {
-  name: string;
-  mobile: string;
-  packageInfo: PackageInfo | null;
-  visits: any[]; // Using 'any' for visits from customers table
-};
-
-// --- Helper Functions ---
-const formatCurrency = (amountInPaise: number) =>
-  new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amountInPaise / 100);
-
-const formatDuration = (hours: number | null) => {
-  if (!hours || hours === 0) return '—';
-  if (hours < 1) return `${Math.round(hours * 60)} mins`;
-  
-  const h = Math.floor(hours);
-  const m = Math.round((hours % 1) * 60);
-  
-  if (m === 0) return `${h} hr${h > 1 ? 's' : ''}`;
-  if (h === 0) return `${m} mins`;
-  return `${h}hr ${m}m`;
-};
-
+// Helper to format date
 const formatDate = (dateString: string | null) => {
   if (!dateString) return '—';
   return new Date(dateString).toLocaleDateString('en-IN', {
@@ -68,26 +28,21 @@ const formatDate = (dateString: string | null) => {
   });
 };
 
-
 export default function CustomersPage() {
+  const router = useRouter(); // Initialize router
   const [customers, setCustomers] = useState<CustomerVisit[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [outletFilter, setOutletFilter] = useState('all');
-
-  const [modalLoading, setModalLoading] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetails | null>(null);
-  const [modalError, setModalError] = useState('');
 
   const outlets = ['all', ...OUTLETS.map(o => o.name)];
 
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      // --- FIX: Select 'outlet_name' instead of 'outlet' ---
       const { data, error } = await supabase
         .from('customers')
-        .select('id, name, mobile, date, treatment, session_hours, outlet_name, therapist_name, check_in_time, check_out_time')
+        .select('id, name, mobile, date, treatment, session_hours, outlet_name, therapist_name')
         .order('date', { ascending: false });
       
       if (error) throw error;
@@ -103,57 +58,18 @@ export default function CustomersPage() {
     fetchCustomers();
   }, []);
 
-  // --- FIX: handleCustomerClick now uses the API for package info ---
-  const handleCustomerClick = async (customer: CustomerVisit) => {
-    setSelectedCustomer({ name: customer.name, mobile: customer.mobile, packageInfo: null, visits: [] });
-    setModalLoading(true);
-    setModalError('');
-
-    try {
-      const [pkgRes, visitsRes] = await Promise.all([
-        // Use the API to get the correct *active* package
-        fetch(`/api/client-lookup?mobile=${encodeURIComponent(customer.mobile)}`),
-        // Get last 3 visits
-        supabase
-          .from('customers')
-          .select('id, date, treatment, outlet_name, therapist_name, session_hours')
-          .eq('mobile', customer.mobile)
-          .order('date', { ascending: false })
-          .limit(3)
-      ]);
-
-      const packageInfo: PackageInfo | null = await pkgRes.json();
-      
-      if (visitsRes.error) {
-        throw new Error(`Visits Error: ${visitsRes.error.message}`);
-      }
-
-      setSelectedCustomer({
-        name: customer.name,
-        mobile: customer.mobile,
-        packageInfo: packageInfo, // This is now the correct, active package
-        visits: visitsRes.data as CustomerVisit[] || []
-      });
-
-    } catch (err: any) {
-      console.error('Error fetching customer details:', err);
-      setModalError(err.message);
-    } finally {
-      setModalLoading(false);
-    }
-  };
-
+  // Filter Logic
   const filteredCustomers = customers.filter(customer => {
     const matchesSearch = !searchTerm || 
       customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.mobile.includes(searchTerm);
     
-    // --- FIX: Filter by 'outlet_name' ---
     const matchesOutlet = outletFilter === 'all' || customer.outlet_name === outletFilter;
     
     return matchesSearch && matchesOutlet;
   });
   
+  // Get unique customers (by mobile), showing mostly recent visit first
   const uniqueCustomers = Array.from(new Map(filteredCustomers.map(c => [c.mobile, c])).values())
     .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -218,7 +134,7 @@ export default function CustomersPage() {
       </div>
 
       <div className="mb-4 text-sm text-gray-600">
-        Showing {uniqueCustomers.length} unique customers. Click a row for details.
+        Showing {uniqueCustomers.length} unique customers. Click a row to view full history.
       </div>
 
       {loading ? (
@@ -245,10 +161,11 @@ export default function CustomersPage() {
                 {uniqueCustomers.map((customer) => (
                   <tr 
                     key={customer.id} 
-                    onClick={() => handleCustomerClick(customer)}
-                    className="hover:bg-gray-50 cursor-pointer"
+                    // CHANGE: Click navigates to the detailed history page
+                    onClick={() => router.push(`/dashboard/customers/${customer.mobile}`)}
+                    className="hover:bg-blue-50 cursor-pointer transition-colors"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap font-medium text-blue-600">
                       {customer.name}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -258,114 +175,12 @@ export default function CustomersPage() {
                       {formatDate(customer.date)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {/* --- FIX: Display 'outlet_name' --- */}
                       {customer.outlet_name}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* --- RENDER THE MODAL --- */}
-      {selectedCustomer && (
-        <div 
-          className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/30" // Added background
-          onClick={() => setSelectedCustomer(null)} // Close on overlay click
-        >
-          <div 
-            className="bg-white rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()} // Prevent modal from closing on inner click
-          >
-            {/* Modal Header */}
-            <div className="p-4 border-b sticky top-0 bg-white z-10">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">{selectedCustomer.name}</h2>
-                  <p className="text-sm text-gray-600">{selectedCustomer.mobile}</p>
-                </div>
-                <button 
-                  onClick={() => setSelectedCustomer(null)} 
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Body */}
-            {modalLoading ? (
-              <div className="p-6 text-center text-gray-500">Loading details...</div>
-            ) : modalError ? (
-              <div className="p-6 text-center text-red-600">{modalError}</div>
-            ) : (
-              <div className="p-6 space-y-6">
-                
-                {/* --- FIX: Package Details Section now uses camelCase --- */}
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Package Details</h3>
-                  {selectedCustomer.packageInfo ? (
-                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
-                      <dt className="text-sm font-medium text-gray-500">Package Price</dt>
-                      <dd className="text-sm text-gray-900 font-medium">{formatCurrency(selectedCustomer.packageInfo.packageAmount)}</dd>
-                      
-                      <dt className="text-sm font-medium text-gray-500">Status</dt>
-                      <dd className="text-sm text-gray-900">
-                        <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
-                          selectedCustomer.packageInfo.status === 'active' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-red-100 text-red-800'
-                        }`}>
-                          {selectedCustomer.packageInfo.status}
-                        </span>
-                      </dd>
-
-                      <dt className="text-sm font-medium text-gray-500">Total Hours</dt>
-                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.totalPackageHours} hrs</dd>
-
-                      <dt className="text-sm font-medium text-gray-500">Used Hours</dt>
-                      <dd className="text-sm text-gray-900">{selectedCustomer.packageInfo.usedPackageHours.toFixed(1)} hrs</dd>
-
-                      <dt className="text-sm font-medium text-gray-500">Remaining</dt>
-                      <dd className="text-sm font-bold text-blue-600">{selectedCustomer.packageInfo.remainingHours.toFixed(1)} hrs</dd>
-
-                      <dt className="text-sm font-medium text-gray-500">Expires On</dt>
-                      <dd className="text-sm text-gray-900">{formatDate(selectedCustomer.packageInfo.expiryDate)}</dd>
-                    </dl>
-                  ) : (
-                    <p className="text-sm text-gray-500">No active package found for this mobile number.</p>
-                  )}
-                </div>
-
-                {/* Visit History Section */}
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Last 3 Visits</h3>
-                  {selectedCustomer.visits.length === 0 ? (
-                    <p className="text-sm text-gray-500">No visit history found.</p>
-                  ) : (
-                    <ul className="divide-y divide-gray-200">
-                      {selectedCustomer.visits.map((visit: any) => (
-                        <li key={visit.id} className="py-3">
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-sm font-medium text-gray-900">{visit.treatment}</span>
-                            <span className="text-sm text-gray-500">{formatDate(visit.date)}</span>
-                          </div>
-                          <div className="flex justify-between items-center text-sm text-gray-600">
-                            <span>{visit.outlet_name}</span>
-                            <span className="flex gap-4">
-                              <span>Therapist: {visit.therapist_name || 'N/A'}</span>
-                              <span>Duration: {formatDuration(visit.session_hours)}</span>
-                            </span>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
