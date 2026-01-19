@@ -69,7 +69,7 @@ export default function SaleReminderPoller() {
   const fetchDueSales = useCallback(async () => {
     const now = new Date();
     const today = getTodayDate();
-    const bufferMs = BUFFER_MINUTES * 60 * 1000; // Calculate buffer in ms
+    const bufferMs = BUFFER_MINUTES * 60 * 1000; 
     
     try {
       const { data, error } = await supabase
@@ -105,16 +105,18 @@ export default function SaleReminderPoller() {
           }
       }
 
-      if (salesToAlert.length > 0) {
-        setDueSales(salesToAlert);
-      } else if (dueSales.length > 0) {
-        setDueSales([]); 
-      }
+      // Update state only if changed (prevents loop)
+      setDueSales(prev => {
+        const isSame = JSON.stringify(prev) === JSON.stringify(salesToAlert);
+        return isSame ? prev : salesToAlert;
+      });
 
-    } catch (e) {
-      console.error("Error fetching due sales:", e);
+    } catch (e: any) {
+      // Enhanced logging to debug Offline Mode issues
+      console.error("Error fetching due sales (Raw):", e);
+      if (e?.message) console.error("Error Message:", e.message);
     }
-  }, [dueSales]); 
+  }, []); 
 
   
   // 2. Start Polling Interval and Cleanup
@@ -134,7 +136,6 @@ export default function SaleReminderPoller() {
   
   // 3. Handle Snooze/Dismiss
   const handleModalClose = useCallback(() => {
-    // Standard 5-minute Snooze
     if (dueSales.length > 0) {
         dueSales.forEach(sale => {
             snoozedClients.current.add(sale.id);
@@ -147,10 +148,8 @@ export default function SaleReminderPoller() {
     setDueSales([]);
   }, [dueSales]);
   
-  // Handler for "Close" button - uses a 5-second snooze to break the loop
   const handleImmediateClose = useCallback(() => {
     if (dueSales.length > 0) {
-        // Apply a very short snooze to the clients to stop the loop
         dueSales.forEach(sale => {
             snoozedClients.current.add(sale.id);
             setTimeout(
@@ -162,21 +161,16 @@ export default function SaleReminderPoller() {
     setDueSales([]);
   }, [dueSales]);
 
-  // Handler for "Review Sales" button
   const handleReviewSales = useCallback(() => {
-    const saleId = dueSales[0]?.id; // Get the ID of the first due sale
+    const saleId = dueSales[0]?.id; 
     if (!saleId) {
         setDueSales([]);
         return;
     }
     
-    // 1. CLEAR POLLING to prevent race condition/loop
     if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
-    
-    // 2. Dismiss the modal state IMMEDIATELY
     setDueSales([]); 
     
-    // 3. Navigate after a brief delay
     setTimeout(() => {
         router.push(`/dashboard/sales/${saleId}`); 
     }, NAVIGATION_DELAY_MS);
@@ -189,7 +183,6 @@ export default function SaleReminderPoller() {
     return null;
   }
 
-  // Use the FIRST item for the title display
   const saleToDisplay = dueSales[0];
   const expectedTime = saleToDisplay.check_in_time && saleToDisplay.session_hours 
       ? fmtTime(getExpectedCheckoutTime(saleToDisplay.check_in_time, saleToDisplay.session_hours)?.toISOString() || null)
@@ -204,7 +197,6 @@ export default function SaleReminderPoller() {
     >
       <div className="flex min-h-screen items-center justify-center p-4 text-center">
         
-        {/* Modal Panel */}
         <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:align-middle sm:max-w-lg sm:w-full">
           <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
             <div className="sm:flex sm:items-start">
@@ -233,7 +225,6 @@ export default function SaleReminderPoller() {
           </div>
           <div className="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
             
-            {/* Review Button */}
             <button
               type="button"
               className="inline-flex w-full justify-center rounded-md border border-transparent bg-indigo-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-indigo-700 sm:ml-3 sm:w-auto sm:text-sm"
@@ -242,7 +233,6 @@ export default function SaleReminderPoller() {
               Review Sale
             </button>
             
-            {/* Snooze Button */}
             <button
               type="button"
               className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm"
@@ -251,7 +241,6 @@ export default function SaleReminderPoller() {
               Snooze (5 min)
             </button>
             
-            {/* Close Button */}
             <button
               type="button"
               className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm sm:mr-3"

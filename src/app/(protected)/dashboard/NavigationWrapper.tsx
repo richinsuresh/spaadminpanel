@@ -21,6 +21,7 @@ import {
   History,
   Activity // <--- Added for Activity Log icon
 } from 'lucide-react';
+
 import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
 

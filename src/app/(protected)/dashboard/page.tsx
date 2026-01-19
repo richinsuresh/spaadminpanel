@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, toggleDatabaseMode, isUsingBackup } from '@/lib/supabase'; // <--- UPDATED IMPORT
 import Link from 'next/link';
 import { OUTLETS } from '@/lib/outlet';
 import { useUser } from '@/context/UserContext';
+import { Wifi, WifiOff } from 'lucide-react'; // <--- ADDED IMPORT
 
 interface OutletSale {
   name: string;
@@ -25,7 +26,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [totalCustomers, setTotalCustomers] = useState(0);
   
-  // --- UPDATED: Default state target set to 2,00,000 ---
   const [dailyTarget, setDailyTarget] = useState({
     target: 200000, // in rupees
     achieved: 0, // in paise
@@ -72,7 +72,6 @@ export default function Dashboard() {
         }
       }
 
-      // --- UPDATED: Calculation target set to 2,00,000 ---
       const targetInRupees = 200000;
       
       const salesInRupees = totalDailySalesInPaise / 100;
@@ -94,11 +93,6 @@ export default function Dashboard() {
       setOutletSales(salesArray);
     } catch (error: any) {
       console.error('Error fetching dashboard data (wrapper):', error);
-      try {
-        console.error('Error JSON (dashboard):', JSON.stringify(error));
-      } catch {
-        // ignore stringify errors
-      }
     } finally {
       setLoading(false);
     }
@@ -125,7 +119,7 @@ export default function Dashboard() {
     }).format(amountInRupees);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 relative"> 
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">
@@ -225,6 +219,17 @@ export default function Dashboard() {
           performance, please use the sidebar navigation.
         </p>
       </div>
+
+      {/* --- OFFLINE MODE TOGGLE BUTTON --- */}
+      <button
+        onClick={toggleDatabaseMode}
+        className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-full shadow-2xl font-bold text-white transition-colors ${
+          isUsingBackup() ? 'bg-red-600 animate-pulse' : 'bg-green-600 hover:bg-green-700'
+        }`}
+      >
+        {isUsingBackup() ? <WifiOff size={20} /> : <Wifi size={20} />}
+        {isUsingBackup() ? 'OFFLINE MODE (Local)' : 'ONLINE MODE (Cloud)'}
+      </button>
     </div>
   );
 }

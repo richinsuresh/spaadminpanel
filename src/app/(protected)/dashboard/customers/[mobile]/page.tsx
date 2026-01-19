@@ -8,7 +8,7 @@ import {
     User, FileText, Gift, Edit, Trash, 
     ChevronDown, ChevronUp, AlertTriangle, 
     Package, Users, Save, History, ArrowRight,
-    X, IndianRupee
+    X, IndianRupee, Eye
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation'; 
@@ -164,6 +164,13 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
   });
   const [historyEditPassword, setHistoryEditPassword] = useState('');
   const [isSavingHistory, setIsSavingHistory] = useState(false);
+
+  // HISTORY TABLE & DELETE STATE
+  const [isHistoryTableOpen, setIsHistoryTableOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [deleteItem, setDeleteItem] = useState<HistoryRow | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const toggleHistoryExpand = () => setIsHistoryExpanded(!isHistoryExpanded);
   
@@ -386,6 +393,45 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
       }
   };
 
+  // --- HISTORY DELETE HANDLERS ---
+  const handleOpenDelete = (item: HistoryRow) => {
+    if (item.eventType === 'audit_log') {
+        alert("Cannot delete audit logs.");
+        return;
+    }
+    setDeleteItem(item);
+    setDeletePassword('');
+    setIsDeleteOpen(true);
+  };
+
+  const handleExecuteDelete = async () => {
+    if (deletePassword !== 'admin123') { alert('Incorrect Password'); return; }
+    if (!deleteItem) return;
+
+    setIsDeleting(true);
+    try {
+        const table = deleteItem.eventType === 'package_purchase' ? 'packages' : 'customers';
+        const { error } = await supabase.from(table).delete().eq('id', deleteItem.id);
+        
+        if (error) throw error;
+
+        await logActivity('history_delete', JSON.stringify({
+            id: deleteItem.id,
+            type: deleteItem.eventType,
+            deleted_record: deleteItem._raw,
+            remark: 'Deleted via Full History Table'
+        }));
+
+        setIsDeleteOpen(false);
+        setDeleteItem(null);
+        fetchClientData(); // Refresh data
+    } catch (err: any) {
+        alert('Failed to delete: ' + err.message);
+    } finally {
+        setIsDeleting(false);
+    }
+  };
+
   // --- RENDER HELPERS ---
   const renderAuditDiff = (before: any, after: any) => {
       if (!before || !after) return null;
@@ -514,7 +560,10 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
       {/* Header */}
       <div className="flex justify-between items-start border-b pb-4">
         <div><h1 className="text-3xl font-bold text-gray-800 capitalize">{summary.name}</h1><p className="text-gray-500 text-lg mt-1">{summary.mobile}</p></div>
-        <button onClick={() => setIsEditProfileOpen(true)} className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium"><Edit size={16} /> Edit Profile</button>
+        <div className="flex gap-2">
+            <button onClick={() => setIsHistoryTableOpen(true)} className="px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 font-medium shadow-sm"><History size={16} /> Show History</button>
+            <button onClick={() => setIsEditProfileOpen(true)} className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium"><Edit size={16} /> Edit Profile</button>
+        </div>
       </div>
 
       {/* Package Summary */}
@@ -537,6 +586,99 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
         {summary.history.length === 0 ? <div className="p-6 text-center text-gray-500 bg-white rounded-lg">No visits, purchases, or logs found.</div> : <div className="space-y-4">{summary.history.map(item => renderHistoryItem(item, expandedHistory.includes(item.id)))}</div>}
       </div>
 
+      {/* HISTORY TABLE MODAL */}
+      {isHistoryTableOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[85vh] flex flex-col overflow-hidden">
+                <div className="bg-white p-4 border-b flex justify-between items-center">
+                    <h2 className="font-bold text-lg flex items-center gap-2 text-gray-800"><History size={20} className="text-indigo-600"/> Full Client History</h2>
+                    <button onClick={() => setIsHistoryTableOpen(false)} className="hover:bg-gray-100 p-2 rounded-full text-gray-500"><X size={24} /></button>
+                </div>
+                <div className="flex-1 overflow-auto p-4 bg-gray-50">
+                    <table className="w-full bg-white border border-gray-200 rounded-lg shadow-sm">
+                        <thead className="bg-gray-100 sticky top-0 shadow-sm z-10">
+                            <tr>
+                                <th className="p-3 text-left text-xs font-bold text-gray-500 uppercase">Date</th>
+                                <th className="p-3 text-left text-xs font-bold text-gray-500 uppercase">Type</th>
+                                <th className="p-3 text-left text-xs font-bold text-gray-500 uppercase">Details (Treatment/Pkg)</th>
+                                <th className="p-3 text-left text-xs font-bold text-gray-500 uppercase">Outlet</th>
+                                <th className="p-3 text-left text-xs font-bold text-gray-500 uppercase">Therapist/Staff</th>
+                                <th className="p-3 text-right text-xs font-bold text-gray-500 uppercase">Amount</th>
+                                <th className="p-3 text-right text-xs font-bold text-gray-500 uppercase">Duration</th>
+                                <th className="p-3 text-center text-xs font-bold text-gray-500 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                            {summary.history.map((item) => {
+                                const isAudit = item.eventType === 'audit_log';
+                                return (
+                                    <tr key={item.id} className="hover:bg-blue-50 transition-colors">
+                                        <td className="p-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(item.date)}</td>
+                                        <td className="p-3 text-sm">
+                                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                                item.eventType === 'visit' ? (item.is_package_customer ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700') :
+                                                item.eventType === 'package_purchase' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                                            }`}>
+                                                {item.eventType === 'visit' ? 'Visit' : item.eventType === 'package_purchase' ? 'Package' : 'System'}
+                                            </span>
+                                        </td>
+                                        <td className="p-3 text-sm font-medium text-gray-800">{isAudit ? item.treatment : (item.package_name || item.treatment)}</td>
+                                        <td className="p-3 text-sm text-gray-600">{item.outlet_name || '—'}</td>
+                                        <td className="p-3 text-sm text-gray-600">{item.therapist_name || '—'}</td>
+                                        <td className="p-3 text-sm text-right font-mono text-gray-700">{item.amount_paid || item.package_amount ? `₹${((item.amount_paid || item.package_amount || 0)/100).toFixed(0)}` : '—'}</td>
+                                        <td className="p-3 text-sm text-right text-gray-600">{fmtDuration(item.session_hours)}</td>
+                                        <td className="p-3 flex justify-center gap-2">
+                                            {!isAudit && (
+                                                <>
+                                                    <button onClick={() => handleOpenHistoryEdit(item)} className="p-1.5 text-blue-600 bg-blue-50 rounded hover:bg-blue-100" title="Edit">
+                                                        <Edit size={16} />
+                                                    </button>
+                                                    <button onClick={() => handleOpenDelete(item)} className="p-1.5 text-red-600 bg-red-50 rounded hover:bg-red-100" title="Delete">
+                                                        <Trash size={16} />
+                                                    </button>
+                                                </>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {isDeleteOpen && deleteItem && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden p-6 space-y-4">
+                <div className="flex items-center gap-3 text-red-600">
+                    <div className="p-2 bg-red-100 rounded-full"><AlertTriangle size={24} /></div>
+                    <h3 className="font-bold text-lg">Confirm Delete</h3>
+                </div>
+                <p className="text-gray-600 text-sm">
+                    Are you sure you want to delete this <strong>{deleteItem.eventType === 'package_purchase' ? 'Package' : 'Visit'}</strong> record dated <strong>{fmtDate(deleteItem.date)}</strong>? This action cannot be undone.
+                </p>
+                <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Admin Password</label>
+                    <input 
+                        type="password" 
+                        value={deletePassword} 
+                        onChange={(e) => setDeletePassword(e.target.value)} 
+                        className="w-full p-2 border border-gray-300 rounded focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                    />
+                </div>
+                <div className="flex gap-3 pt-2">
+                    <button onClick={() => setIsDeleteOpen(false)} className="flex-1 py-2 bg-gray-100 text-gray-700 rounded font-medium">Cancel</button>
+                    <button onClick={handleExecuteDelete} disabled={isDeleting} className="flex-1 py-2 bg-red-600 text-white rounded font-medium flex justify-center items-center gap-2">
+                        {isDeleting ? <Loader2 className="animate-spin" size={16} /> : 'Delete Permanently'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
       {/* GLOBAL EDIT MODAL */}
       {isEditProfileOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -555,7 +697,7 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
 
       {/* INDIVIDUAL HISTORY EDIT MODAL (IMPROVED UI) */}
       {isHistoryEditOpen && historyEditItem && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
                 
                 {/* Header */}
