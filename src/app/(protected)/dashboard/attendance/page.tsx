@@ -17,8 +17,9 @@ import {
   BarChart3,
   AlertTriangle,
   CheckCircle,
-  Edit, // Added Edit Icon
-  Save
+  Edit, 
+  Save,
+  Clock // Added Clock icon
 } from 'lucide-react';
 
 // --- Types ---
@@ -61,18 +62,14 @@ const formatTime = (dateStr: string | null | undefined) => {
   });
 };
 
-// Helper to convert ISO string to HH:mm for input (IST)
 const isoToTimeInput = (iso: string | null) => {
     if (!iso) return '';
     const d = new Date(iso);
     return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 };
 
-// Helper to combine Date + Time (IST) -> ISO UTC
 const combineDateAndTimeIST = (dateStr: string, timeStr: string) => {
     if (!timeStr) return null;
-    // Create date object assuming input is IST (+05:30)
-    // We append the timezone offset to ensure Date constructor parses it correctly relative to UTC
     const combined = new Date(`${dateStr}T${timeStr}:00+05:30`);
     return combined.toISOString();
 };
@@ -97,7 +94,7 @@ export default function AttendancePage() {
   const [isOutletChangeModalOpen, setIsOutletChangeModalOpen] = useState(false);
   const [isForceLogoutModalOpen, setIsForceLogoutModalOpen] = useState(false);
   
-  // NEW: Edit Modal State
+  // Edit Modal State
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [recordToEdit, setRecordToEdit] = useState<AttendanceRecord | null>(null);
   const [editForm, setEditForm] = useState({
@@ -115,6 +112,7 @@ export default function AttendancePage() {
   const [summaryEmployee, setSummaryEmployee] = useState<Employee | null>(null);
   const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [summaryStats, setSummaryStats] = useState({ present: 0, absent: 0, weeklyOff: 0 });
+  const [summaryHistory, setSummaryHistory] = useState<AttendanceRecord[]>([]); // NEW: Stores history list
   const [isStatsLoading, setIsStatsLoading] = useState(false);
 
   // Data State
@@ -175,6 +173,7 @@ export default function AttendancePage() {
       }
   }, [dateFilter]);
 
+  // NEW: Updated to fetch full records for the list
   const fetchEmployeeStats = useCallback(async (empId: string, monthStr: string) => {
       setIsStatsLoading(true);
       try {
@@ -184,10 +183,11 @@ export default function AttendancePage() {
 
           const { data, error } = await supabase
               .from('attendance')
-              .select('status, check_in_time')
+              .select('*') // Changed from specific columns to * to get full details for the list
               .eq('employee_id', empId)
               .gte('date', startOfMonth)
-              .lte('date', endOfMonth);
+              .lte('date', endOfMonth)
+              .order('date', { ascending: false });
 
           if (error) throw error;
 
@@ -197,15 +197,16 @@ export default function AttendancePage() {
               else if (r.status === 'Weekly Off') stats.weeklyOff++;
               else if (r.status === 'Present' || r.check_in_time) stats.present++;
           });
+          
           setSummaryStats(stats);
+          setSummaryHistory(data as AttendanceRecord[] || []); // Store full history
+
       } catch (err) {
           console.error("Error fetching stats:", err);
       } finally {
           setIsStatsLoading(false);
       }
   }, []);
-
-  // --- Actions ---
 
   const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off' | 'Present') => {
     setMarkingId(emp.id);
@@ -259,7 +260,6 @@ export default function AttendancePage() {
     }
   };
 
-  // --- NEW: Edit Handlers ---
   const handleEditClick = (record: AttendanceRecord) => {
       setRecordToEdit(record);
       setEditForm({
@@ -282,7 +282,6 @@ export default function AttendancePage() {
           let newCheckIn = null;
           let newCheckOut = null;
 
-          // Only calculate times if status is Present
           if (editForm.status === 'Present') {
               newCheckIn = combineDateAndTimeIST(recordToEdit.date, editForm.check_in_time);
               newCheckOut = combineDateAndTimeIST(recordToEdit.date, editForm.check_out_time);
@@ -299,18 +298,10 @@ export default function AttendancePage() {
 
           if (error) throw error;
 
-          // If changing status to Absent/Off, ensure employee is logged out
           if (editForm.status !== 'Present') {
                await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).eq('id', recordToEdit.employee_id);
           }
-          // If changing TO Present and no checkout, update employee status (optional, but good for consistency)
-          else if (editForm.status === 'Present' && !newCheckOut) {
-              // We might not want to force check-in if editing historical data, but for today it makes sense
-              if (recordToEdit.date === getISTDateString()) {
-                   // Optional: await supabase.from('employees').update({ is_checked_in: true }).eq('id', recordToEdit.employee_id);
-              }
-          }
-
+          
           setIsEditModalOpen(false);
           setRecordToEdit(null);
           setAdminPassword('');
@@ -322,7 +313,6 @@ export default function AttendancePage() {
           setIsProcessing(false);
       }
   };
-
 
   useEffect(() => {
     fetchEmployees();
@@ -348,7 +338,6 @@ export default function AttendancePage() {
       return 2; 
   };
 
-  // --- Other Actions ---
   const handleForceLogout = async () => {
     if (!recordToLogout || adminPassword !== ADMIN_PASSWORD) {
         setErrorMsg('Incorrect admin password');
@@ -548,7 +537,6 @@ export default function AttendancePage() {
                 filteredData.map(({ employee, record }) => {
                   const isWorking = record?.check_in_time && !record?.check_out_time;
                   
-                  // NO RECORD LOGIC
                   let noRecordStatus = null;
                   if (!record) {
                       const offsUsed = monthlyOffCounts[employee.id] || 0;
@@ -647,7 +635,6 @@ export default function AttendancePage() {
                                 <button onClick={() => { setRequestToApprove(record); setIsApprovalModalOpen(true); }} className="px-3 py-1.5 bg-amber-500 text-black rounded-lg text-[10px] font-bold uppercase">Review</button>
                             )}
                             
-                            {/* NEW: Edit Button */}
                             {record && (
                                 <button 
                                     onClick={() => handleEditClick(record)} 
@@ -679,7 +666,7 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* --- EDIT MODAL (NEW) --- */}
+      {/* --- EDIT MODAL --- */}
       {isEditModalOpen && recordToEdit && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
@@ -747,10 +734,10 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* --- Existing Modals (Logout, Delete, etc.) --- */}
+      {/* --- SUMMARY MODAL (UPDATED WITH HISTORY LIST) --- */}
       {isSummaryModalOpen && summaryEmployee && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
                 <div className="p-6 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-lg shadow-sm">
@@ -782,28 +769,73 @@ export default function AttendancePage() {
                             <Loader2 className="animate-spin text-indigo-600 h-8 w-8" />
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="p-5 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col items-center justify-center gap-1 group hover:border-rose-200 transition-colors">
-                                <div className="text-3xl font-black text-rose-600 group-hover:scale-110 transition-transform">{summaryStats.absent}</div>
-                                <div className="text-[10px] font-bold text-rose-800 uppercase tracking-widest flex items-center gap-1">
-                                    <XCircle size={12} /> Absents
+                        <>
+                            {/* Stats Grid */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="p-5 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col items-center justify-center gap-1 group hover:border-rose-200 transition-colors">
+                                    <div className="text-3xl font-black text-rose-600 group-hover:scale-110 transition-transform">{summaryStats.absent}</div>
+                                    <div className="text-[10px] font-bold text-rose-800 uppercase tracking-widest flex items-center gap-1">
+                                        <XCircle size={12} /> Absents
+                                    </div>
                                 </div>
-                            </div>
-                            
-                            <div className="p-5 bg-amber-50 rounded-2xl border border-amber-100 flex flex-col items-center justify-center gap-1 group hover:border-amber-200 transition-colors">
-                                <div className="text-3xl font-black text-amber-600 group-hover:scale-110 transition-transform">{summaryStats.weeklyOff}</div>
-                                <div className="text-[10px] font-bold text-amber-800 uppercase tracking-widest flex items-center gap-1">
-                                    <CalendarOff size={12} /> Weekly Offs
+                                
+                                <div className="p-5 bg-amber-50 rounded-2xl border border-amber-100 flex flex-col items-center justify-center gap-1 group hover:border-amber-200 transition-colors">
+                                    <div className="text-3xl font-black text-amber-600 group-hover:scale-110 transition-transform">{summaryStats.weeklyOff}</div>
+                                    <div className="text-[10px] font-bold text-amber-800 uppercase tracking-widest flex items-center gap-1">
+                                        <CalendarOff size={12} /> Weekly Offs
+                                    </div>
+                                </div>
+
+                                <div className="col-span-2 p-5 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center gap-1 group hover:border-emerald-200 transition-colors">
+                                    <div className="text-3xl font-black text-emerald-600 group-hover:scale-110 transition-transform">{summaryStats.present}</div>
+                                    <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1">
+                                        <User size={12} /> Days Present
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="col-span-2 p-5 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center gap-1 group hover:border-emerald-200 transition-colors">
-                                <div className="text-3xl font-black text-emerald-600 group-hover:scale-110 transition-transform">{summaryStats.present}</div>
-                                <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1">
-                                    <User size={12} /> Days Present
+                            {/* Detailed History List */}
+                            <div className="mt-2 border-t border-slate-100 pt-4">
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                                    Full Attendance History ({summaryHistory.length})
+                                </h3>
+                                <div className="space-y-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+                                    {summaryHistory.length === 0 ? (
+                                        <div className="text-center text-sm text-slate-400 py-4 italic">No records found for this month.</div>
+                                    ) : (
+                                        summaryHistory.map(item => (
+                                            <div key={item.id} className="flex justify-between items-center p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100 transition-colors">
+                                                <div>
+                                                    <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                                                        {new Date(item.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                                            item.status === 'Absent' ? 'bg-rose-100 text-rose-700' :
+                                                            item.status === 'Weekly Off' ? 'bg-amber-100 text-amber-700' :
+                                                            'bg-emerald-100 text-emerald-700'
+                                                        }`}>
+                                                            {item.status}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-[10px] font-bold text-slate-400 mt-0.5 flex items-center gap-1">
+                                                        <MapPin size={10} /> {item.outlet_name}
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    {(item.check_in_time || item.check_out_time) ? (
+                                                        <div className="text-xs font-bold text-slate-700 flex flex-col items-end">
+                                                            <span className="text-emerald-600 flex items-center gap-1"><Clock size={10} /> In: {formatTime(item.check_in_time)}</span>
+                                                            <span className="text-slate-500">Out: {formatTime(item.check_out_time)}</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-xs text-slate-400 font-medium italic">No Logins</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
                                 </div>
                             </div>
-                        </div>
+                        </>
                     )}
                 </div>
             </div>

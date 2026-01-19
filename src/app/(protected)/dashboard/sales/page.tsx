@@ -372,32 +372,30 @@ export default function AdminSalesPage() {
 
   const handleOpenEdit = (sale: Sale) => {
     setEditingSale(sale);
-    
-    // 1. Split existing therapist names
     const tParts = (sale.therapist_name || '').split(' & ');
-
-    // 2. Split decimal hours into Hrs & Mins for the form
     const { hrs, mins } = decimalToTime(sale.session_hours || 0);
+
+    // --- FIX: Resolve Outlet ID from Name if ID is missing ---
+    let currentOutletId = sale.outlet_id;
+    if (!currentOutletId && sale.outlet_name) {
+       const matched = OUTLETS.find(o => o.name === sale.outlet_name);
+       if (matched) currentOutletId = matched.id;
+    }
+    // ---------------------------------------------------------
 
     setEditForm({
       name: sale.name || '',
       mobile: sale.mobile || '',
       date: toInputDate(sale.date),
-      outlet_id: sale.outlet_id || '',
+      outlet_id: currentOutletId || '', // Use resolved ID
       treatment: sale.treatment || '',
       payment_method: sale.payment_method || 'cash',
       amount: (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
-      
-      // Store separate therapist fields
       therapist_name1: tParts[0] || '',
       therapist_name2: tParts[1] || '',
-
       room: sale.room || '',
-      
-      // 🛑 FIX: Populate split duration fields
       session_hours_h: hrs,
       session_hours_m: mins,
-
       check_in_time: toInputTime(sale.check_in_time),
       check_out_time: toInputTime(sale.check_out_time),
     });
@@ -454,8 +452,8 @@ export default function AdminSalesPage() {
 
     // Validate Duration
     const totalHours = (Number(editForm.session_hours_h) || 0) + (Number(editForm.session_hours_m) || 0) / 60;
-    if (totalHours <= 0) {
-      setSaveError('Duration cannot be zero or empty.');
+    if (totalHours < 0) { // Changed from <= 0 to < 0 to allow 0 hour sales (e.g. products)
+      setSaveError('Duration cannot be negative.');
       return;
     }
 
@@ -491,6 +489,14 @@ export default function AdminSalesPage() {
     const t2 = editForm.therapist_name2;
     const combinedTherapist = t1 ? (t2 ? `${t1} & ${t2}` : t1) : null;
 
+    // --- NEW: Resolve Outlet Name from ID ---
+    let newOutletName = editingSale.outlet_name; // Default to existing
+    const selectedOutlet = OUTLETS.find(o => o.id === editForm.outlet_id);
+    if (selectedOutlet) {
+        newOutletName = selectedOutlet.name;
+    }
+    // ----------------------------------------
+
     const updates: Partial<Sale> & {
       amount_paid: number;
       package_amount: number;
@@ -506,6 +512,7 @@ export default function AdminSalesPage() {
       package_amount: editingSale.took_package ? Math.round(amountNumber * 100) : editingSale.package_amount,
       date: editForm.date,
       outlet_id: editForm.outlet_id,
+      outlet_name: newOutletName, // <--- SAVING THE NEW NAME
       check_in_time: newCheckInTime,
       check_out_time: newCheckOutTime,
       in_time: null,
@@ -529,7 +536,6 @@ export default function AdminSalesPage() {
        const newName = editForm.name;
        const newMobile = editForm.mobile;
        
-       // Only update if critical info changed
        if (newName !== editingSale.name || newMobile !== editingSale.mobile) {
            const { error: pkgError } = await supabase
              .from('packages')
@@ -543,15 +549,13 @@ export default function AdminSalesPage() {
 
            if (pkgError) {
               console.error('Failed to sync package update:', pkgError);
-           } else {
-              console.log('Successfully synced package details.');
            }
        }
     }
 
     const after = { ...before, ...updates };
 
-    // 3. Log Activity with Real Username
+    // 3. Log Activity
     await supabase.from('activity_logs').insert({
       action_type: 'edit_sale',
       description: JSON.stringify({
@@ -559,17 +563,19 @@ export default function AdminSalesPage() {
         before,
         after,
       }),
-      username: user?.username || 'System', // <--- UPDATED HERE
+      username: user?.username || 'System',
     });
+
+    // 4. Update Local State Immediately (Fixes the visual issue)
+    setSales(prev => prev.map(s => s.id === editingSale.id ? { ...s, ...updates } as Sale : s));
 
     setIsEditModalOpen(false);
     setEditingSale(null);
     setEditRemark('');
     setEditPassword('');
-    await fetchSales();
     setIsSaving(false);
   };
-
+  
   /* ===================== CHECK OUT ===================== */
 
   const handleCheckOut = async (id: string) => {
