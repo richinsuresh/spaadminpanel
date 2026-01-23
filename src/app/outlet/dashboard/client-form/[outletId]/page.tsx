@@ -1,4 +1,4 @@
-// src/app/client-form/[outletId]/page.tsx
+// src/app/outlet/dashboard/client-form/[outletId]/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -270,7 +270,7 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
   const params = useParams();
-  const outletId = params.outletId as string;
+  const outletId = params?.outletId as string;
   const router = useRouter();
 
   const [outlet, setOutlet] = useState<Outlet | null>(null);
@@ -322,10 +322,10 @@ export default function ClientCheckinForm() {
   // --- Initial Load & Outlet Validation (SIMPLIFIED) ---
   useEffect(() => {
     if (!outletId) {
-      setError('Outlet ID missing in URL.');
-      setLoading(false);
+      // If no outletId yet, do nothing (wait for hydration)
       return;
     }
+    
     setLoading(true);
     setError('');
     const outletInfo = OUTLETS.find((o) => o.id === outletId);
@@ -550,6 +550,13 @@ export default function ClientCheckinForm() {
       setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
       return;
+    }
+
+    // --- 1. STRICT MOBILE VALIDATION ---
+    if (!mobile || mobile.length !== 10) {
+        setError('Phone number must be exactly 10 digits.');
+        setLoading(false);
+        return;
     }
 
     const sessionHours = getSessionDuration();
@@ -789,6 +796,19 @@ export default function ClientCheckinForm() {
             (clientInfo.usedPackageHours / clientInfo.totalPackageHours) * 100,
         }
       : null;
+
+  // --- 2. OUTLET ID FLUCTUATION FIX ---
+  // Guard clause: If outletId is not yet available, show a loader or empty state.
+  if (!outletId) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
+        <div className="flex flex-col items-center gap-2">
+            <RefreshCcw className="animate-spin h-6 w-6 text-red-600" />
+            <p className="text-gray-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 flex items-center justify-center p-4">

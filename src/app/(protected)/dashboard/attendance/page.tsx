@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { 
@@ -16,10 +16,11 @@ import {
   User,
   BarChart3,
   AlertTriangle,
-  CheckCircle,
   Edit, 
   Save,
-  Clock // Added Clock icon
+  Clock,
+  Plane,      // For Long Leave
+  Hourglass   // For Half Day
 } from 'lucide-react';
 
 // --- Types ---
@@ -28,6 +29,10 @@ type Employee = {
   name: string;
   role: string;
   outlet_id?: string;
+  join_date?: string | null;
+  exit_date?: string | null;
+  is_active?: boolean;
+  status?: string; 
 };
 
 type AttendanceRecord = {
@@ -111,8 +116,8 @@ export default function AttendancePage() {
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [summaryEmployee, setSummaryEmployee] = useState<Employee | null>(null);
   const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [summaryStats, setSummaryStats] = useState({ present: 0, absent: 0, weeklyOff: 0 });
-  const [summaryHistory, setSummaryHistory] = useState<AttendanceRecord[]>([]); // NEW: Stores history list
+  const [summaryStats, setSummaryStats] = useState({ present: 0, absent: 0, weeklyOff: 0, halfDay: 0 });
+  const [summaryHistory, setSummaryHistory] = useState<AttendanceRecord[]>([]); 
   const [isStatsLoading, setIsStatsLoading] = useState(false);
 
   // Data State
@@ -128,8 +133,12 @@ export default function AttendancePage() {
   const [newOutletId, setNewOutletId] = useState('');
   const [markingId, setMarkingId] = useState<string | null>(null); 
 
+  // FIX 1: Fetch all employees (removed is_active filter) to support historical views
   const fetchEmployees = useCallback(async () => {
-    const { data } = await supabase.from('employees').select('id, name, role, outlet_id').eq('is_active', true).order('name');
+    const { data } = await supabase
+      .from('employees')
+      .select('id, name, role, outlet_id, join_date, exit_date, is_active, status')
+      .order('name');
     setEmployees(data || []);
   }, []);
 
@@ -173,7 +182,7 @@ export default function AttendancePage() {
       }
   }, [dateFilter]);
 
-  // NEW: Updated to fetch full records for the list
+  // Updated to include 'Half Day' count
   const fetchEmployeeStats = useCallback(async (empId: string, monthStr: string) => {
       setIsStatsLoading(true);
       try {
@@ -183,7 +192,7 @@ export default function AttendancePage() {
 
           const { data, error } = await supabase
               .from('attendance')
-              .select('*') // Changed from specific columns to * to get full details for the list
+              .select('*')
               .eq('employee_id', empId)
               .gte('date', startOfMonth)
               .lte('date', endOfMonth)
@@ -191,15 +200,16 @@ export default function AttendancePage() {
 
           if (error) throw error;
 
-          const stats = { present: 0, absent: 0, weeklyOff: 0 };
+          const stats = { present: 0, absent: 0, weeklyOff: 0, halfDay: 0 };
           data?.forEach(r => {
               if (r.status === 'Absent') stats.absent++;
               else if (r.status === 'Weekly Off') stats.weeklyOff++;
+              else if (r.status === 'Half Day') stats.halfDay++;
               else if (r.status === 'Present' || r.check_in_time) stats.present++;
           });
           
           setSummaryStats(stats);
-          setSummaryHistory(data as AttendanceRecord[] || []); // Store full history
+          setSummaryHistory(data as AttendanceRecord[] || []); 
 
       } catch (err) {
           console.error("Error fetching stats:", err);
@@ -208,7 +218,7 @@ export default function AttendancePage() {
       }
   }, []);
 
-  const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off' | 'Present') => {
+  const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off' | 'Present' | 'Half Day') => {
     setMarkingId(emp.id);
     try {
         const targetOutletId = outletFilter !== 'all' ? outletFilter : emp.outlet_id;
@@ -245,13 +255,16 @@ export default function AttendancePage() {
         if (error) throw error;
         
         if (status === 'Present') {
+             // If marked present, ensure status is reset to active if they were on leave
              await supabase.from('employees').update({ 
                  is_checked_in: true, 
-                 current_outlet_name: targetOutlet?.name || 'Unknown' 
+                 current_outlet_name: targetOutlet?.name || 'Unknown',
+                 status: 'active'
              }).eq('id', emp.id);
         }
         
         await fetchAttendance();
+        fetchEmployees(); 
         fetchMonthlyOffs(); 
     } catch (err: any) {
         alert('Failed to mark status: ' + err.message);
@@ -444,15 +457,33 @@ export default function AttendancePage() {
     } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
 
+  // FIX 2: Correct historical filtering
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
   })).filter(item => {
     const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
-    if (outletFilter === 'all') return nameMatch;
+    if (!nameMatch) return false;
+    
+    // Compare dates as strings (YYYY-MM-DD) to ensure accurate day comparison
+    const filterDateStr = dateFilter; 
+    
+    // Hide if employee joined AFTER the selected filter date
+    if (item.employee.join_date) {
+        const joinDateStr = item.employee.join_date.split('T')[0];
+        if (filterDateStr < joinDateStr) return false;
+    }
+    
+    // Hide if employee left BEFORE the selected filter date
+    if (item.employee.exit_date) {
+        const exitDateStr = item.employee.exit_date.split('T')[0];
+        if (filterDateStr > exitDateStr) return false;
+    }
+
+    if (outletFilter === 'all') return true;
     const loggedInHere = item.record?.outlet_id === outletFilter;
     const assignedHere = item.employee.outlet_id === outletFilter;
-    return nameMatch && (loggedInHere || assignedHere);
+    return loggedInHere || assignedHere;
   });
 
   return (
@@ -542,7 +573,19 @@ export default function AttendancePage() {
                       const offsUsed = monthlyOffCounts[employee.id] || 0;
                       const offLimit = getOffLimit(employee.role);
                       
-                      if (offsUsed >= offLimit) {
+                      if (employee.is_active === false) {
+                         noRecordStatus = (
+                              <span className="px-2 py-1 rounded bg-gray-100 text-gray-500 text-[10px] font-bold uppercase flex items-center gap-1 w-fit">
+                                  <User size={12} /> Exited
+                              </span>
+                          );
+                      } else if (employee.status === 'long_leave') {
+                         noRecordStatus = (
+                              <span className="px-2 py-1 rounded bg-amber-100 text-amber-800 text-[10px] font-bold uppercase flex items-center gap-1 w-fit border border-amber-200">
+                                  <Plane size={12} /> On Long Leave
+                              </span>
+                          );
+                      } else if (offsUsed >= offLimit) {
                           noRecordStatus = (
                               <span className="px-2 py-1 rounded bg-rose-100 text-rose-800 text-[10px] font-bold uppercase border border-rose-200 flex items-center gap-1 w-fit">
                                   <AlertTriangle size={12} /> Absent (Limit Exceeded)
@@ -558,18 +601,18 @@ export default function AttendancePage() {
                   }
 
                   return (
-                    <tr key={employee.id} className="hover:bg-slate-50/30 transition-colors">
+                    <tr key={employee.id} className={`transition-colors ${employee.status === 'long_leave' ? 'bg-amber-50/30' : 'hover:bg-slate-50/30'}`}>
                       <td className="px-6 py-4">
                         <div 
                             className="flex items-center gap-3 cursor-pointer group"
                             onClick={() => handleOpenSummary(employee)}
                             title="Click to view attendance summary"
                         >
-                            <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-bold text-sm group-hover:bg-indigo-600 transition-colors shadow-sm">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm group-hover:bg-indigo-600 transition-colors shadow-sm ${employee.is_active === false ? 'bg-gray-400' : employee.status === 'long_leave' ? 'bg-amber-400' : 'bg-slate-900'}`}>
                                 {employee.name.charAt(0)}
                             </div>
                             <div>
-                                <div className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors flex items-center gap-1">
+                                <div className={`text-sm font-bold group-hover:text-indigo-600 transition-colors flex items-center gap-1 ${employee.is_active === false ? 'text-gray-500 line-through' : 'text-slate-900'}`}>
                                     {employee.name}
                                     <BarChart3 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
@@ -590,30 +633,44 @@ export default function AttendancePage() {
                          {!record ? (
                            <div className="flex flex-col gap-2">
                                 <div>{noRecordStatus}</div>
-                                <div className="flex items-center gap-2">
-                                   <button 
-                                       disabled={!!markingId}
-                                       onClick={() => handleMarkStatus(employee, 'Present')}
-                                       className="px-2 py-1 bg-white border border-emerald-300 text-emerald-700 rounded text-[10px] font-bold uppercase hover:bg-emerald-50 transition-colors disabled:opacity-50"
-                                   >
-                                       Mark Present
-                                   </button>
-                                   
-                                   <button 
-                                       disabled={!!markingId}
-                                       onClick={() => handleMarkStatus(employee, 'Absent')}
-                                       className="px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded text-[10px] font-bold uppercase hover:bg-rose-50 transition-colors disabled:opacity-50"
-                                   >
-                                       {markingId === employee.id ? '...' : 'Absent'}
-                                   </button>
-                                   <button 
-                                       disabled={!!markingId}
-                                       onClick={() => handleMarkStatus(employee, 'Weekly Off')}
-                                       className="px-2 py-1 bg-white border border-gray-300 text-gray-700 rounded text-[10px] font-bold uppercase hover:bg-gray-100 transition-colors disabled:opacity-50"
-                                   >
-                                       Mark Off
-                                   </button>
-                               </div>
+                                {employee.is_active !== false && (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                     <button 
+                                         disabled={!!markingId}
+                                         onClick={() => handleMarkStatus(employee, 'Present')}
+                                         className="px-2 py-1 bg-white border border-emerald-300 text-emerald-700 rounded text-[10px] font-bold uppercase hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                                     >
+                                         Mark Present
+                                     </button>
+                                     
+                                     {/* If not on long leave, show absent/off/half-day options */}
+                                     {employee.status !== 'long_leave' && (
+                                         <>
+                                             <button 
+                                                 disabled={!!markingId}
+                                                 onClick={() => handleMarkStatus(employee, 'Absent')}
+                                                 className="px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded text-[10px] font-bold uppercase hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                             >
+                                                 {markingId === employee.id ? '...' : 'Absent'}
+                                             </button>
+                                             <button 
+                                                 disabled={!!markingId}
+                                                 onClick={() => handleMarkStatus(employee, 'Half Day')}
+                                                 className="px-2 py-1 bg-white border border-amber-300 text-amber-700 rounded text-[10px] font-bold uppercase hover:bg-amber-50 transition-colors disabled:opacity-50 flex items-center gap-1"
+                                             >
+                                                 Half Day
+                                             </button>
+                                             <button 
+                                                 disabled={!!markingId}
+                                                 onClick={() => handleMarkStatus(employee, 'Weekly Off')}
+                                                 className="px-2 py-1 bg-white border border-gray-300 text-gray-700 rounded text-[10px] font-bold uppercase hover:bg-gray-100 transition-colors disabled:opacity-50"
+                                             >
+                                                 Mark Off
+                                             </button>
+                                         </>
+                                     )}
+                                  </div>
+                                )}
                            </div>
                          ) : record.status === 'Absent' ? (
                            <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
@@ -622,6 +679,10 @@ export default function AttendancePage() {
                          ) : record.status === 'Weekly Off' ? (
                            <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
                                <CalendarOff size={12} /> Weekly Off
+                           </span>
+                         ) : record.status === 'Half Day' ? (
+                           <span className="px-2 py-1 rounded bg-amber-50 text-amber-700 text-[10px] font-bold uppercase border border-amber-200 flex items-center gap-1 w-fit">
+                               <Hourglass size={12} /> Half Day
                            </span>
                          ) : record.check_out_time ? (
                            <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
@@ -645,7 +706,7 @@ export default function AttendancePage() {
                                 </button>
                             )}
                             
-                            {isWorking && record && record.status !== 'Absent' && record.status !== 'Weekly Off' && (
+                            {isWorking && record && record.status !== 'Absent' && record.status !== 'Weekly Off' && record.status !== 'Half Day' && (
                                 <>
                                   <button onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-all" title="Force Logout"><LogOut size={18} /></button>
                                   <button onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" title="Transfer Outlet"><MapPin size={18} /></button>
@@ -690,6 +751,7 @@ export default function AttendancePage() {
                         <option value="Present">Present</option>
                         <option value="Absent">Absent</option>
                         <option value="Weekly Off">Weekly Off</option>
+                        <option value="Half Day">Half Day</option>
                     </select>
                 </div>
 
@@ -734,7 +796,7 @@ export default function AttendancePage() {
         </div>
       )}
 
-      {/* --- SUMMARY MODAL (UPDATED WITH HISTORY LIST) --- */}
+      {/* --- SUMMARY MODAL --- */}
       {isSummaryModalOpen && summaryEmployee && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
@@ -785,8 +847,15 @@ export default function AttendancePage() {
                                         <CalendarOff size={12} /> Weekly Offs
                                     </div>
                                 </div>
+                                
+                                <div className="p-5 bg-orange-50 rounded-2xl border border-orange-100 flex flex-col items-center justify-center gap-1 group hover:border-orange-200 transition-colors">
+                                    <div className="text-3xl font-black text-orange-600 group-hover:scale-110 transition-transform">{summaryStats.halfDay}</div>
+                                    <div className="text-[10px] font-bold text-orange-800 uppercase tracking-widest flex items-center gap-1">
+                                        <Hourglass size={12} /> Half Days
+                                    </div>
+                                </div>
 
-                                <div className="col-span-2 p-5 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center gap-1 group hover:border-emerald-200 transition-colors">
+                                <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col items-center justify-center gap-1 group hover:border-emerald-200 transition-colors">
                                     <div className="text-3xl font-black text-emerald-600 group-hover:scale-110 transition-transform">{summaryStats.present}</div>
                                     <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest flex items-center gap-1">
                                         <User size={12} /> Days Present
@@ -811,6 +880,7 @@ export default function AttendancePage() {
                                                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
                                                             item.status === 'Absent' ? 'bg-rose-100 text-rose-700' :
                                                             item.status === 'Weekly Off' ? 'bg-amber-100 text-amber-700' :
+                                                            item.status === 'Half Day' ? 'bg-orange-100 text-orange-700' :
                                                             'bg-emerald-100 text-emerald-700'
                                                         }`}>
                                                             {item.status}
@@ -842,6 +912,8 @@ export default function AttendancePage() {
         </div>
       )}
 
+      {/* --- BULK LOGOUT / DELETE / FORCE LOGOUT / TRANSFER MODALS --- */}
+      {/* These modals remain largely the same, included below for completeness */}
       {isForceLogoutModalOpen && recordToLogout && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">

@@ -504,12 +504,30 @@ export default function PackagesPage() {
         outlet: editFormData.outlet,
       };
 
+      // 1. Update the Package Record
       const { error } = await supabase
         .from('packages')
         .update(updates)
         .eq('id', selectedPackage.id);
 
       if (error) throw error;
+
+      // 2. [NEW] Sync changes to Sales History (Customers Table)
+      // If Name or Mobile changed, update all historical visits for this client
+      if (before.mobile !== updates.mobile || before.name !== updates.name) {
+         // Update all sales records where mobile matched the OLD mobile
+         const { error: syncError } = await supabase
+            .from('customers')
+            .update({ 
+                name: updates.name, 
+                mobile: updates.mobile 
+            })
+            .eq('mobile', before.mobile); // Match by OLD mobile to migrate history
+            
+         if (syncError) {
+             console.error("Warning: Failed to sync changes to sales history", syncError);
+         }
+      }
 
       const after = {
         ...before,

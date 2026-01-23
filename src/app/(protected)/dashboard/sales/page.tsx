@@ -452,7 +452,7 @@ export default function AdminSalesPage() {
 
     // Validate Duration
     const totalHours = (Number(editForm.session_hours_h) || 0) + (Number(editForm.session_hours_m) || 0) / 60;
-    if (totalHours < 0) { // Changed from <= 0 to < 0 to allow 0 hour sales (e.g. products)
+    if (totalHours < 0) { 
       setSaveError('Duration cannot be negative.');
       return;
     }
@@ -462,7 +462,7 @@ export default function AdminSalesPage() {
     const before = { ...editingSale };
     const amountNumber = Number(editForm.amount || 0);
 
-    // Reconstruct Check-In Time
+    // ... (Time reconstruction logic stays the same) ...
     let newCheckInTime: string | null = editingSale.check_in_time;
     if (editForm.date && editForm.check_in_time) {
       const combined = new Date(`${editForm.date}T${editForm.check_in_time}`);
@@ -471,7 +471,6 @@ export default function AdminSalesPage() {
       }
     }
 
-    // Reconstruct Check-Out Time
     let newCheckOutTime: string | null = editingSale.check_out_time;
     if (editForm.check_out_time) {
         if (editForm.date) {
@@ -484,18 +483,15 @@ export default function AdminSalesPage() {
         newCheckOutTime = null;
     }
 
-    // Combine Therapist Names
     const t1 = editForm.therapist_name1;
     const t2 = editForm.therapist_name2;
     const combinedTherapist = t1 ? (t2 ? `${t1} & ${t2}` : t1) : null;
 
-    // --- NEW: Resolve Outlet Name from ID ---
-    let newOutletName = editingSale.outlet_name; // Default to existing
+    let newOutletName = editingSale.outlet_name; 
     const selectedOutlet = OUTLETS.find(o => o.id === editForm.outlet_id);
     if (selectedOutlet) {
         newOutletName = selectedOutlet.name;
     }
-    // ----------------------------------------
 
     const updates: Partial<Sale> & {
       amount_paid: number;
@@ -512,7 +508,7 @@ export default function AdminSalesPage() {
       package_amount: editingSale.took_package ? Math.round(amountNumber * 100) : editingSale.package_amount,
       date: editForm.date,
       outlet_id: editForm.outlet_id,
-      outlet_name: newOutletName, // <--- SAVING THE NEW NAME
+      outlet_name: newOutletName,
       check_in_time: newCheckInTime,
       check_out_time: newCheckOutTime,
       in_time: null,
@@ -531,27 +527,25 @@ export default function AdminSalesPage() {
       return;
     }
 
-    // 2. Sync Packages (If name/mobile changed for a package sale)
-    if (editingSale.took_package) {
-       const newName = editForm.name;
-       const newMobile = editForm.mobile;
-       
-       if (newName !== editingSale.name || newMobile !== editingSale.mobile) {
-           const { error: pkgError } = await supabase
-             .from('packages')
-             .update({
-                name: newName,
-                mobile: newMobile
-             })
-             .eq('mobile', editingSale.mobile) 
-             .eq('name', editingSale.name)
-             .eq('start_date', editingSale.date);
+    // 2. [NEW] Sync Packages (Bi-directional)
+    // If name/mobile changed, we must update the linked Package if it exists.
+    if (before.name !== editForm.name || before.mobile !== editForm.mobile) {
+        // Attempt to update any package holding the OLD mobile number
+        const { error: pkgError } = await supabase
+            .from('packages')
+            .update({
+                name: editForm.name,
+                mobile: editForm.mobile
+            })
+            .eq('mobile', before.mobile); // Match by OLD mobile
 
-           if (pkgError) {
-              console.error('Failed to sync package update:', pkgError);
-           }
-       }
+        if (pkgError) {
+            console.error('Failed to sync package update:', pkgError);
+        }
     }
+
+    // (The specific logic for `took_package` is now redundant because the block above covers it, 
+    // but we can leave or remove the specific 'start_date' check. The general update above is safer.)
 
     const after = { ...before, ...updates };
 
@@ -566,7 +560,7 @@ export default function AdminSalesPage() {
       username: user?.username || 'System',
     });
 
-    // 4. Update Local State Immediately (Fixes the visual issue)
+    // 4. Update Local State Immediately
     setSales(prev => prev.map(s => s.id === editingSale.id ? { ...s, ...updates } as Sale : s));
 
     setIsEditModalOpen(false);

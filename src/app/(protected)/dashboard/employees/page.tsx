@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { 
-  Loader2, UserPlus, Phone, Briefcase, Search, 
-  MapPin, Calendar, TrendingUp, User, Filter, X, Edit3, Trash2, 
-  AlertCircle, UserMinus, RotateCcw, ArrowLeft
+  UserPlus, Phone, Briefcase, Search, 
+  MapPin, Calendar, Edit3, Trash2, 
+  UserMinus, RotateCcw, ArrowLeft, Coffee, Plane
 } from 'lucide-react';
 
 // --- Types ---
@@ -18,10 +18,11 @@ type Employee = {
   outlet_name: string; 
   outlet_id: string; 
   is_active?: boolean;
-  status?: 'active' | 'inactive';
+  status?: 'active' | 'inactive' | 'long_leave'; // Added long_leave
   exit_reason?: string;
   exit_type?: 'Left' | 'Removed';
   exit_date?: string;
+  join_date?: string | null;
   current_outlet_name?: string | null; 
 };
 
@@ -61,6 +62,7 @@ export default function EmployeesPage() {
   const [newEmpMobile, setNewEmpMobile] = useState('');
   const [newEmpRole, setNewEmpRole] = useState<Employee['role']>('therapist');
   const [newEmpOutlet, setNewEmpOutlet] = useState(OUTLETS[0]?.id ?? '');
+  const [newEmpJoinDate, setNewEmpJoinDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [isAdding, setIsAdding] = useState(false);
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -68,6 +70,7 @@ export default function EmployeesPage() {
   const [editMobile, setEditMobile] = useState('');
   const [editRole, setEditRole] = useState<Employee['role']>('therapist');
   const [editOutlet, setEditOutlet] = useState('');
+  const [editJoinDate, setEditJoinDate] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const [isExitModalOpen, setIsExitModalOpen] = useState(false);
@@ -77,6 +80,10 @@ export default function EmployeesPage() {
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Long Leave State
+  const [isLongLeaveModalOpen, setIsLongLeaveModalOpen] = useState(false);
+  const [isProcessingLeave, setIsProcessingLeave] = useState(false);
 
   // --- Fetch Data ---
   const fetchData = useCallback(async () => {
@@ -98,7 +105,6 @@ export default function EmployeesPage() {
       }
       setFilteredEmployees(filtered);
 
-      // Mobile selection logic: Don't auto-select on mobile so user sees list first
       const isMobile = window.innerWidth < 768; 
       setSelectedEmployee(prev => {
         if (prev) {
@@ -128,13 +134,11 @@ export default function EmployeesPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Real-time
   useEffect(() => {
     const channel = supabase.channel('employees-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => fetchData()).subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchData]);
 
-  // Filter Effect
   useEffect(() => {
     let r = employees;
     if (outletFilter !== 'all') r = r.filter(e => e.outlet_id === outletFilter);
@@ -145,7 +149,6 @@ export default function EmployeesPage() {
     setFilteredEmployees(r);
   }, [searchTerm, outletFilter, employees]);
 
-  // History Effect
   useEffect(() => {
     if (!selectedEmployee) { setHistory([]); setTotalRevenue(0); return; }
     const fetchHistory = async () => {
@@ -178,7 +181,6 @@ export default function EmployeesPage() {
     fetchHistory();
   }, [selectedEmployee, startDate, endDate]);
 
-  // --- Handlers ---
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newEmpName.trim()) return;
@@ -186,8 +188,14 @@ export default function EmployeesPage() {
     try {
       const outletObj = OUTLETS.find(o => o.id === newEmpOutlet);
       await supabase.from('employees').insert({
-        name: newEmpName.trim(), mobile: newEmpMobile.trim() || null, role: newEmpRole,
-        outlet_id: newEmpOutlet, outlet_name: outletObj?.name || 'Unknown', is_active: true, status: 'active'
+        name: newEmpName.trim(), 
+        mobile: newEmpMobile.trim() || null, 
+        role: newEmpRole,
+        outlet_id: newEmpOutlet, 
+        outlet_name: outletObj?.name || 'Unknown', 
+        is_active: true, 
+        status: 'active',
+        join_date: newEmpJoinDate
       });
       await fetchData(); setIsAddModalOpen(false); setNewEmpName(''); setNewEmpMobile('');
     } finally { setIsAdding(false); }
@@ -201,8 +209,12 @@ export default function EmployeesPage() {
     try {
       const outletObj = OUTLETS.find(o => o.id === editOutlet);
       await supabase.from('employees').update({
-        name: newName, mobile: editMobile.trim() || null, role: editRole,
-        outlet_id: editOutlet, outlet_name: outletObj?.name || editOutlet
+        name: newName, 
+        mobile: editMobile.trim() || null, 
+        role: editRole,
+        outlet_id: editOutlet, 
+        outlet_name: outletObj?.name || editOutlet,
+        join_date: editJoinDate || null
       }).eq('id', selectedEmployee.id);
 
       if (oldName !== newName) {
@@ -227,7 +239,37 @@ export default function EmployeesPage() {
 
   const handleRejoin = async () => {
     if (!selectedEmployee || !confirm(`Rejoin ${selectedEmployee.name}?`)) return;
-    await supabase.from('employees').update({ is_active: true, status: 'active', exit_type: null, exit_reason: null, exit_date: null }).eq('id', selectedEmployee.id);
+    await supabase.from('employees').update({ 
+      is_active: true, 
+      status: 'active', 
+      exit_type: null, 
+      exit_reason: null, 
+      exit_date: null 
+    }).eq('id', selectedEmployee.id);
+    await fetchData();
+  };
+
+  const handleLongLeave = async () => {
+    if (!selectedEmployee) return;
+    setIsProcessingLeave(true);
+    try {
+        await supabase.from('employees').update({
+            status: 'long_leave',
+            is_checked_in: false,
+            current_outlet_name: null,
+            current_attendance_id: null
+        }).eq('id', selectedEmployee.id);
+        await fetchData();
+        setIsLongLeaveModalOpen(false);
+    } finally {
+        setIsProcessingLeave(false);
+    }
+  };
+
+  const handleReturnFromLeave = async () => {
+    if (!selectedEmployee) return;
+    if (!confirm(`Mark ${selectedEmployee.name} as returned from leave?`)) return;
+    await supabase.from('employees').update({ status: 'active' }).eq('id', selectedEmployee.id);
     await fetchData();
   };
   
@@ -235,9 +277,17 @@ export default function EmployeesPage() {
     if (!selectedEmployee) return;
     setIsDeleting(true);
     try {
-        await supabase.from('employees').update({ is_active: false, is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).eq('id', selectedEmployee.id);
-        await supabase.from('customers').update({ therapist_name: null }).eq('therapist_name', selectedEmployee.name);
-        await supabase.from('customers').update({ package_sold_by: null }).eq('package_sold_by', selectedEmployee.name);
+        await supabase.from('employees').update({ 
+          is_active: false, 
+          status: 'inactive',
+          exit_type: 'Removed',
+          exit_reason: 'Deleted by Admin',
+          exit_date: new Date().toISOString(),
+          is_checked_in: false, 
+          current_attendance_id: null, 
+          current_outlet_name: null 
+        }).eq('id', selectedEmployee.id);
+        
         await fetchData(); setSelectedEmployee(null); setConfirmDeleteOpen(false);
     } finally { setIsDeleting(false); }
   };
@@ -265,7 +315,7 @@ export default function EmployeesPage() {
           <div className="p-4 border-b">
             <div className="flex justify-between items-center mb-3">
               <h2 className="font-bold text-gray-800">Team ({filteredEmployees.length})</h2>
-              <button onClick={() => setIsAddModalOpen(true)} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow">
+              <button onClick={() => { setNewEmpJoinDate(new Date().toISOString().split('T')[0]); setIsAddModalOpen(true); }} className="p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 shadow">
                 <UserPlus size={16} />
               </button>
             </div>
@@ -285,10 +335,13 @@ export default function EmployeesPage() {
             {loading ? <div className="p-6 text-center text-gray-400">Loading...</div> : (
               <div className="divide-y divide-gray-100">
                 {activeEmployees.map(emp => (
-                  <div key={emp.id} onClick={() => setSelectedEmployee(emp)} className={`p-4 cursor-pointer hover:bg-gray-50 ${selectedEmployee?.id === emp.id ? 'bg-blue-50 border-l-4 border-blue-600' : 'border-l-4 border-transparent'}`}>
+                  <div key={emp.id} onClick={() => setSelectedEmployee(emp)} className={`p-4 cursor-pointer hover:bg-gray-50 ${selectedEmployee?.id === emp.id ? 'bg-blue-50 border-l-4 border-blue-600' : 'border-l-4 border-transparent'} ${emp.status === 'long_leave' ? 'bg-amber-50/50' : ''}`}>
                     <div className="flex justify-between items-center">
                       <div className="overflow-hidden">
-                        <div className="font-semibold text-gray-900 truncate">{emp.name}</div>
+                        <div className="font-semibold text-gray-900 truncate flex items-center gap-2">
+                            {emp.name}
+                            {emp.status === 'long_leave' && <Plane size={12} className="text-amber-500" />}
+                        </div>
                         <div className="flex items-center gap-2 mt-1">
                           {getRoleBadge(emp.role)}
                           {getOutletDisplay(emp)}
@@ -331,11 +384,14 @@ export default function EmployeesPage() {
                 
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className={`h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-bold shadow ${selectedEmployee.is_active === false ? 'bg-gray-400' : 'bg-gradient-to-r from-blue-600 to-indigo-600'}`}>
+                    <div className={`h-14 w-14 rounded-full flex items-center justify-center text-white text-xl font-bold shadow ${selectedEmployee.is_active === false ? 'bg-gray-400' : selectedEmployee.status === 'long_leave' ? 'bg-amber-400' : 'bg-gradient-to-r from-blue-600 to-indigo-600'}`}>
                       {selectedEmployee.name.charAt(0)}
                     </div>
                     <div>
-                      <h1 className="text-xl md:text-2xl font-bold text-gray-900">{selectedEmployee.name}</h1>
+                      <h1 className="text-xl md:text-2xl font-bold text-gray-900 flex items-center gap-2">
+                          {selectedEmployee.name}
+                          {selectedEmployee.status === 'long_leave' && <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full border border-amber-200 font-bold uppercase tracking-wide">On Leave</span>}
+                      </h1>
                       {selectedEmployee.is_active !== false ? (
                         <div className="flex flex-wrap gap-3 text-xs md:text-sm text-gray-600 mt-1">
                           <span className="flex items-center gap-1"><Briefcase size={12}/> {selectedEmployee.role}</span>
@@ -343,6 +399,9 @@ export default function EmployeesPage() {
                           <span className={`flex items-center gap-1 ${selectedEmployee.current_outlet_name ? 'text-green-700 font-medium' : ''}`}>
                              <MapPin size={12}/> {selectedEmployee.current_outlet_name || selectedEmployee.outlet_name}
                           </span>
+                          {selectedEmployee.join_date && (
+                             <span className="flex items-center gap-1 text-indigo-600"><Calendar size={12}/> Joined: {new Date(selectedEmployee.join_date).toLocaleDateString()}</span>
+                          )}
                         </div>
                       ) : (
                          <div className="text-xs text-red-600 flex items-center gap-1 mt-1"><UserMinus size={12}/> {selectedEmployee.exit_type} - {selectedEmployee.exit_reason}</div>
@@ -353,7 +412,16 @@ export default function EmployeesPage() {
                   <div className="flex gap-2 self-start md:self-center">
                      {selectedEmployee.is_active !== false ? (
                        <>
-                         <button onClick={() => { setEditName(selectedEmployee.name); setEditMobile(selectedEmployee.mobile || ''); setEditRole(selectedEmployee.role); setEditOutlet(selectedEmployee.outlet_id); setIsEditModalOpen(true); }} className="p-2 border rounded hover:bg-gray-50 text-gray-700"><Edit3 size={16}/></button>
+                         {selectedEmployee.status === 'long_leave' ? (
+                             <button onClick={handleReturnFromLeave} className="px-3 py-2 bg-amber-100 text-amber-800 border border-amber-200 rounded hover:bg-amber-200 text-sm font-bold flex items-center gap-2">
+                                 <RotateCcw size={14}/> Return
+                             </button>
+                         ) : (
+                             <button onClick={() => setIsLongLeaveModalOpen(true)} className="px-3 py-2 bg-gray-50 text-gray-600 border rounded hover:bg-gray-100 text-sm font-medium flex items-center gap-2" title="Long Leave">
+                                 <Coffee size={14}/> Leave
+                             </button>
+                         )}
+                         <button onClick={() => { setEditName(selectedEmployee.name); setEditMobile(selectedEmployee.mobile || ''); setEditRole(selectedEmployee.role); setEditOutlet(selectedEmployee.outlet_id); setEditJoinDate(selectedEmployee.join_date || ''); setIsEditModalOpen(true); }} className="p-2 border rounded hover:bg-gray-50 text-gray-700"><Edit3 size={16}/></button>
                          <button onClick={() => { setExitType('Left'); setExitReason(''); setIsExitModalOpen(true); }} className="px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded hover:bg-red-100 text-sm font-medium">Exit</button>
                        </>
                      ) : (
@@ -425,7 +493,7 @@ export default function EmployeesPage() {
         </div>
       </div>
 
-      {/* Modals (Simplified for brevity, logic remains same) */}
+      {/* Modals */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
            <div className="bg-white rounded-xl w-full max-w-sm p-6">
@@ -436,6 +504,10 @@ export default function EmployeesPage() {
                  <div className="grid grid-cols-2 gap-2">
                     <select className="p-2 border rounded text-black" value={newEmpRole} onChange={e => setNewEmpRole(e.target.value as any)}><option value="therapist">Therapist</option><option value="manager">Manager</option><option value="housekeeping">HK</option></select>
                     <select className="p-2 border rounded text-black" value={newEmpOutlet} onChange={e => setNewEmpOutlet(e.target.value)}>{OUTLETS.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select>
+                 </div>
+                 <div>
+                    <label className="text-[10px] uppercase font-bold text-gray-500">Join Date</label>
+                    <input type="date" className="w-full p-2 border rounded text-black" value={newEmpJoinDate} onChange={e => setNewEmpJoinDate(e.target.value)} />
                  </div>
                  <div className="flex gap-2 mt-2"><button type="submit" className="flex-1 bg-blue-600 text-white p-2 rounded">Add</button><button onClick={() => setIsAddModalOpen(false)} type="button" className="flex-1 border p-2 rounded text-black">Cancel</button></div>
               </form>
@@ -454,6 +526,10 @@ export default function EmployeesPage() {
                      <select className="p-2 border rounded text-black" value={editRole} onChange={e => setEditRole(e.target.value as any)}><option value="therapist">Therapist</option><option value="manager">Manager</option><option value="housekeeping">HK</option></select>
                      <select className="p-2 border rounded text-black" value={editOutlet} onChange={e => setEditOutlet(e.target.value)}>{OUTLETS.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select>
                   </div>
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-gray-500">Join Date</label>
+                    <input type="date" className="w-full p-2 border rounded text-black" value={editJoinDate} onChange={e => setEditJoinDate(e.target.value)} />
+                 </div>
                   <div className="flex gap-2 mt-2"><button onClick={saveEdit} className="flex-1 bg-green-600 text-white p-2 rounded">Save</button><button onClick={() => setIsEditModalOpen(false)} className="flex-1 border p-2 rounded text-black">Cancel</button></div>
                   <button onClick={() => setConfirmDeleteOpen(true)} className="w-full text-red-600 text-xs mt-2 underline">Delete Employee</button>
                </div>
@@ -474,12 +550,32 @@ export default function EmployeesPage() {
          </div>
       )}
 
+      {isLongLeaveModalOpen && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+           <div className="bg-white rounded-xl w-full max-w-sm p-6">
+              <div className="flex items-center gap-3 text-amber-600 mb-4">
+                 <Coffee size={24} />
+                 <h3 className="font-bold text-lg text-black">Long Leave</h3>
+              </div>
+              <p className="text-sm text-gray-600 mb-6">
+                Mark <strong>{selectedEmployee.name}</strong> as on long leave? They will stop appearing in daily attendance alerts until they return.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={handleLongLeave} disabled={isProcessingLeave} className="flex-1 bg-amber-500 text-white p-2 rounded font-bold">
+                    {isProcessingLeave ? 'Processing...' : 'Confirm Leave'}
+                </button>
+                <button onClick={() => setIsLongLeaveModalOpen(false)} className="flex-1 border p-2 rounded text-black">Cancel</button>
+              </div>
+           </div>
+        </div>
+      )}
+
       {confirmDeleteOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
            <div className="bg-white rounded-xl w-full max-w-sm p-6">
-              <h3 className="font-bold text-black">Permanently Delete?</h3>
-              <p className="text-sm text-gray-600 my-4">This will remove all activity references.</p>
-              <div className="flex gap-2"><button onClick={deleteEmployee} className="flex-1 bg-red-600 text-white p-2 rounded">Delete</button><button onClick={()=>setConfirmDeleteOpen(false)} className="flex-1 border p-2 rounded text-black">Cancel</button></div>
+              <h3 className="font-bold text-black">Remove Employee?</h3>
+              <p className="text-sm text-gray-600 my-4">This will mark them as removed but keep service history.</p>
+              <div className="flex gap-2"><button onClick={deleteEmployee} className="flex-1 bg-red-600 text-white p-2 rounded">Confirm Removal</button><button onClick={()=>setConfirmDeleteOpen(false)} className="flex-1 border p-2 rounded text-black">Cancel</button></div>
            </div>
         </div>
       )}
