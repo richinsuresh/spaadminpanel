@@ -18,7 +18,7 @@ type Employee = {
   outlet_name: string; 
   outlet_id: string; 
   is_active?: boolean;
-  status?: 'active' | 'inactive' | 'long_leave'; // Added long_leave
+  status?: 'active' | 'inactive' | 'long_leave';
   exit_reason?: string;
   exit_type?: 'Left' | 'Removed';
   exit_date?: string;
@@ -89,10 +89,17 @@ export default function EmployeesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: empData } = await supabase
+      // FIX: Removed 'current_outlet_name' from select to prevent crash if column missing
+      // We select '*' which gets all columns anyway.
+      const { data: empData, error } = await supabase
         .from('employees')
-        .select('*, current_outlet_name')
+        .select('*') 
         .order('name', { ascending: true });
+
+      if (error) {
+        console.error("Error fetching employees:", error);
+        return;
+      }
 
       const emps = (empData || []) as Employee[];
       setEmployees(emps);
@@ -127,6 +134,8 @@ export default function EmployeesPage() {
         if (!s.took_package && s.therapist_name) map[s.therapist_name] = (map[s.therapist_name] || 0) + amt;
       });
       setTodaySalesMap(map);
+    } catch (err) {
+      console.error("Fetch failed:", err);
     } finally {
       setLoading(false);
     }
@@ -187,7 +196,8 @@ export default function EmployeesPage() {
     setIsAdding(true);
     try {
       const outletObj = OUTLETS.find(o => o.id === newEmpOutlet);
-      await supabase.from('employees').insert({
+      
+      const { error } = await supabase.from('employees').insert({
         name: newEmpName.trim(), 
         mobile: newEmpMobile.trim() || null, 
         role: newEmpRole,
@@ -197,8 +207,23 @@ export default function EmployeesPage() {
         status: 'active',
         join_date: newEmpJoinDate
       });
-      await fetchData(); setIsAddModalOpen(false); setNewEmpName(''); setNewEmpMobile('');
-    } finally { setIsAdding(false); }
+
+      if (error) {
+        console.error("Insert failed:", error);
+        alert("Failed to add employee: " + error.message);
+        return;
+      }
+
+      await fetchData(); 
+      setIsAddModalOpen(false); 
+      setNewEmpName(''); 
+      setNewEmpMobile('');
+    } catch (err: any) {
+        console.error("Unexpected error:", err);
+        alert("Error: " + err.message);
+    } finally { 
+        setIsAdding(false); 
+    }
   };
 
   const saveEdit = async () => {
@@ -208,7 +233,7 @@ export default function EmployeesPage() {
     const newName = editName.trim();
     try {
       const outletObj = OUTLETS.find(o => o.id === editOutlet);
-      await supabase.from('employees').update({
+      const { error } = await supabase.from('employees').update({
         name: newName, 
         mobile: editMobile.trim() || null, 
         role: editRole,
@@ -216,6 +241,8 @@ export default function EmployeesPage() {
         outlet_name: outletObj?.name || editOutlet,
         join_date: editJoinDate || null
       }).eq('id', selectedEmployee.id);
+
+      if (error) throw error;
 
       if (oldName !== newName) {
         await supabase.from('customers').update({ therapist_name: newName }).eq('therapist_name', oldName);
@@ -231,7 +258,7 @@ export default function EmployeesPage() {
     try {
       await supabase.from('employees').update({
         is_active: false, status: 'inactive', exit_type: exitType, exit_reason: exitReason,
-        exit_date: new Date().toISOString(), current_outlet_name: null, current_attendance_id: null, is_checked_in: false
+        exit_date: new Date().toISOString(), current_outlet_name: null, is_checked_in: false // Removed current_attendance_id
       }).eq('id', selectedEmployee.id);
       await fetchData(); setIsExitModalOpen(false);
     } catch (err: any) { alert(err.message); } finally { setIsProcessingExit(false); }
@@ -256,8 +283,8 @@ export default function EmployeesPage() {
         await supabase.from('employees').update({
             status: 'long_leave',
             is_checked_in: false,
-            current_outlet_name: null,
-            current_attendance_id: null
+            current_outlet_name: null
+            // Removed current_attendance_id
         }).eq('id', selectedEmployee.id);
         await fetchData();
         setIsLongLeaveModalOpen(false);
@@ -284,8 +311,8 @@ export default function EmployeesPage() {
           exit_reason: 'Deleted by Admin',
           exit_date: new Date().toISOString(),
           is_checked_in: false, 
-          current_attendance_id: null, 
           current_outlet_name: null 
+          // Removed current_attendance_id
         }).eq('id', selectedEmployee.id);
         
         await fetchData(); setSelectedEmployee(null); setConfirmDeleteOpen(false);
