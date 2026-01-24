@@ -1,3 +1,4 @@
+// src/app/api/client-lookup/route.ts
 import { supabase } from '@/lib/supabase';
 
 export async function GET(request: Request) {
@@ -30,7 +31,8 @@ export async function GET(request: Request) {
       .eq('mobile', mobile)
       .eq('status', 'active')
       .gt('remaining_hours', 0)
-      .order('created_at', { ascending: false }) // latest active package
+      // ✅ FIX: Prioritize OLDEST active package first (FIFO)
+      .order('created_at', { ascending: true }) 
       .limit(1)
       .maybeSingle();
 

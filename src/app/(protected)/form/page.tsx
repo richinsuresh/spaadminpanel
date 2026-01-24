@@ -142,6 +142,8 @@ export default function ClientForm() {
           const data: ClientInfo | null = await res.json();
           setClientInfo(data);
           if (data) {
+            // Default: If active, select "isPackageCustomer". 
+            // The user can now override this by checking "tookPackage".
             setFormData(prev => ({ ...prev, name: data.name, isPackageCustomer: data.status === 'active' }));
           } else {
             setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
@@ -166,7 +168,10 @@ export default function ClientForm() {
         ...prev,
         [name]: type === 'checkbox' ? checked : (type === 'number' ? (value === '' ? 0 : Number(value)) : value)
       };
+      // Mutual exclusivity logic:
+      // If I check "isPackageCustomer" (Redeem), uncheck "tookPackage" (New Sale)
       if (name === 'isPackageCustomer' && checked) updated.tookPackage = false;
+      // If I check "tookPackage" (New Sale), uncheck "isPackageCustomer" (Redeem)
       if (name === 'tookPackage' && checked) updated.isPackageCustomer = false;
       return updated;
     });
@@ -764,12 +769,14 @@ export default function ClientForm() {
                 checked={formData.tookPackage}
                 onChange={handleChange}
                 className="sr-only"
-                disabled={!!clientInfo && clientInfo.status === 'active'}
+                // REMOVED: disabled={!!clientInfo && clientInfo.status === 'active'}
               />
-              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
+              {/* REMOVED opacity-50 cursor-not-allowed classes */}
+              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
-            <div className={`ml-3 text-gray-700 text-sm ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50' : ''}`}>
+            {/* REMOVED opacity-50 class for text */}
+            <div className="ml-3 text-gray-700 text-sm">
               Taking a new package today
             </div>
           </label>

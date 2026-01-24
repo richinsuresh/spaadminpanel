@@ -30,8 +30,8 @@ type ClientInfo = {
   name: string;
   mobile: string;
   remainingHours: number;
-  expiryDate: string | null; // Added expiry date
-  packageId: string | null; // ID of the currently active package
+  expiryDate: string | null;
+  packageId: string | null;
   totalPackageHours: number;
   usedPackageHours: number;
 };
@@ -43,7 +43,6 @@ type AdditionalCustomer = {
   treatment: string;
   sessionHours: number;
   sessionMinutes: number;
-  // Removed therapist and room fields
 };
 
 // New Type for Visit History (RETAINED)
@@ -53,7 +52,7 @@ type VisitHistory = {
   sessionHours: number;
   treatment: string;
   outlet: string;
-  therapist_name: string; // Combined therapist name field
+  therapist_name: string; 
   check_in_time: string;
   isPackageUsed: boolean;
 };
@@ -275,6 +274,8 @@ export default function ClientCheckinForm() {
 
   const [outlet, setOutlet] = useState<Outlet | null>(null);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
+  const [staffList, setStaffList] = useState<{ id: string; name: string }[]>([]);
+
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -287,11 +288,16 @@ export default function ClientCheckinForm() {
     sessionHours: 0,
     sessionMinutes: 0,
     paymentMethod: 'cash',
-    
+    // New Package Fields
+    packageAmount: 0,
+    totalPackageHours: 0,
+    packageSoldBy: '',
+    packageValidity: '3 months',
   });
   
-  // --- State for Package Redemption ---
+  // --- States for Package Actions ---
   const [usePackageCredit, setUsePackageCredit] = useState(false);
+  const [tookPackage, setTookPackage] = useState(false);
 
   // --- NEW: State for additional customers ---
   const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
@@ -303,7 +309,7 @@ export default function ClientCheckinForm() {
   // --- NEW: Modal State ---
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
-  // --- Data Fetching Functions (SIMPLIFIED) ---
+  // --- Data Fetching Functions ---
   const fetchTreatments = useCallback(async () => {
     if (!outletId) return;
     try {
@@ -319,12 +325,23 @@ export default function ClientCheckinForm() {
     }
   }, [outletId]);
 
-  // --- Initial Load & Outlet Validation (SIMPLIFIED) ---
-  useEffect(() => {
-    if (!outletId) {
-      // If no outletId yet, do nothing (wait for hydration)
-      return;
+  const fetchStaff = useCallback(async () => {
+    try {
+      // Fetch active employees (usually restricted to current outlet context via RLS, or global list)
+      const { data } = await supabase
+        .from('employees')
+        .select('id, name')
+        .eq('is_active', true)
+        .order('name');
+      setStaffList(data || []);
+    } catch (e) {
+      console.error('Failed to fetch staff', e);
     }
+  }, []);
+
+  // --- Initial Load & Outlet Validation ---
+  useEffect(() => {
+    if (!outletId) return;
     
     setLoading(true);
     setError('');
@@ -336,20 +353,19 @@ export default function ClientCheckinForm() {
     }
     setOutlet(outletInfo);
 
-    fetchTreatments()
+    Promise.all([fetchTreatments(), fetchStaff()])
       .then(() => {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [outletId, fetchTreatments]);
+  }, [outletId, fetchTreatments, fetchStaff]);
 
-  // --- Realtime listeners (SIMPLIFIED) ---
+  // --- Realtime listeners ---
   useEffect(() => {
     if (!outletId) return;
 
     const channel = supabase
       .channel(`client-form-realtime-${outletId}`)
-      
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'treatments', filter: `outlet_id=eq.${outletId}` },
@@ -368,7 +384,7 @@ export default function ClientCheckinForm() {
     };
   }, [fetchTreatments, outletId]);
 
-  // --- Client lookup (Unchanged logic) ---
+  // --- Client lookup ---
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
@@ -424,6 +440,7 @@ export default function ClientCheckinForm() {
         }));
         if (finalClientInfo.status === 'active') {
             setUsePackageCredit(true);
+            setTookPackage(false);
         }
       } else {
         setFormData((prev) => ({
@@ -431,6 +448,7 @@ export default function ClientCheckinForm() {
           name: '',
         }));
         setUsePackageCredit(false);
+        setTookPackage(false);
       }
     } catch (e) {
       console.error('Client lookup error:', e);
@@ -450,7 +468,8 @@ export default function ClientCheckinForm() {
 
   useEffect(() => {
     setClientInfo(null);
-    setUsePackageCredit(false); // Reset package usage on number change
+    setUsePackageCredit(false); 
+    setTookPackage(false);
     if (mobile.length < 10) {
       setFormData((prev) => ({ ...prev, name: '' }));
     }
@@ -485,16 +504,24 @@ export default function ClientCheckinForm() {
       } else {
         updatedValue = value;
       }
-      const updated: any = { ...prev, [name]: updatedValue };
-      return updated;
+      return { ...prev, [name]: updatedValue };
     });
   };
   
-  // Handle checkbox change specifically
+  // Handle toggles specifically to ensure mutual exclusivity
   const handlePackageCreditToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-      setUsePackageCredit(e.target.checked);
+      const isChecked = e.target.checked;
+      setUsePackageCredit(isChecked);
+      if (isChecked) setTookPackage(false);
       setError('');
   }
+
+  const handleTookPackageToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const isChecked = e.target.checked;
+    setTookPackage(isChecked);
+    if (isChecked) setUsePackageCredit(false);
+    setError('');
+  };
 
   // --- NEW: Group Customer Helpers ---
   const addAdditionalCustomer = () => {
@@ -523,8 +550,6 @@ export default function ClientCheckinForm() {
       prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
     );
   };
-  // --- END Group Customer Helpers ---
-
 
   const getSessionDuration = useCallback(() => {
     const hours = Number(formData.sessionHours) || 0;
@@ -535,11 +560,16 @@ export default function ClientCheckinForm() {
   const getFinalAmountInPaise = useCallback(() => {
     if (usePackageCredit) return 0;
     
+    // If buying a new package, the total amount is the package amount
+    if (tookPackage) {
+      return (Number(formData.packageAmount) || 0) * 100;
+    }
+
     return (Number(formData.amountPaid) || 0) * 100;
-  }, [usePackageCredit, formData.amountPaid]);
+  }, [usePackageCredit, tookPackage, formData.packageAmount, formData.amountPaid]);
 
 
-  // --- UPDATED handleSubmit (RE-INCLUDES GROUP) ---
+  // --- UPDATED handleSubmit ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -581,15 +611,34 @@ export default function ClientCheckinForm() {
         return;
     }
 
+    // Validation: Package Redemption
     if (isPackageRedemption) {
-        // Additional check for package hours
         if (sessionHours > (clientInfo?.remainingHours || 0)) {
             setError(`Main customer duration (${formatDuration(sessionHours)}) exceeds remaining package hours.`);
             setLoading(false);
             return;
         }
-    } else {
-        // Paid session validation
+    } 
+    // Validation: New Package Purchase
+    else if (tookPackage) {
+        if (!formData.packageAmount || formData.packageAmount <= 0) {
+          setError('Please enter a valid Package Amount.');
+          setLoading(false);
+          return;
+        }
+        if (!formData.totalPackageHours || formData.totalPackageHours <= 0) {
+          setError('Please enter valid Total Package Hours.');
+          setLoading(false);
+          return;
+        }
+        if (!formData.packageSoldBy) {
+          setError('Please select who sold the package.');
+          setLoading(false);
+          return;
+        }
+    }
+    // Validation: Standard Paid Session
+    else {
         const MIN_AMOUNT_RUPEES = 1500;
         if (amountInRupees < MIN_AMOUNT_RUPEES) {
             setError(
@@ -600,7 +649,7 @@ export default function ClientCheckinForm() {
         }
     }
 
-    // --- Validation: Group Customers (SIMPLIFIED) ---
+    // --- Validation: Group Customers ---
     for (let i = 0; i < additionalCustomers.length; i++) {
       const c = additionalCustomers[i];
       const duration = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
@@ -613,7 +662,6 @@ export default function ClientCheckinForm() {
         return;
       }
     }
-
 
     const treatmentName = formData.treatment;
 
@@ -629,7 +677,7 @@ export default function ClientCheckinForm() {
       const mainInTimeStr = formatTimeHM(checkInDate);
       const mainOutTimeStr = formatTimeHM(mainOutDate);
 
-      // --- Group Customers Payload Building (Simplified for client form) ---
+      // --- Group Customers Payload Building ---
       const groupCustomersPayload = additionalCustomers.map((c) => {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         const outDate = new Date(checkInDate.getTime() + dur * 60 * 60 * 1000);
@@ -637,7 +685,6 @@ export default function ClientCheckinForm() {
           name: c.name.trim(),
           treatment: c.treatment,
           sessionHours: dur,
-          // Placeholder values for staff fields the staff will fill in later
           therapist_name: 'CLIENT_FORM_PENDING', 
           room: 'CLIENT_FORM_PENDING',
           in_time: mainInTimeStr,
@@ -645,30 +692,33 @@ export default function ClientCheckinForm() {
         };
       });
 
+      // Auto-fill treatment for package purchases if empty
+      const finalTreatment = tookPackage && !treatmentName ? "Package Purchase" : treatmentName;
+
      // --- FINAL PAYLOAD ---
       const payload: any = { 
         client_uuid: clientUuid,
         name: String(formData.name || '').trim(),
         mobile: mobile,
         date: new Date().toISOString().split('T')[0],
-        treatment: treatmentName,
+        treatment: finalTreatment,
 
-        // Package Redemption Fields
-        tookPackage: false, 
-        packageAmount: 0,
-        totalPackageHours: 0,
-        packageSoldBy: null,
-        packageValidity: null,
+        // Package Purchase Fields
+        tookPackage: tookPackage, 
+        packageAmount: tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+        totalPackageHours: tookPackage ? Number(formData.totalPackageHours) : 0,
+        packageSoldBy: tookPackage ? formData.packageSoldBy : null,
+        packageValidity: tookPackage ? formData.packageValidity : null,
 
-        // Amount and Package Use
-        // NOTE: Even if redeeming, we send 0 here for paid amount
-        amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
+        // Amount Paid Handling:
+        // If redeeming OR buying package -> session amount is 0 (or included).
+        // If buying package, the "Payment" is for the package (handled via finalAmountInPaise).
+        amountPaid: (isPackageRedemption || tookPackage) ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
         
-        // --- NEW LOGIC: This signals it's a REQUEST, not an immediate deduction ---
         isPackageCustomer: isPackageRedemption,
         packageId: isPackageRedemption ? clientInfo?.packageId : null,
-        is_redemption_request: isPackageRedemption, // <--- ADD THIS LINE
+        is_redemption_request: isPackageRedemption,
 
         // Outlet/Payment Info
         outlet: outlet.name,
@@ -685,7 +735,6 @@ export default function ClientCheckinForm() {
         in_time: mainInTimeStr,
         out_time: mainOutTimeStr,
         
-        // --- Group Data ---
         group_customers: groupCustomersPayload.length > 0 ? groupCustomersPayload : null,
       };
 
@@ -701,7 +750,10 @@ export default function ClientCheckinForm() {
       }
 
       // Handle Redirection
-      if (paymentMethod === 'upi' && !isPackageRedemption) {
+      // If payment is required (Paid Session OR New Package) AND Method is UPI
+      const paymentRequired = !isPackageRedemption;
+      
+      if (paymentMethod === 'upi' && paymentRequired) {
         setSuccess('Registration complete. Redirecting to payment QR...');
         setTimeout(() => {
           router.push(
@@ -725,13 +777,14 @@ export default function ClientCheckinForm() {
               name: String(formData.name || '').trim(),
               mobile,
               date: new Date().toISOString().split('T')[0],
-              treatment: formData.treatment,
-              tookPackage: false,
-              packageAmount: 0,
-              totalPackageHours: 0,
-              packageSoldBy: null,
-              packageValidity: null,
-              amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
+              treatment: formData.treatment || (tookPackage ? 'Package Purchase' : ''),
+              tookPackage: tookPackage,
+              packageAmount: tookPackage ? (Number(formData.packageAmount) || 0) * 100 : 0,
+              totalPackageHours: tookPackage ? Number(formData.totalPackageHours) : 0,
+              packageSoldBy: tookPackage ? formData.packageSoldBy : null,
+              packageValidity: tookPackage ? formData.packageValidity : null,
+              
+              amountPaid: (isPackageRedemption || tookPackage) ? 0 : finalAmountInPaise,
               sessionHours: getSessionDuration(),
               isPackageCustomer: isPackageRedemption,
               packageId: isPackageRedemption ? clientInfo?.packageId : null,
@@ -747,7 +800,6 @@ export default function ClientCheckinForm() {
               created_local_at: new Date().toISOString(),
               status: 'pending',
               sync_error: String(err?.message || err),
-              // Group customers cannot be saved in the simple local payload type. Staff must fix.
             };
 
             await offlineDb.pending_clients.add(localPayload);
@@ -765,11 +817,16 @@ export default function ClientCheckinForm() {
               sessionHours: 0,
               sessionMinutes: 0,
               paymentMethod: 'cash',
+              packageAmount: 0,
+              totalPackageHours: 0,
+              packageSoldBy: '',
+              packageValidity: '3 months',
             });
             setMobile('');
             setClientInfo(null);
             setUsePackageCredit(false);
-            setAdditionalCustomers([]); // Clear group members
+            setTookPackage(false);
+            setAdditionalCustomers([]);
           } catch (dexErr) {
             console.error('Failed to save offline:', dexErr);
             setError(err?.message || 'An unknown error occurred and local save failed.');
@@ -779,7 +836,7 @@ export default function ClientCheckinForm() {
   };
 
   const isSubmitDisabled = loading;
-  const isPaidSession = !usePackageCredit;
+  const isPaidSession = !usePackageCredit && !tookPackage;
   const isPackageActive = clientInfo?.status === 'active';
 
   const packageHours:
@@ -916,21 +973,100 @@ export default function ClientCheckinForm() {
               </div>
 
             {/* Package Redemption Checkbox */}
-              {isPackageActive && (
-                 <label className="inline-flex items-center gap-2 mt-2 cursor-pointer">
+            <div className="flex flex-col gap-2 mt-2">
+                {isPackageActive && !tookPackage && (
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input
+                        type="checkbox"
+                        checked={usePackageCredit}
+                        onChange={handlePackageCreditToggle}
+                        className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
+                        disabled={loading}
+                        />
+                        <span className="text-sm font-medium text-green-400">
+                        Request Package Redemption
+                        </span>
+                    </label>
+                )}
+                
+                {/* New Package Purchase Checkbox */}
+                 <label className="inline-flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={usePackageCredit}
-                      onChange={handlePackageCreditToggle}
-                      className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
+                      checked={tookPackage}
+                      onChange={handleTookPackageToggle}
+                      className="h-4 w-4 text-purple-500 bg-gray-700 border-gray-600 rounded focus:ring-purple-500"
                       disabled={loading}
                     />
-                    {/* CHANGED TEXT HERE */}
-                    <span className="text-sm font-medium text-green-400">
-                      Request Package Redemption
+                    <span className="text-sm font-medium text-purple-400">
+                      Purchase New Advance Package
                     </span>
                   </label>
-              )}
+            </div>
+
+            {/* NEW: Package Purchase Form */}
+            {tookPackage && (
+                <div className="p-3 bg-purple-900/20 border border-purple-700/50 rounded-lg space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Package Amount (₹)</label>
+                            <input
+                                name="packageAmount"
+                                type="number"
+                                min="0"
+                                value={formData.packageAmount || ''}
+                                onChange={handleChange}
+                                placeholder="Amount"
+                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Total Hours</label>
+                            <input
+                                name="totalPackageHours"
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={formData.totalPackageHours || ''}
+                                onChange={handleChange}
+                                placeholder="Hours"
+                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                            />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                         <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Sold By</label>
+                            <select
+                                name="packageSoldBy"
+                                value={formData.packageSoldBy}
+                                onChange={handleChange}
+                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                            >
+                                <option value="">-- Select --</option>
+                                {staffList.map(s => (
+                                    <option key={s.id} value={s.name}>{s.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                         <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1">Validity</label>
+                            <select
+                                name="packageValidity"
+                                value={formData.packageValidity}
+                                onChange={handleChange}
+                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                            >
+                                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                                    <option key={m} value={`${m} month${m > 1 ? 's' : ''}`}>
+                                    {m} Month{m > 1 ? 's' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            )}
 
 
               {/* Progress Bar */}
@@ -964,6 +1100,83 @@ export default function ClientCheckinForm() {
           {clientInfo && clientInfo.status === 'not_found' && mobile.length === 10 && (
             <div className="p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-sm text-center text-yellow-300">
               No active package found.
+              
+              {/* Also allow new package here */}
+               <label className="inline-flex items-center gap-2 mt-2 cursor-pointer justify-center w-full">
+                    <input
+                      type="checkbox"
+                      checked={tookPackage}
+                      onChange={handleTookPackageToggle}
+                      className="h-4 w-4 text-purple-500 bg-gray-700 border-gray-600 rounded focus:ring-purple-500"
+                      disabled={loading}
+                    />
+                    <span className="text-sm font-medium text-purple-400">
+                      Purchase New Advance Package
+                    </span>
+                  </label>
+                   {/* Package Purchase Form Copy for New Clients */}
+                   {tookPackage && (
+                    <div className="mt-2 p-3 bg-purple-900/20 border border-purple-700/50 rounded-lg space-y-3 text-left">
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-gray-400 mb-1">Package Amount (₹)</label>
+                                <input
+                                    name="packageAmount"
+                                    type="number"
+                                    min="0"
+                                    value={formData.packageAmount || ''}
+                                    onChange={handleChange}
+                                    placeholder="Amount"
+                                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-400 mb-1">Total Hours</label>
+                                <input
+                                    name="totalPackageHours"
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    value={formData.totalPackageHours || ''}
+                                    onChange={handleChange}
+                                    placeholder="Hours"
+                                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                                />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                             <div>
+                                <label className="block text-xs font-medium text-gray-400 mb-1">Sold By</label>
+                                <select
+                                    name="packageSoldBy"
+                                    value={formData.packageSoldBy}
+                                    onChange={handleChange}
+                                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                                >
+                                    <option value="">-- Select --</option>
+                                    {staffList.map(s => (
+                                        <option key={s.id} value={s.name}>{s.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                             <div>
+                                <label className="block text-xs font-medium text-gray-400 mb-1">Validity</label>
+                                <select
+                                    name="packageValidity"
+                                    value={formData.packageValidity}
+                                    onChange={handleChange}
+                                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-purple-500"
+                                >
+                                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                                        <option key={m} value={`${m} month${m > 1 ? 's' : ''}`}>
+                                        {m} Month{m > 1 ? 's' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
           )}
           {/* --- End Package Info, Progress Bar & History Button --- */}
@@ -974,14 +1187,14 @@ export default function ClientCheckinForm() {
               htmlFor="treatment"
               className="block text-sm font-medium text-gray-300 mb-1"
             >
-              Treatment *
+              Treatment {tookPackage ? '' : '*'}
             </label>
             <select
               id="treatment"
               name="treatment"
               value={formData.treatment}
               onChange={handleChange}
-              required
+              required={!tookPackage}
               className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
               disabled={loading || treatments.length === 0}
             >
@@ -1033,6 +1246,7 @@ export default function ClientCheckinForm() {
           {/* --- End Session Duration --- */}
 
           {/* --- GROUP CUSTOMERS (RE-ADDED) --- */}
+          {!tookPackage && (
           <div className="border border-gray-700 rounded-lg p-4 space-y-3 bg-gray-900/60">
             <div className="flex items-center justify-between">
               <div>
@@ -1161,6 +1375,7 @@ export default function ClientCheckinForm() {
               </div>
             )}
           </div>
+          )}
           {/* --- END GROUP CUSTOMERS --- */}
 
 
@@ -1212,6 +1427,30 @@ export default function ClientCheckinForm() {
             </div>
           )}
           {/* --- End Amount Paid & Payment Method --- */}
+          
+          {/* New Package Payment Method Selection (if required differently, currently using shared) */}
+          {tookPackage && (
+             <div>
+                <label
+                  htmlFor="paymentMethod"
+                  className="block text-sm font-medium text-gray-300 mb-1"
+                >
+                  Payment Option for Package *
+                </label>
+                <select
+                  name="paymentMethod"
+                  value={formData.paymentMethod}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                  disabled={loading}
+                  required
+                >
+                  <option value="cash">Pay with Cash</option>
+                  <option value="card">Pay with Card</option>
+                  <option value="upi">Pay with UPI</option>
+                </select>
+              </div>
+          )}
 
           <button
             type="submit"
@@ -1222,6 +1461,8 @@ export default function ClientCheckinForm() {
               ? 'Processing...'
               : usePackageCredit
               ? 'Redeem Session'
+              : tookPackage
+              ? 'Purchase Package'
               : formData.paymentMethod === 'upi'
               ? 'Proceed to UPI Payment'
               : 'Register Group & Proceed'}
