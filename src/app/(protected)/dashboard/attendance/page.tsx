@@ -19,8 +19,9 @@ import {
   Edit, 
   Save,
   Clock,
-  Plane,      // For Long Leave
-  Hourglass   // For Half Day
+  Plane,      
+  Hourglass,
+  RefreshCw 
 } from 'lucide-react';
 
 // --- Types ---
@@ -47,6 +48,7 @@ type AttendanceRecord = {
   status: string; 
   early_checkout_requested: boolean;
   early_checkout_request_time: string | null;
+  created_at?: string; // Track when it was marked
 };
 
 const IST_OFFSET_MINUTES = 5.5 * 60; 
@@ -133,7 +135,7 @@ export default function AttendancePage() {
   const [newOutletId, setNewOutletId] = useState('');
   const [markingId, setMarkingId] = useState<string | null>(null); 
 
-  // FIX 1: Fetch all employees (removed is_active filter) to support historical views
+  // Fetch Employees
   const fetchEmployees = useCallback(async () => {
     const { data } = await supabase
       .from('employees')
@@ -143,7 +145,6 @@ export default function AttendancePage() {
   }, []);
 
   const fetchAttendance = useCallback(async () => {
-    setLoading(true);
     try {
       let query = supabase.from('attendance').select(`*`).eq('date', dateFilter);
       const { data, error } = await query;
@@ -155,6 +156,34 @@ export default function AttendancePage() {
       setLoading(false);
     }
   }, [dateFilter]);
+
+  // --- REALTIME SUBSCRIPTION (Admin Only) ---
+  useEffect(() => {
+    setLoading(true);
+    fetchAttendance();
+
+    // Subscribe to changes
+    const channel = supabase
+      .channel('realtime-attendance')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'attendance',
+          filter: `date=eq.${dateFilter}` // Only listen for changes on the selected date
+        },
+        (payload) => {
+          console.log('Real-time update received:', payload);
+          fetchAttendance(); // Refresh data immediately
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [dateFilter, fetchAttendance]);
 
   const fetchMonthlyOffs = useCallback(async () => {
       const [year, month] = dateFilter.split('-').map(Number);
@@ -182,7 +211,6 @@ export default function AttendancePage() {
       }
   }, [dateFilter]);
 
-  // Updated to include 'Half Day' count
   const fetchEmployeeStats = useCallback(async (empId: string, monthStr: string) => {
       setIsStatsLoading(true);
       try {
@@ -255,7 +283,6 @@ export default function AttendancePage() {
         if (error) throw error;
         
         if (status === 'Present') {
-             // If marked present, ensure status is reset to active if they were on leave
              await supabase.from('employees').update({ 
                  is_checked_in: true, 
                  current_outlet_name: targetOutlet?.name || 'Unknown',
@@ -263,7 +290,8 @@ export default function AttendancePage() {
              }).eq('id', emp.id);
         }
         
-        await fetchAttendance();
+        // No manual fetch needed thanks to Realtime, but explicit fetch is safer
+        fetchAttendance();
         fetchEmployees(); 
         fetchMonthlyOffs(); 
     } catch (err: any) {
@@ -318,8 +346,7 @@ export default function AttendancePage() {
           setIsEditModalOpen(false);
           setRecordToEdit(null);
           setAdminPassword('');
-          fetchAttendance();
-
+          
       } catch (err: any) {
           setErrorMsg('Failed to update: ' + err.message);
       } finally {
@@ -329,9 +356,8 @@ export default function AttendancePage() {
 
   useEffect(() => {
     fetchEmployees();
-    fetchAttendance();
     fetchMonthlyOffs(); 
-  }, [fetchEmployees, fetchAttendance, fetchMonthlyOffs]);
+  }, [fetchEmployees, fetchMonthlyOffs]);
 
   useEffect(() => {
       if (isSummaryModalOpen && summaryEmployee) {
@@ -367,7 +393,6 @@ export default function AttendancePage() {
         setIsForceLogoutModalOpen(false);
         setRecordToLogout(null);
         setAdminPassword('');
-        fetchAttendance();
     } catch (err: any) {
         setErrorMsg(err.message || 'Failed to logout employee');
     } finally {
@@ -392,7 +417,6 @@ export default function AttendancePage() {
       setIsSingleDeleteModalOpen(false);
       setRecordToDelete(null);
       setAdminPassword('');
-      fetchAttendance(); 
     } catch (err: any) {
       alert(err.message || 'Failed to delete record.');
     } finally {
@@ -410,7 +434,6 @@ export default function AttendancePage() {
           setIsOutletChangeModalOpen(false);
           setRecordToTransfer(null);
           setAdminPassword('');
-          fetchAttendance();
       } finally { setIsProcessing(false); }
   };
 
@@ -432,7 +455,6 @@ export default function AttendancePage() {
         }
         setIsBulkLogoutModalOpen(false);
         setAdminPassword('');
-        fetchAttendance();
     } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
 
@@ -453,11 +475,10 @@ export default function AttendancePage() {
         }
         setIsBulkDeleteModalOpen(false);
         setAdminPassword('');
-        fetchAttendance();
     } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
 
-  // FIX 2: Correct historical filtering
+  // --- FILTERING LOGIC ---
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
@@ -465,19 +486,34 @@ export default function AttendancePage() {
     const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
     if (!nameMatch) return false;
     
-    // Compare dates as strings (YYYY-MM-DD) to ensure accurate day comparison
+    // Compare dates as strings (YYYY-MM-DD)
     const filterDateStr = dateFilter; 
     
-    // Hide if employee joined AFTER the selected filter date
+    // 1. Hide if employee joined AFTER the selected filter date
     if (item.employee.join_date) {
         const joinDateStr = item.employee.join_date.split('T')[0];
         if (filterDateStr < joinDateStr) return false;
     }
     
-    // Hide if employee left BEFORE the selected filter date
+    // 2. Hide if employee left BEFORE the selected filter date
     if (item.employee.exit_date) {
         const exitDateStr = item.employee.exit_date.split('T')[0];
         if (filterDateStr > exitDateStr) return false;
+    }
+
+    // 3. STRICT ACTIVE CHECK (The Fix)
+    // If we are looking at TODAY (or future) and the employee is NOT active,
+    // they MUST be hidden (unless they have a record). 
+    // This overrides situations where exit_date might be missing or set incorrectly.
+    const todayStr = getISTDateString();
+    if (filterDateStr >= todayStr && !item.employee.is_active && !item.record) {
+        return false;
+    }
+
+    // 4. Ghost Check for Past Dates
+    // If inactive AND no exit_date AND no record, hide them.
+    if (!item.employee.is_active && !item.employee.exit_date && !item.record) {
+         return false;
     }
 
     if (outletFilter === 'all') return true;
@@ -492,7 +528,13 @@ export default function AttendancePage() {
       {/* 1. HEADER */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Attendance Logs</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Attendance Logs</h1>
+            <div className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border border-green-200">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse"></div>
+                Live
+            </div>
+          </div>
           <p className="text-sm text-slate-500 font-medium">Manage and monitor branch performance.</p>
         </div>
         
@@ -568,6 +610,17 @@ export default function AttendancePage() {
                 filteredData.map(({ employee, record }) => {
                   const isWorking = record?.check_in_time && !record?.check_out_time;
                   
+                  // Timestamp Logic
+                  let markedAtLabel = null;
+                  if (record?.created_at) {
+                      const time = new Date(record.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                      markedAtLabel = (
+                          <div className="text-[9px] text-slate-400 font-medium mt-1 flex items-center gap-1">
+                              <RefreshCw size={8} /> Marked: {time}
+                          </div>
+                      );
+                  }
+
                   let noRecordStatus = null;
                   if (!record) {
                       const offsUsed = monthlyOffCounts[employee.id] || 0;
@@ -643,7 +696,6 @@ export default function AttendancePage() {
                                          Mark Present
                                      </button>
                                      
-                                     {/* If not on long leave, show absent/off/half-day options */}
                                      {employee.status !== 'long_leave' && (
                                          <>
                                              <button 
@@ -672,22 +724,27 @@ export default function AttendancePage() {
                                   </div>
                                 )}
                            </div>
-                         ) : record.status === 'Absent' ? (
-                           <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
-                               <XCircle size={12} /> Absent
-                           </span>
-                         ) : record.status === 'Weekly Off' ? (
-                           <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
-                               <CalendarOff size={12} /> Weekly Off
-                           </span>
-                         ) : record.status === 'Half Day' ? (
-                           <span className="px-2 py-1 rounded bg-amber-50 text-amber-700 text-[10px] font-bold uppercase border border-amber-200 flex items-center gap-1 w-fit">
-                               <Hourglass size={12} /> Half Day
-                           </span>
-                         ) : record.check_out_time ? (
-                           <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
                          ) : (
-                           <span className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase border border-indigo-100 animate-pulse">On Duty</span>
+                           <div>
+                               {record.status === 'Absent' ? (
+                                   <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
+                                       <XCircle size={12} /> Absent
+                                   </span>
+                               ) : record.status === 'Weekly Off' ? (
+                                   <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
+                                       <CalendarOff size={12} /> Weekly Off
+                                   </span>
+                               ) : record.status === 'Half Day' ? (
+                                   <span className="px-2 py-1 rounded bg-amber-50 text-amber-700 text-[10px] font-bold uppercase border border-amber-200 flex items-center gap-1 w-fit">
+                                       <Hourglass size={12} /> Half Day
+                                   </span>
+                               ) : record.check_out_time ? (
+                                   <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
+                               ) : (
+                                   <span className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase border border-indigo-100 animate-pulse">On Duty</span>
+                               )}
+                               {markedAtLabel}
+                           </div>
                          )}
                       </td>
                       <td className="px-6 py-4 text-right">
@@ -913,7 +970,6 @@ export default function AttendancePage() {
       )}
 
       {/* --- BULK LOGOUT / DELETE / FORCE LOGOUT / TRANSFER MODALS --- */}
-      {/* These modals remain largely the same, included below for completeness */}
       {isForceLogoutModalOpen && recordToLogout && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">

@@ -1,4 +1,3 @@
-// src/app/outlet/dashboard/client-form/[outletId]/page.tsx
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -571,10 +570,18 @@ export default function ClientCheckinForm() {
         return;
     }
 
-    // Validation: Package Redemption
+    // Calculate total hours for the entire group (Main + Guests)
+    let totalGroupHours = sessionHours;
+    for (const c of additionalCustomers) {
+        const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+        totalGroupHours += dur;
+    }
+
+    // VALIDATION: Package Redemption
     if (isPackageRedemption) {
-        if (sessionHours > (clientInfo?.remainingHours || 0)) {
-            setError(`Main customer duration (${formatDuration(sessionHours)}) exceeds remaining package hours.`);
+        if (totalGroupHours > (clientInfo?.remainingHours || 0)) {
+            // Updated validation to check total hours against remaining hours
+            setError(`Insufficient package balance. Total needed: ${formatDuration(totalGroupHours)}, Remaining: ${formatDuration(clientInfo?.remainingHours || 0)}.`);
             setLoading(false);
             return;
         }

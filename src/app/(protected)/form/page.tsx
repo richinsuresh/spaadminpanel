@@ -142,8 +142,6 @@ export default function ClientForm() {
           const data: ClientInfo | null = await res.json();
           setClientInfo(data);
           if (data) {
-            // Default: If active, select "isPackageCustomer". 
-            // The user can now override this by checking "tookPackage".
             setFormData(prev => ({ ...prev, name: data.name, isPackageCustomer: data.status === 'active' }));
           } else {
             setFormData(prev => ({ ...prev, name: '', isPackageCustomer: false, tookPackage: false }));
@@ -168,10 +166,7 @@ export default function ClientForm() {
         ...prev,
         [name]: type === 'checkbox' ? checked : (type === 'number' ? (value === '' ? 0 : Number(value)) : value)
       };
-      // Mutual exclusivity logic:
-      // If I check "isPackageCustomer" (Redeem), uncheck "tookPackage" (New Sale)
       if (name === 'isPackageCustomer' && checked) updated.tookPackage = false;
-      // If I check "tookPackage" (New Sale), uncheck "isPackageCustomer" (Redeem)
       if (name === 'tookPackage' && checked) updated.isPackageCustomer = false;
       return updated;
     });
@@ -227,7 +222,22 @@ export default function ClientForm() {
       return;
     }
     
-    // Therapist required only if there is a session duration OR is package redemption
+    // Calculate total hours for the entire group
+    let totalGroupHours = sessionHours;
+    for (const c of additionalCustomers) {
+        const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
+        totalGroupHours += dur;
+    }
+
+    // VALIDATION: Check if package has enough hours for everyone
+    if (formData.isPackageCustomer && clientInfo) {
+        if (totalGroupHours > clientInfo.remainingHours) {
+            setInputError(`Insufficient package hours. Total needed: ${totalGroupHours.toFixed(1)} hrs, Remaining: ${clientInfo.remainingHours.toFixed(1)} hrs.`);
+            setIsSubmitting(false);
+            return;
+        }
+    }
+    
     if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
       setInputError("Please select at least one Therapist for the Main Customer.");
       setIsSubmitting(false);
@@ -284,7 +294,6 @@ export default function ClientForm() {
         combinedTherapistName = `${formData.therapistName} & ${formData.therapistName2}`;
     }
 
-    // --- Time Calculation Logic (Calculated from Form Inputs) ---
     const checkInDateTime = new Date(`${formData.date}T${formData.checkInTime}`);
     
     if (isNaN(checkInDateTime.getTime())) {
@@ -295,12 +304,10 @@ export default function ClientForm() {
 
     const formatTimeHM = (date: Date) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
-    // Main Customer Times
     const mainCheckInStr = formData.checkInTime;
     const mainOutTime = new Date(checkInDateTime.getTime() + sessionHours * 60 * 60 * 1000);
     const mainCheckOutStr = formatTimeHM(mainOutTime);
 
-    // Build Group Payload
     const groupCustomersPayload = additionalCustomers.map(c => {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         const checkOut = new Date(checkInDateTime.getTime() + dur * 60 * 60 * 1000);
@@ -325,7 +332,6 @@ export default function ClientForm() {
         checkInTime = checkInDateTime.toISOString();
       }
       
-      // Auto-fill treatment for package purchases if empty
       const finalTreatment = formData.tookPackage && !formData.treatment ? "Package Purchase" : formData.treatment;
 
       const payload: any = {
@@ -769,14 +775,12 @@ export default function ClientForm() {
                 checked={formData.tookPackage}
                 onChange={handleChange}
                 className="sr-only"
-                // REMOVED: disabled={!!clientInfo && clientInfo.status === 'active'}
+                disabled={!!clientInfo && clientInfo.status === 'active'}
               />
-              {/* REMOVED opacity-50 cursor-not-allowed classes */}
-              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
-            {/* REMOVED opacity-50 class for text */}
-            <div className="ml-3 text-gray-700 text-sm">
+            <div className={`ml-3 text-gray-700 text-sm ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50' : ''}`}>
               Taking a new package today
             </div>
           </label>

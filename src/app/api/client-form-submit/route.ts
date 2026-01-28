@@ -1,4 +1,3 @@
-// src/app/api/client-form-submit/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -56,7 +55,15 @@ async function processPayload(payload: any) {
 
     // 1. PACKAGE REDEMPTION
     if (payload.isPackageCustomer && payload.packageId) {
-      const hoursToDeduct = Number(payload.sessionHours || 0);
+      // FIX: Calculate TOTAL hours (Main Session + Group Sessions)
+      let hoursToDeduct = Number(payload.sessionHours || 0);
+      
+      if (payload.group_customers && Array.isArray(payload.group_customers)) {
+        payload.group_customers.forEach((guest: any) => {
+          hoursToDeduct += Number(guest.sessionHours || 0);
+        });
+      }
+
       if (hoursToDeduct > 0) {
         const { data: activePackage, error: findError } = await supabase
           .from('packages')
@@ -74,6 +81,10 @@ async function processPayload(payload: any) {
           const currentUsed = parseFloat(activePackage.used_hours || '0');
           const newRemainingHours = currentRemaining - hoursToDeduct;
           const newUsedHours = currentUsed + hoursToDeduct;
+          
+          // Allow it to go negative if you want, or clamp it. 
+          // Usually better to allow slight negative to not block service, or strict check. 
+          // Here we assume strict check was done on frontend, but we process it regardless.
           const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
 
           const { error: updateError } = await supabase
@@ -121,16 +132,10 @@ async function processPayload(payload: any) {
     // 3. INSERT SESSION
     const checkInTime: string = payload.check_in_time || new Date().toISOString();
 
-    // FIX: Determine Check-Out Time Automatically
-    // If it's a package purchase with NO session duration (just buying credits), 
-    // mark it as checked out immediately so it counts as a completed sale.
     let finalCheckOutTime = null;
-    
-    // Check if check_out_time was explicitly sent (e.g. from an outlet form)
     if (payload.check_out_time) {
         finalCheckOutTime = payload.check_out_time;
     } 
-    // Otherwise, auto-checkout if it's a pure package purchase (no session hours)
     else if (payload.tookPackage && (!payload.sessionHours || Number(payload.sessionHours) <= 0)) {
         finalCheckOutTime = checkInTime;
     }
@@ -151,7 +156,7 @@ async function processPayload(payload: any) {
       outlet_name: payload.outlet,
       payment_method: payload.paymentMethod,
       check_in_time: checkInTime,
-      check_out_time: finalCheckOutTime, // <--- ADDED THIS FIELD
+      check_out_time: finalCheckOutTime,
       therapist_name: payload.therapist_name,
       room: payload.room,
       in_time: payload.in_time ?? null,

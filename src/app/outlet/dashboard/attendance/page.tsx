@@ -15,7 +15,10 @@ type Employee = {
   id: string;
   name: string;
   role: string;
-  outlet_id?: string; // Added outlet_id to filter staff correctly
+  outlet_id?: string;
+  join_date?: string | null;
+  exit_date?: string | null;
+  is_active?: boolean;
 };
 
 type AttendanceRecord = {
@@ -83,12 +86,12 @@ export default function OutletAttendancePage() {
   }, []);
 
   // 2. Fetch Employees (With outlet_id to filter roster)
+  // FIX: Fetch is_active/join/exit fields to properly filter ex-employees
   const fetchEmployees = useCallback(async () => {
     const { data } = await supabase
       .from('employees')
-      .select('id, name, role, outlet_id')
-      .eq('is_active', true)
-      .order('name');
+      .select('id, name, role, outlet_id, join_date, exit_date, is_active')
+      .order('name'); // Removed .eq('is_active', true) from query to handle date-based filtering locally
     setEmployees(data || []);
   }, []);
 
@@ -149,8 +152,7 @@ export default function OutletAttendancePage() {
     }
   };
 
-  // Combine Data: 
-  // Show employees who belong to THIS outlet OR who have a record at this outlet (e.g. transferred)
+  // Combine Data & FILTER
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
@@ -160,11 +162,33 @@ export default function OutletAttendancePage() {
     if (!nameMatch) return false;
 
     // 2. Must be relevant to this outlet
-    // Show if they are assigned to this outlet OR if they have a record here today
     const belongsToOutlet = item.employee.outlet_id === outletId;
     const hasRecordHere = !!item.record;
+    
+    if (!belongsToOutlet && !hasRecordHere) return false;
 
-    return belongsToOutlet || hasRecordHere;
+    // 3. STRICT EX-EMPLOYEE FILTERING
+    const filterDateStr = dateFilter; 
+    
+    // Hide if joined AFTER selected date
+    if (item.employee.join_date) {
+        const joinDateStr = item.employee.join_date.split('T')[0];
+        if (filterDateStr < joinDateStr) return false;
+    }
+    
+    // Hide if left BEFORE selected date
+    if (item.employee.exit_date) {
+        const exitDateStr = item.employee.exit_date.split('T')[0];
+        if (filterDateStr > exitDateStr) return false;
+    }
+
+    // Hide if inactive AND no specific exit date AND no record for today
+    // (This catches "ghost" employees who are marked inactive but have no exit date)
+    if (!item.employee.is_active && !item.record) {
+         if (!item.employee.exit_date) return false;
+    }
+
+    return true;
   });
 
   return (
