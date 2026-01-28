@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link'; 
-// ADDED: Clock icon import
-import { Menu, X, LogOut, LayoutDashboard, Receipt, Package, UserPlus, Clock } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { Menu, X, LogOut, LayoutDashboard, Receipt, UserPlus, Clock, Wifi } from 'lucide-react';
 
 export default function OutletDashboardLayout({
   children,
@@ -16,6 +16,9 @@ export default function OutletDashboardLayout({
   const [outletName, setOutletName] = useState('Outlet Panel');
   const [outletId, setOutletId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  // Connection State for visual confirmation
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     async function fetchOutletSession() {
@@ -35,6 +38,30 @@ export default function OutletDashboardLayout({
     fetchOutletSession();
   }, []);
 
+  // --- REALTIME PRESENCE ---
+  useEffect(() => {
+    if (!outletId) return;
+
+    const channel = supabase.channel('online-outlets');
+
+    channel
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          setIsConnected(true); // <--- VISUAL CONFIRMATION
+          await channel.track({
+            outlet_id: outletId,
+            outlet_name: outletName,
+            online_at: new Date().toISOString(),
+          });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+      setIsConnected(false);
+    };
+  }, [outletId, outletName]);
+
   const handleLogout = () => {
     document.cookie = 'auth_role=; Max-Age=0; path=/';
     document.cookie = 'outlet_id=; Max-Age=0; path=/';
@@ -45,11 +72,9 @@ export default function OutletDashboardLayout({
     { name: 'New Client', href: '/outlet/dashboard/client-form/[outletId]', icon: <UserPlus size={18} /> },
     { name: 'Sales & Check-out', href: '/outlet/dashboard/sales', icon: <LayoutDashboard size={18} /> },
     { name: 'Expenses', href: '/outlet/dashboard/expenses', icon: <Receipt size={18} /> },
-    // ADDED: Attendance Link
     { name: 'Attendance', href: '/outlet/dashboard/attendance', icon: <Clock size={18} /> },
   ];
   
-  // Helper to resolve the [outletId] placeholder
   const resolveHref = (href: string) => {
     if (href.includes('[outletId]')) {
       return href.replace('[outletId]', outletId || 'pending');
@@ -86,9 +111,16 @@ export default function OutletDashboardLayout({
           ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:fixed md:h-full md:border-r border-gray-700`}
       >
         <div className="p-6 border-b border-gray-700 flex justify-between items-center">
-          <h1 className="text-xl font-bold text-red-600 truncate" title={outletName}>
-            {outletName}
-          </h1>
+          <div>
+              <h1 className="text-xl font-bold text-red-600 truncate" title={outletName}>
+                {outletName}
+              </h1>
+              {/* --- ADDED: Connection Status Indicator --- */}
+              <div className={`text-[10px] font-bold uppercase mt-1 flex items-center gap-1.5 ${isConnected ? 'text-emerald-500' : 'text-gray-500'}`}>
+                  <Wifi size={10} className={isConnected ? 'animate-pulse' : ''} />
+                  {isConnected ? 'System Online' : 'Connecting...'}
+              </div>
+          </div>
           <button className="md:hidden text-gray-400" onClick={() => setIsSidebarOpen(false)}>
             <X size={24} />
           </button>

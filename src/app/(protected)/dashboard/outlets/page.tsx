@@ -37,7 +37,11 @@ export default function OutletsPage() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortDirection] = useState<'asc' | 'desc'>('desc'); 
+  
+  // REALTIME PRESENCE STATE
+  const [onlineOutlets, setOnlineOutlets] = useState<Set<string>>(new Set());
 
+  // 1. Fetch Sales Data
   const fetchOutletData = useCallback(async (start: string, end: string) => {
     setLoading(true);
     try {
@@ -68,6 +72,31 @@ export default function OutletsPage() {
         setLoading(false);
     }
   }, []); 
+
+  // 2. Listen for Online Presence
+  useEffect(() => {
+    const channel = supabase.channel('online-outlets');
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const newState = channel.presenceState();
+        const onlineIds = new Set<string>();
+        
+        // newState is { key: [ { outlet_id: '...', ... }, ... ] }
+        Object.values(newState).forEach((presences: any) => {
+            presences.forEach((p: any) => {
+                if (p.outlet_id) onlineIds.add(p.outlet_id);
+            });
+        });
+        
+        setOnlineOutlets(onlineIds);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => { 
     fetchOutletData(startDate, endDate); 
@@ -215,7 +244,15 @@ export default function OutletsPage() {
                 <td className="px-6 py-4 flex items-center gap-3">
                   <span className="text-[10px] font-bold text-slate-400 w-4">#{i + 1}</span>
                   <div>
-                    <div className="font-bold text-slate-900 text-sm">{outlet.name}</div>
+                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        {outlet.name}
+                        {onlineOutlets.has(outlet.id) && (
+                            <span className="flex h-2 w-2 relative" title="Outlet Dashboard is Open">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                        )}
+                    </div>
                     <div className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{outlet.location}</div>
                   </div>
                 </td>
