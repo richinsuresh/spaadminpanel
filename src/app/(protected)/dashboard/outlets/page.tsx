@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { 
   Loader2, BarChart3, 
   ChevronRight, Search, Calendar as CalendarIcon,
-  Trophy, AlertCircle, ArrowRight
+  Trophy, AlertCircle, ArrowRight, Power
 } from 'lucide-react'; 
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
@@ -28,7 +28,6 @@ const formatDate = (date: Date): string => {
 export default function OutletsPage() {
   const router = useRouter();
   
-  // Set default state to "Today"
   const todayISO = useMemo(() => formatDate(new Date()), []);
   const [startDate, setStartDate] = useState(todayISO);
   const [endDate, setEndDate] = useState(todayISO);
@@ -38,10 +37,9 @@ export default function OutletsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortDirection] = useState<'asc' | 'desc'>('desc'); 
   
-  // REALTIME PRESENCE STATE
   const [onlineOutlets, setOnlineOutlets] = useState<Set<string>>(new Set());
+  const [isLoggingOut, setIsLoggingOut] = useState(false); // Loading state for the button
 
-  // 1. Fetch Sales Data
   const fetchOutletData = useCallback(async (start: string, end: string) => {
     setLoading(true);
     try {
@@ -73,7 +71,6 @@ export default function OutletsPage() {
     }
   }, []); 
 
-  // 2. Listen for Online Presence
   useEffect(() => {
     const channel = supabase.channel('online-outlets');
 
@@ -81,14 +78,11 @@ export default function OutletsPage() {
       .on('presence', { event: 'sync' }, () => {
         const newState = channel.presenceState();
         const onlineIds = new Set<string>();
-        
-        // newState is { key: [ { outlet_id: '...', ... }, ... ] }
         Object.values(newState).forEach((presences: any) => {
             presences.forEach((p: any) => {
                 if (p.outlet_id) onlineIds.add(p.outlet_id);
             });
         });
-        
         setOnlineOutlets(onlineIds);
       })
       .subscribe();
@@ -101,6 +95,30 @@ export default function OutletsPage() {
   useEffect(() => { 
     fetchOutletData(startDate, endDate); 
   }, [startDate, endDate, fetchOutletData]);
+
+  // --- NEW: HANDLE FORCE LOGOUT ---
+  const handleForceLogoutAll = async () => {
+      const confirm = window.confirm("Are you sure? This will instantly log out ALL active outlets.");
+      if (!confirm) return;
+
+      setIsLoggingOut(true);
+      
+      const channel = supabase.channel('online-outlets');
+      channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+              // Broadcast the kill command
+              await channel.send({
+                  type: 'broadcast',
+                  event: 'force_logout',
+                  payload: { message: 'Admin requested logout' }
+              });
+              
+              alert("Logout command sent to all active outlets.");
+              setIsLoggingOut(false);
+              supabase.removeChannel(channel);
+          }
+      });
+  };
 
   const { highestOutlet, lowestOutlet, totalRevenue, highestAmount, lowestAmount } = useMemo(() => {
     if (!outlets || outlets.length === 0) {
@@ -136,31 +154,43 @@ export default function OutletsPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-12 px-4 pt-6 bg-slate-50 min-h-screen">
       
-      {/* 1. COMPACT TOP BAR */}
+      {/* 1. TOP BAR */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-black text-slate-900 tracking-tight">Outlet Analytics</h1>
           <p className="text-xs text-slate-500 font-medium">Network Revenue: <span className="text-indigo-600 font-bold">{formatCurrency(totalRevenue)}</span></p>
         </div>
 
-        <div className="inline-flex items-center gap-2 bg-white border border-slate-200 p-1.5 rounded-xl shadow-sm">
-          <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-lg">
-            <CalendarIcon size={14} className="text-slate-400" />
-            <input 
-              type="date" 
-              value={startDate} 
-              onChange={e => setStartDate(e.target.value)} 
-              className="bg-transparent border-none p-0 text-xs font-bold outline-none cursor-pointer text-slate-700" 
-            />
-            <ArrowRight size={12} className="text-slate-300" />
-            <input 
-              type="date" 
-              value={endDate} 
-              onChange={e => setEndDate(e.target.value)} 
-              className="bg-transparent border-none p-0 text-xs font-bold outline-none cursor-pointer text-slate-700" 
-              max={todayISO} 
-            />
-          </div>
+        <div className="flex items-center gap-3">
+            {/* FORCE LOGOUT BUTTON */}
+            <button 
+                onClick={handleForceLogoutAll}
+                disabled={isLoggingOut}
+                className="flex items-center gap-2 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-colors shadow-sm disabled:opacity-50"
+            >
+                {isLoggingOut ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+                {isLoggingOut ? 'Clearing...' : 'Force Logout All'}
+            </button>
+
+            <div className="inline-flex items-center gap-2 bg-white border border-slate-200 p-1.5 rounded-xl shadow-sm">
+              <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-lg">
+                <CalendarIcon size={14} className="text-slate-400" />
+                <input 
+                  type="date" 
+                  value={startDate} 
+                  onChange={e => setStartDate(e.target.value)} 
+                  className="bg-transparent border-none p-0 text-xs font-bold outline-none cursor-pointer text-slate-700" 
+                />
+                <ArrowRight size={12} className="text-slate-300" />
+                <input 
+                  type="date" 
+                  value={endDate} 
+                  onChange={e => setEndDate(e.target.value)} 
+                  className="bg-transparent border-none p-0 text-xs font-bold outline-none cursor-pointer text-slate-700" 
+                  max={todayISO} 
+                />
+              </div>
+            </div>
         </div>
       </div>
 
@@ -246,11 +276,13 @@ export default function OutletsPage() {
                   <div>
                     <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
                         {outlet.name}
-                        {onlineOutlets.has(outlet.id) && (
-                            <span className="flex h-2 w-2 relative" title="Outlet Dashboard is Open">
+                        {onlineOutlets.has(outlet.id) ? (
+                            <span className="flex h-2 w-2 relative" title="Online: Dashboard Open">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                             </span>
+                        ) : (
+                             <span className="h-2 w-2 rounded-full bg-rose-500 shadow-sm" title="Offline: Dashboard Closed"></span>
                         )}
                     </div>
                     <div className="text-[10px] text-slate-400 font-medium uppercase tracking-tight">{outlet.location}</div>

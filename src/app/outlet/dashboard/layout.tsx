@@ -38,16 +38,28 @@ export default function OutletDashboardLayout({
     fetchOutletSession();
   }, []);
 
-  // --- REALTIME PRESENCE ---
+  const handleLogout = () => {
+    document.cookie = 'auth_role=; Max-Age=0; path=/';
+    document.cookie = 'outlet_id=; Max-Age=0; path=/';
+    router.push('/outlet-login');
+  };
+
+  // --- REALTIME PRESENCE & COMMAND LISTENER ---
   useEffect(() => {
     if (!outletId) return;
 
     const channel = supabase.channel('online-outlets');
 
     channel
+      .on('broadcast', { event: 'force_logout' }, (payload) => {
+          console.log('Received forced logout command:', payload);
+          // Trigger the logout logic
+          handleLogout();
+          alert('Session expired by admin.');
+      })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          setIsConnected(true); // <--- VISUAL CONFIRMATION
+          setIsConnected(true); 
           await channel.track({
             outlet_id: outletId,
             outlet_name: outletName,
@@ -61,12 +73,6 @@ export default function OutletDashboardLayout({
       setIsConnected(false);
     };
   }, [outletId, outletName]);
-
-  const handleLogout = () => {
-    document.cookie = 'auth_role=; Max-Age=0; path=/';
-    document.cookie = 'outlet_id=; Max-Age=0; path=/';
-    router.push('/outlet-login');
-  };
   
   const navItems = [
     { name: 'New Client', href: '/outlet/dashboard/client-form/[outletId]', icon: <UserPlus size={18} /> },
@@ -115,7 +121,7 @@ export default function OutletDashboardLayout({
               <h1 className="text-xl font-bold text-red-600 truncate" title={outletName}>
                 {outletName}
               </h1>
-              {/* --- ADDED: Connection Status Indicator --- */}
+              {/* Connection Status Indicator */}
               <div className={`text-[10px] font-bold uppercase mt-1 flex items-center gap-1.5 ${isConnected ? 'text-emerald-500' : 'text-gray-500'}`}>
                   <Wifi size={10} className={isConnected ? 'animate-pulse' : ''} />
                   {isConnected ? 'System Online' : 'Connecting...'}
