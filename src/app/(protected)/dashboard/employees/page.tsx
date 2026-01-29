@@ -6,7 +6,8 @@ import { OUTLETS } from '@/lib/outlet';
 import { 
   UserPlus, Phone, Briefcase, Search, 
   MapPin, Calendar, Edit3, Trash2, 
-  UserMinus, RotateCcw, ArrowLeft, Coffee, Plane
+  UserMinus, RotateCcw, ArrowLeft, Coffee, Plane,
+  Monitor
 } from 'lucide-react';
 
 // --- Types ---
@@ -14,7 +15,8 @@ type Employee = {
   id: string;
   name: string;
   mobile?: string | null;
-  role: 'therapist' | 'manager' | 'housekeeping';
+  // Updated role type to include 'backend'
+  role: 'therapist' | 'manager' | 'housekeeping' | 'backend';
   outlet_name: string; 
   outlet_id: string; 
   is_active?: boolean;
@@ -63,6 +65,7 @@ export default function EmployeesPage() {
   const [newEmpRole, setNewEmpRole] = useState<Employee['role']>('therapist');
   const [newEmpOutlet, setNewEmpOutlet] = useState(OUTLETS[0]?.id ?? '');
   const [newEmpJoinDate, setNewEmpJoinDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [isBackend, setIsBackend] = useState(false); // NEW: State for Backend Employee Checkbox
   const [isAdding, setIsAdding] = useState(false);
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -89,8 +92,6 @@ export default function EmployeesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // FIX: Removed 'current_outlet_name' from select to prevent crash if column missing
-      // We select '*' which gets all columns anyway.
       const { data: empData, error } = await supabase
         .from('employees')
         .select('*') 
@@ -197,12 +198,17 @@ export default function EmployeesPage() {
     try {
       const outletObj = OUTLETS.find(o => o.id === newEmpOutlet);
       
+      // Determine final role and outlet based on checkbox
+      const finalRole = isBackend ? 'backend' : newEmpRole;
+      const finalOutletId = isBackend ? 'HEAD_OFFICE' : newEmpOutlet;
+      const finalOutletName = isBackend ? 'Head Office' : (outletObj?.name || 'Unknown');
+
       const { error } = await supabase.from('employees').insert({
         name: newEmpName.trim(), 
         mobile: newEmpMobile.trim() || null, 
-        role: newEmpRole,
-        outlet_id: newEmpOutlet, 
-        outlet_name: outletObj?.name || 'Unknown', 
+        role: finalRole,
+        outlet_id: finalOutletId, 
+        outlet_name: finalOutletName, 
         is_active: true, 
         status: 'active',
         join_date: newEmpJoinDate
@@ -218,6 +224,7 @@ export default function EmployeesPage() {
       setIsAddModalOpen(false); 
       setNewEmpName(''); 
       setNewEmpMobile('');
+      setIsBackend(false); // Reset checkbox
     } catch (err: any) {
         console.error("Unexpected error:", err);
         alert("Error: " + err.message);
@@ -258,7 +265,7 @@ export default function EmployeesPage() {
     try {
       await supabase.from('employees').update({
         is_active: false, status: 'inactive', exit_type: exitType, exit_reason: exitReason,
-        exit_date: new Date().toISOString(), current_outlet_name: null, is_checked_in: false // Removed current_attendance_id
+        exit_date: new Date().toISOString(), current_outlet_name: null, is_checked_in: false
       }).eq('id', selectedEmployee.id);
       await fetchData(); setIsExitModalOpen(false);
     } catch (err: any) { alert(err.message); } finally { setIsProcessingExit(false); }
@@ -284,7 +291,6 @@ export default function EmployeesPage() {
             status: 'long_leave',
             is_checked_in: false,
             current_outlet_name: null
-            // Removed current_attendance_id
         }).eq('id', selectedEmployee.id);
         await fetchData();
         setIsLongLeaveModalOpen(false);
@@ -312,7 +318,6 @@ export default function EmployeesPage() {
           exit_date: new Date().toISOString(),
           is_checked_in: false, 
           current_outlet_name: null 
-          // Removed current_attendance_id
         }).eq('id', selectedEmployee.id);
         
         await fetchData(); setSelectedEmployee(null); setConfirmDeleteOpen(false);
@@ -323,6 +328,7 @@ export default function EmployeesPage() {
     switch (role) {
       case 'manager': return <span className="px-2 py-0.5 rounded text-[10px] bg-purple-100 text-purple-700 font-semibold uppercase">Manager</span>;
       case 'housekeeping': return <span className="px-2 py-0.5 rounded text-[10px] bg-gray-100 text-gray-600 font-semibold uppercase">HK</span>;
+      case 'backend': return <span className="px-2 py-0.5 rounded text-[10px] bg-indigo-100 text-indigo-700 font-semibold uppercase border border-indigo-200 flex items-center gap-1"><Monitor size={10} /> Backend</span>;
       default: return <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700 font-semibold uppercase">Therapist</span>;
     }
   };
@@ -528,10 +534,33 @@ export default function EmployeesPage() {
               <form onSubmit={handleAddEmployee} className="space-y-3">
                  <input className="w-full p-2 border rounded text-black" placeholder="Name" value={newEmpName} onChange={e => setNewEmpName(e.target.value)} required/>
                  <input className="w-full p-2 border rounded text-black" placeholder="Mobile" value={newEmpMobile} onChange={e => setNewEmpMobile(e.target.value)}/>
-                 <div className="grid grid-cols-2 gap-2">
-                    <select className="p-2 border rounded text-black" value={newEmpRole} onChange={e => setNewEmpRole(e.target.value as any)}><option value="therapist">Therapist</option><option value="manager">Manager</option><option value="housekeeping">HK</option></select>
-                    <select className="p-2 border rounded text-black" value={newEmpOutlet} onChange={e => setNewEmpOutlet(e.target.value)}>{OUTLETS.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select>
+                 
+                 {/* CHECKBOX FOR BACKEND */}
+                 <div className="flex items-center gap-2 my-2">
+                    <input 
+                      type="checkbox" 
+                      id="backendCheck" 
+                      checked={isBackend} 
+                      onChange={(e) => setIsBackend(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded"
+                    />
+                    <label htmlFor="backendCheck" className="text-sm font-bold text-gray-700 select-none cursor-pointer">
+                      BE (Back End Employee)
+                    </label>
                  </div>
+
+                 {/* Role & Outlet (Disabled if Backend) */}
+                 <div className={`grid grid-cols-2 gap-2 transition-opacity ${isBackend ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                    <select className="p-2 border rounded text-black" value={newEmpRole} onChange={e => setNewEmpRole(e.target.value as any)}>
+                        <option value="therapist">Therapist</option>
+                        <option value="manager">Manager</option>
+                        <option value="housekeeping">HK</option>
+                    </select>
+                    <select className="p-2 border rounded text-black" value={newEmpOutlet} onChange={e => setNewEmpOutlet(e.target.value)}>
+                        {OUTLETS.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}
+                    </select>
+                 </div>
+
                  <div>
                     <label className="text-[10px] uppercase font-bold text-gray-500">Join Date</label>
                     <input type="date" className="w-full p-2 border rounded text-black" value={newEmpJoinDate} onChange={e => setNewEmpJoinDate(e.target.value)} />
@@ -550,7 +579,12 @@ export default function EmployeesPage() {
                   <input className="w-full p-2 border rounded text-black" value={editName} onChange={e => setEditName(e.target.value)}/>
                   <input className="w-full p-2 border rounded text-black" value={editMobile} onChange={e => setEditMobile(e.target.value)}/>
                   <div className="grid grid-cols-2 gap-2">
-                     <select className="p-2 border rounded text-black" value={editRole} onChange={e => setEditRole(e.target.value as any)}><option value="therapist">Therapist</option><option value="manager">Manager</option><option value="housekeeping">HK</option></select>
+                     <select className="p-2 border rounded text-black" value={editRole} onChange={e => setEditRole(e.target.value as any)}>
+                        <option value="therapist">Therapist</option>
+                        <option value="manager">Manager</option>
+                        <option value="housekeeping">HK</option>
+                        <option value="backend">Backend</option>
+                     </select>
                      <select className="p-2 border rounded text-black" value={editOutlet} onChange={e => setEditOutlet(e.target.value)}>{OUTLETS.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select>
                   </div>
                   <div>

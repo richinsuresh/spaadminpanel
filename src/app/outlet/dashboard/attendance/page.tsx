@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useActivityLog } from '@/hooks/useActivityLog';
 import { 
   Loader2, 
   Calendar as CalendarIcon, 
@@ -54,6 +55,7 @@ const formatTime = (dateStr: string | null | undefined) => {
 };
 
 export default function OutletAttendancePage() {
+  const { logActivity } = useActivityLog();
   const [currentISTDate] = useState(getISTDateString());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -130,6 +132,7 @@ export default function OutletAttendancePage() {
   const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off') => {
     if (!outletId) return;
     setMarkingId(emp.id);
+    
 
     try {
         const { error } = await supabase.from('attendance').insert({
@@ -144,6 +147,15 @@ export default function OutletAttendancePage() {
         });
 
         if (error) throw error;
+        if (error) throw error;
+
+    // --- INSERT THIS BLOCK ---
+    await logActivity('mark_attendance', {
+        employee: emp.name,
+        status: status,
+        outlet: outletName,
+        message: `Marked ${emp.name} as ${status}`
+    });
         await fetchAttendance(); // Refresh list
     } catch (err: any) {
         alert('Failed to mark status: ' + err.message);

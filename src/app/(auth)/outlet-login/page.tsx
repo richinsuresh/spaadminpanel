@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
+import { useActivityLog } from '@/hooks/useActivityLog';
 
 export default function OutletLogin() {
   const [outletId, setOutletId] = useState('');
@@ -11,6 +12,7 @@ export default function OutletLogin() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const { logActivity } = useActivityLog();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,6 +20,7 @@ export default function OutletLogin() {
     setError('');
 
     try {
+      
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -27,9 +30,16 @@ export default function OutletLogin() {
       const data = await res.json();
 
       if (res.ok) {
+        const outletName = OUTLETS.find(o => o.id === outletId)?.name || outletId;
+        await logActivity(
+            'outlet_login', 
+            `Outlet logged in: ${outletName}`, 
+            `Outlet: ${outletName}`);
+        
         window.location.href = '/outlet/dashboard/sales'; 
       } else {
         setError(data.error || 'Invalid outlet ID or password');
+        
       }
     } catch (err) {
       setError('Login failed. Please try again.');
@@ -37,6 +47,7 @@ export default function OutletLogin() {
     } finally {
       setIsLoading(false);
     }
+    
   };
 
   return (

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
+import { useActivityLog } from '@/hooks/useActivityLog';
 import {
   Clock,
   Calendar,
@@ -266,6 +267,7 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({
 
 // --- Main Form Component ---
 export default function ClientCheckinForm() {
+  const { logActivity } = useActivityLog();
   const params = useParams();
   const outletId = params?.outletId as string;
   const router = useRouter();
@@ -530,16 +532,19 @@ export default function ClientCheckinForm() {
 
   // --- UPDATED handleSubmit ---
   const handleSubmit = async (e: React.FormEvent) => {
+    
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
+    
 
     if (!outlet) {
       setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
       return;
     }
+    
 
     // --- 1. STRICT MOBILE VALIDATION ---
     if (!mobile || mobile.length !== 10) {
@@ -691,6 +696,13 @@ export default function ClientCheckinForm() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error((data as any).error || `Submission failed (${res.status})`);
+        await logActivity('create_sale', {
+          customer_name: formData.name,
+          mobile: mobile, // Use the 'mobile' state variable
+          amount: usePackageCredit ? 0 : (getFinalAmountInPaise() / 100),
+          treatment: formData.treatment,
+          message: `Added new client: ${formData.name} (${formData.treatment})`
+      });
       }
 
       // Handle Redirection
@@ -770,6 +782,7 @@ export default function ClientCheckinForm() {
             setError(err?.message || 'An unknown error occurred and local save failed.');
             setLoading(false);
           }
+          
     }
   };
 

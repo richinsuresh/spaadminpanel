@@ -124,7 +124,9 @@ const formatDuration = (h: number | null | undefined) => {
   return `${hrs}hr ${mins}m`;
 };
 
-const formatPaymentMethod = (m: string | null) => {
+// UPDATED: Now accepts isRedemption flag to override display
+const formatPaymentMethod = (m: string | null, isRedemption?: boolean) => {
+  if (isRedemption) return 'REDEMPTION';
   if (!m) return '—';
   return m.toUpperCase();
 };
@@ -313,7 +315,7 @@ export default function AdminSalesPage() {
   const totalCashSales = useMemo(
     () =>
       activeSales
-        .filter((s) => s.payment_method === 'cash')
+        .filter((s) => s.payment_method === 'cash' && !s.is_package_customer) // Exclude redemptions from Cash
         .reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
@@ -321,7 +323,7 @@ export default function AdminSalesPage() {
   const totalUpiSales = useMemo(
     () =>
       activeSales
-        .filter((s) => s.payment_method === 'upi')
+        .filter((s) => s.payment_method === 'upi' && !s.is_package_customer)
         .reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
@@ -329,7 +331,7 @@ export default function AdminSalesPage() {
   const totalCardSales = useMemo(
     () =>
       activeSales
-        .filter((s) => s.payment_method === 'card')
+        .filter((s) => s.payment_method === 'card' && !s.is_package_customer)
         .reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
@@ -704,9 +706,10 @@ export default function AdminSalesPage() {
           GuestsCount: totalGuests,
           GroupDetails: groupDetails,
           Amount: amountRupees,
-          PaymentMethod: sale.payment_method
-            ? sale.payment_method.toUpperCase()
-            : '',
+          // UPDATED: Export "REDEMPTION" if applicable
+          PaymentMethod: sale.is_package_customer 
+            ? 'REDEMPTION' 
+            : (sale.payment_method ? sale.payment_method.toUpperCase() : ''),
           TookPackage: sale.took_package ? 'YES' : 'NO',
           PackageAmount: sale.took_package ? amountRupees : '',
           IsPackageCustomer: sale.is_package_customer ? 'YES' : 'NO',
@@ -1068,9 +1071,9 @@ export default function AdminSalesPage() {
                         )}
                       </td>
 
-                      {/* PAYMENT */}
+                      {/* PAYMENT (UPDATED) */}
                       <td className="px-3 py-2 text-xs text-black align-top">
-                        {formatPaymentMethod(sale.payment_method)}
+                        {formatPaymentMethod(sale.payment_method, sale.is_package_customer)}
                       </td>
 
                       {/* TIME (MAIN) */}
