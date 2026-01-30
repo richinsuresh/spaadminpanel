@@ -19,7 +19,8 @@ import {
   Calendar,
   User,
   CreditCard,
-  Briefcase
+  Briefcase,
+  IndianRupee
 } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
@@ -55,7 +56,7 @@ type PackageActivity = {
 };
 
 type ActivityFilter = 'all' | 'purchase' | 'redemption';
-type SortOption = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
+type SortOption = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc' | 'sold_by_asc' | 'sold_by_desc';
 
 /* ===================== HELPERS ===================== */
 
@@ -103,15 +104,19 @@ export default function PackageActivityPage() {
   const [endDate, setEndDate] = useState<string>(getToday());
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
   const [activityType, setActivityType] = useState<ActivityFilter>('all');
+  const [amountFilter, setAmountFilter] = useState<string>(''); 
   const [sortBy, setSortBy] = useState<SortOption>('date_desc');
+  
+  // NEW: Filter by Sold By
+  const [selectedSoldBy, setSelectedSoldBy] = useState<string>('all');
 
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<PackageActivity | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   
   // Dropdown Lists
-  const [allActiveEmployees, setAllActiveEmployees] = useState<string[]>([]); // For "Sold By" (includes managers)
-  const [activeTherapists, setActiveTherapists] = useState<string[]>([]);     // For "Therapist" (only therapists)
+  const [allActiveEmployees, setAllActiveEmployees] = useState<string[]>([]); // For "Sold By"
+  const [activeTherapists, setActiveTherapists] = useState<string[]>([]);     // For "Therapist"
   
   // Form State for Editing
   const [editForm, setEditForm] = useState({
@@ -126,19 +131,16 @@ export default function PackageActivityPage() {
   // Fetch Employees List for Dropdown
   useEffect(() => {
     const fetchEmployees = async () => {
-      // Fetch name and role for all ACTIVE employees
       const { data: empData } = await supabase
         .from('employees')
         .select('name, role')
-        .eq('is_active', true) // Only fetch currently active employees
+        .eq('is_active', true)
         .order('name', { ascending: true });
       
       if (empData) {
-        // 1. All Active Staff (for Sold By - managers can sell too)
         const allNames = Array.from(new Set(empData.map((e: any) => e.name)));
         setAllActiveEmployees(allNames);
 
-        // 2. Active Therapists Only (for Therapist dropdown)
         const therapistNames = Array.from(new Set(
           empData
             .filter((e: any) => e.role === 'therapist')
@@ -163,6 +165,19 @@ export default function PackageActivityPage() {
       query = query.eq('outlet_id', selectedOutletId);
     }
 
+    // NEW: Filter by specific "Sold By" employee
+    if (selectedSoldBy !== 'all') {
+      query = query.eq('package_sold_by', selectedSoldBy);
+    }
+
+    // Amount Filter Logic (Typable)
+    if (amountFilter) {
+      const amountInPaise = parseFloat(amountFilter) * 100;
+      if (!isNaN(amountInPaise)) {
+        query = query.eq('package_amount', amountInPaise);
+      }
+    }
+
     if (activityType === 'purchase') {
       query = query.eq('took_package', true);
     } else if (activityType === 'redemption') {
@@ -181,6 +196,12 @@ export default function PackageActivityPage() {
       case 'amount_asc':
         query = query.order('package_amount', { ascending: true });
         break;
+      case 'sold_by_asc':
+        query = query.order('package_sold_by', { ascending: true });
+        break;
+      case 'sold_by_desc':
+        query = query.order('package_sold_by', { ascending: false });
+        break;
       case 'date_desc':
       default:
         query = query.order('date', { ascending: false }).order('check_in_time', { ascending: false });
@@ -191,7 +212,7 @@ export default function PackageActivityPage() {
     if (error) console.error('Error fetching package activity:', error);
     setData((rows as PackageActivity[]) || []);
     setLoading(false);
-  }, [startDate, endDate, selectedOutletId, activityType, sortBy]);
+  }, [startDate, endDate, selectedOutletId, activityType, amountFilter, sortBy, selectedSoldBy]);
 
   useEffect(() => {
     fetchActivity();
@@ -394,6 +415,38 @@ export default function PackageActivityPage() {
               <option value="redemption">Redemptions Only</option>
             </select>
           </div>
+          
+          {/* Typable Amount Input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+              <IndianRupee size={14} /> Package Amount
+            </label>
+            <input
+              type="number"
+              value={amountFilter}
+              onChange={(e) => setAmountFilter(e.target.value)}
+              placeholder="e.g. 5000"
+              className="w-full px-3 py-2 border rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-400"
+            />
+          </div>
+
+          {/* NEW: Filter by Sold By */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+              <Briefcase size={14} /> Sold By Filter
+            </label>
+            <select
+              value={selectedSoldBy}
+              onChange={(e) => setSelectedSoldBy(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg bg-white text-gray-900"
+            >
+              <option value="all">All Staff</option>
+              {allActiveEmployees.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+          
           <div>
              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
               {sortBy.includes('asc') ? <SortAsc size={14} /> : <SortDesc size={14} />} Sort By
@@ -407,6 +460,8 @@ export default function PackageActivityPage() {
               <option value="date_asc">Date (Oldest First)</option>
               <option value="amount_desc">Sold: Most (High to Low)</option>
               <option value="amount_asc">Sold: Least (Low to High)</option>
+              <option value="sold_by_asc">Employee: Name (A-Z)</option>
+              <option value="sold_by_desc">Employee: Name (Z-A)</option>
             </select>
           </div>
         </div>
