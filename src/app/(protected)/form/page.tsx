@@ -775,12 +775,11 @@ export default function ClientForm() {
                 checked={formData.tookPackage}
                 onChange={handleChange}
                 className="sr-only"
-                disabled={!!clientInfo && clientInfo.status === 'active'}
               />
-              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'} ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50 cursor-not-allowed' : ''}`}></div>
+              <div className={`block w-14 h-8 rounded-full ${formData.tookPackage ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
               <div className={`absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform ${formData.tookPackage ? 'transform translate-x-6' : ''}`}></div>
             </div>
-            <div className={`ml-3 text-gray-700 text-sm ${ (!!clientInfo && clientInfo.status === 'active') ? 'opacity-50' : ''}`}>
+            <div className="ml-3 text-gray-700 text-sm">
               Taking a new package today
             </div>
           </label>
