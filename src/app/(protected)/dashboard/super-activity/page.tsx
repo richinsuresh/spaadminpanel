@@ -11,7 +11,8 @@ import {
   ShieldAlert, 
   LogIn, 
   FileText, 
-  CheckCircle 
+  CheckCircle,
+  ArrowUpDown
 } from 'lucide-react';
 
 // --- Types ---
@@ -70,6 +71,7 @@ export default function ActivityPage() {
   const [rows, setRows] = useState<ActivityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('date-desc');
 
   // --- Fetch Logs ---
   useEffect(() => {
@@ -116,6 +118,23 @@ export default function ActivityPage() {
     return content.includes(term);
   });
 
+  // --- Sort Logic ---
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    if (sortBy === 'date-desc') {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    }
+    if (sortBy === 'date-asc') {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    }
+    if (sortBy === 'action-asc') {
+        return labelForAction(a.action).localeCompare(labelForAction(b.action));
+    }
+    if (sortBy === 'action-desc') {
+        return labelForAction(b.action).localeCompare(labelForAction(a.action));
+    }
+    return 0;
+  });
+
   return (
     <div className="max-w-6xl mx-auto py-8 px-4 space-y-6">
       
@@ -130,16 +149,38 @@ export default function ActivityPage() {
             </p>
         </div>
         
-        {/* Search Bar */}
-        <div className="relative">
-             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-             <input 
-                type="text" 
-                placeholder="Search user, city, or action..." 
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="pl-9 pr-4 py-2 border border-gray-300 rounded-xl text-sm w-full md:w-72 bg-white text-black focus:ring-2 focus:ring-red-500 outline-none shadow-sm transition-all"
-             />
+        {/* Controls */}
+        <div className="flex flex-col sm:flex-row gap-3">
+             {/* Sort Dropdown */}
+            <div className="relative">
+                <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <select 
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="pl-9 pr-8 py-2 border border-gray-300 rounded-xl text-sm w-full sm:w-auto bg-white text-black focus:ring-2 focus:ring-red-500 outline-none shadow-sm transition-all appearance-none cursor-pointer hover:border-gray-400"
+                >
+                    <option value="date-desc">Newest First</option>
+                    <option value="date-asc">Oldest First</option>
+                    <option value="action-asc">Activity Type (A-Z)</option>
+                    <option value="action-desc">Activity Type (Z-A)</option>
+                </select>
+                {/* Custom chevron for appearance-none if needed, but standard select usually implies it or we remove appearance-none. 
+                    Keeping appearance-none usually requires adding a manual chevron icon. 
+                    Removing it to keep native UI for simplicity since we have the left icon.
+                */}
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input 
+                    type="text" 
+                    placeholder="Search user, city, or action..." 
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="pl-9 pr-4 py-2 border border-gray-300 rounded-xl text-sm w-full md:w-72 bg-white text-black focus:ring-2 focus:ring-red-500 outline-none shadow-sm transition-all"
+                />
+            </div>
         </div>
       </div>
 
@@ -152,12 +193,12 @@ export default function ActivityPage() {
                     Loading history...
                 </div>
             </div>
-        ) : filteredRows.length === 0 ? (
+        ) : sortedRows.length === 0 ? (
             <div className="text-center py-20 text-gray-500 bg-white rounded-2xl shadow-sm border border-gray-100">
                 No activity found matching your criteria.
             </div>
         ) : (
-            filteredRows.map((row) => {
+            sortedRows.map((row) => {
                 const parsed = parseDescription(row.description);
                 const meta = parsed?.meta || {}; // The Location/Device info
                 

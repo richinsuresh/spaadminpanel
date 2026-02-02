@@ -442,7 +442,16 @@ export default function AttendancePage() {
     setIsProcessing(true);
     try {
         const now = new Date().toISOString();
-        let query = supabase.from('attendance').select('id, employee_id').eq('date', dateFilter).is('check_out_time', null);
+        
+        // FIX: Exclude Absent/Weekly Off employees from bulk logout query
+        let query = supabase
+            .from('attendance')
+            .select('id, employee_id')
+            .eq('date', dateFilter)
+            .is('check_out_time', null)
+            .neq('status', 'Absent')
+            .neq('status', 'Weekly Off');
+            
         if (outletFilter !== 'all') query = query.eq('outlet_id', outletFilter);
         const { data: activeRecords, error: fetchError } = await query;
         if (fetchError) throw fetchError;
@@ -450,7 +459,9 @@ export default function AttendancePage() {
         if (activeRecords && activeRecords.length > 0) {
             const ids = activeRecords.map(r => r.id);
             const empIds = activeRecords.map(r => r.employee_id);
-            await supabase.from('attendance').update({ check_out_time: now, status: 'Present' }).in('id', ids);
+            
+            // FIX: Only update check_out_time, do not force status to 'Present'
+            await supabase.from('attendance').update({ check_out_time: now }).in('id', ids);
             await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
         }
         setIsBulkLogoutModalOpen(false);
