@@ -443,7 +443,7 @@ export default function AttendancePage() {
     try {
         const now = new Date().toISOString();
         
-        // FIX: Exclude Absent/Weekly Off employees from bulk logout query
+        // Exclude Absent/Weekly Off employees from bulk logout query
         let query = supabase
             .from('attendance')
             .select('id, employee_id')
@@ -460,7 +460,7 @@ export default function AttendancePage() {
             const ids = activeRecords.map(r => r.id);
             const empIds = activeRecords.map(r => r.employee_id);
             
-            // FIX: Only update check_out_time, do not force status to 'Present'
+            // Only update check_out_time, do not force status to 'Present'
             await supabase.from('attendance').update({ check_out_time: now }).in('id', ids);
             await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
         }
@@ -512,17 +512,13 @@ export default function AttendancePage() {
         if (filterDateStr > exitDateStr) return false;
     }
 
-    // 3. STRICT ACTIVE CHECK (The Fix)
-    // If we are looking at TODAY (or future) and the employee is NOT active,
-    // they MUST be hidden (unless they have a record). 
-    // This overrides situations where exit_date might be missing or set incorrectly.
+    // 3. STRICT ACTIVE CHECK
     const todayStr = getISTDateString();
     if (filterDateStr >= todayStr && !item.employee.is_active && !item.record) {
         return false;
     }
 
     // 4. Ghost Check for Past Dates
-    // If inactive AND no exit_date AND no record, hide them.
     if (!item.employee.is_active && !item.employee.exit_date && !item.record) {
          return false;
     }
@@ -737,7 +733,8 @@ export default function AttendancePage() {
                            </div>
                          ) : (
                            <div>
-                               {record.status === 'Absent' ? (
+                               {/* Updated Display Logic: Prioritize !check_in_time as Absent */}
+                               {record.status === 'Absent' || !record.check_in_time ? (
                                    <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
                                        <XCircle size={12} /> Absent
                                    </span>
