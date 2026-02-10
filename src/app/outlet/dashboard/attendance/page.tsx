@@ -93,7 +93,7 @@ export default function OutletAttendancePage() {
     const { data } = await supabase
       .from('employees')
       .select('id, name, role, outlet_id, join_date, exit_date, is_active')
-      .order('name'); // Removed .eq('is_active', true) from query to handle date-based filtering locally
+      .order('name'); 
     setEmployees(data || []);
   }, []);
 
@@ -133,7 +133,6 @@ export default function OutletAttendancePage() {
     if (!outletId) return;
     setMarkingId(emp.id);
     
-
     try {
         const { error } = await supabase.from('attendance').insert({
             employee_id: emp.id,
@@ -147,15 +146,14 @@ export default function OutletAttendancePage() {
         });
 
         if (error) throw error;
-        if (error) throw error;
 
-    // --- INSERT THIS BLOCK ---
-    await logActivity('mark_attendance', {
-        employee: emp.name,
-        status: status,
-        outlet: outletName,
-        message: `Marked ${emp.name} as ${status}`
-    });
+        await logActivity('mark_attendance', {
+            employee: emp.name,
+            status: status,
+            outlet: outletName,
+            message: `Marked ${emp.name} as ${status}`
+        });
+
         await fetchAttendance(); // Refresh list
     } catch (err: any) {
         alert('Failed to mark status: ' + err.message);
@@ -182,7 +180,7 @@ export default function OutletAttendancePage() {
     // 3. STRICT EX-EMPLOYEE FILTERING
     const filterDateStr = dateFilter; 
     
-    // Hide if joined AFTER selected date
+    // Hide if joined strictly AFTER selected date
     if (item.employee.join_date) {
         const joinDateStr = item.employee.join_date.split('T')[0];
         if (filterDateStr < joinDateStr) return false;
@@ -194,9 +192,9 @@ export default function OutletAttendancePage() {
         if (filterDateStr > exitDateStr) return false;
     }
 
-    // Hide if inactive AND no specific exit date AND no record for today
-    // (This catches "ghost" employees who are marked inactive but have no exit date)
-    if (!item.employee.is_active && !item.record) {
+    // Hide if explicitly inactive AND no record for today (Corrected Logic)
+    // Only hide if strictly inactive (false). Undefined/null is treated as active.
+    if (item.employee.is_active === false && !item.record) {
          if (!item.employee.exit_date) return false;
     }
 

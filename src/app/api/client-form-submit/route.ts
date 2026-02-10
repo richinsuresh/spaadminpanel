@@ -53,9 +53,8 @@ async function processPayload(payload: any) {
       }
     }
 
-    // 1. PACKAGE REDEMPTION
+    // 1. PACKAGE REDEMPTION (With Retry Logic)
     if (payload.isPackageCustomer && payload.packageId) {
-      // FIX: Calculate TOTAL hours (Main Session + Group Sessions)
       let hoursToDeduct = Number(payload.sessionHours || 0);
       
       if (payload.group_customers && Array.isArray(payload.group_customers)) {
@@ -65,41 +64,56 @@ async function processPayload(payload: any) {
       }
 
       if (hoursToDeduct > 0) {
-        const { data: activePackage, error: findError } = await supabase
-          .from('packages')
-          .select('id, remaining_hours, used_hours')
-          .eq('id', payload.packageId)
-          .eq('status', 'active')
-          .gt('remaining_hours', 0)
-          .limit(1)
-          .maybeSingle();
+        let success = false;
+        let attempts = 0;
+        const maxAttempts = 3;
 
-        if (findError) {
-          result.package_warn = 'Package lookup error: ' + (findError.message || JSON.stringify(findError));
-        } else if (activePackage && activePackage.id) {
-          const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
-          const currentUsed = parseFloat(activePackage.used_hours || '0');
-          const newRemainingHours = currentRemaining - hoursToDeduct;
-          const newUsedHours = currentUsed + hoursToDeduct;
-          
-          // Allow it to go negative if you want, or clamp it. 
-          // Usually better to allow slight negative to not block service, or strict check. 
-          // Here we assume strict check was done on frontend, but we process it regardless.
-          const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
+        while (!success && attempts < maxAttempts) {
+            attempts++;
+            
+            const { data: activePackage, error: findError } = await supabase
+              .from('packages')
+              .select('id, remaining_hours, used_hours, status')
+              .eq('id', payload.packageId)
+              .single(); 
 
-          const { error: updateError } = await supabase
-            .from('packages')
-            .update({ remaining_hours: newRemainingHours, used_hours: newUsedHours, status: newStatus })
-            .eq('id', payload.packageId);
+            if (findError || !activePackage) throw new Error('Active package not found. It may have been deleted or expired.');
+            if (activePackage.status !== 'active') throw new Error('Package is not active (Status: ' + activePackage.status + '). Cannot redeem.');
 
-          if (updateError) throw new Error('Error updating package: ' + updateError.message);
-        } else {
-          result.package_warn = 'No active package available to redeem (skipped deduction)';
+            const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
+            const currentUsed = parseFloat(activePackage.used_hours || '0');
+
+            if (currentRemaining <= 0) throw new Error('Package has 0 hours remaining. Cannot redeem.');
+
+            const newRemainingHours = currentRemaining - hoursToDeduct;
+            const newUsedHours = currentUsed + hoursToDeduct;
+            const newStatus = newRemainingHours <= 0 ? 'expired' : 'active';
+
+            // Optimistic Lock: Update only if remaining_hours hasn't changed since we read it
+            const { data: updatedData, error: updateError } = await supabase
+              .from('packages')
+              .update({ remaining_hours: newRemainingHours, used_hours: newUsedHours, status: newStatus })
+              .eq('id', payload.packageId)
+              .eq('remaining_hours', currentRemaining) 
+              .select();
+
+            if (updateError) throw new Error('Failed to deduct from package: ' + updateError.message);
+
+            if (updatedData && updatedData.length > 0) {
+                success = true;
+            } else {
+                console.warn(`[Package Deduct] Race condition detected on attempt ${attempts}. Retrying...`);
+                await new Promise(r => setTimeout(r, Math.random() * 200 + 50)); 
+            }
+        }
+
+        if (!success) {
+            throw new Error(`System busy: Could not update package balance after ${maxAttempts} attempts. Please try again.`);
         }
       }
     }
 
-    // 2. PACKAGE SALE (Always New)
+    // 2. PACKAGE SALE
     if (payload.tookPackage) {
       const newTotalHours = Number(payload.totalPackageHours || 0);
       const sessionHours = Number(payload.sessionHours || 0);
@@ -131,7 +145,6 @@ async function processPayload(payload: any) {
 
     // 3. INSERT SESSION
     const checkInTime: string = payload.check_in_time || new Date().toISOString();
-
     let finalCheckOutTime = null;
     if (payload.check_out_time) {
         finalCheckOutTime = payload.check_out_time;

@@ -500,7 +500,7 @@ export default function AttendancePage() {
     // Compare dates as strings (YYYY-MM-DD)
     const filterDateStr = dateFilter; 
     
-    // 1. Hide if employee joined AFTER the selected filter date
+    // 1. Hide if employee joined strictly AFTER the selected filter date
     if (item.employee.join_date) {
         const joinDateStr = item.employee.join_date.split('T')[0];
         if (filterDateStr < joinDateStr) return false;
@@ -512,14 +512,16 @@ export default function AttendancePage() {
         if (filterDateStr > exitDateStr) return false;
     }
 
-    // 3. STRICT ACTIVE CHECK
+    // 3. STRICT ACTIVE CHECK (UPDATED)
+    // Only hide if explicitly marked as inactive (false). If null/undefined, assume active.
     const todayStr = getISTDateString();
-    if (filterDateStr >= todayStr && !item.employee.is_active && !item.record) {
+    if (filterDateStr >= todayStr && item.employee.is_active === false && !item.record) {
         return false;
     }
 
     // 4. Ghost Check for Past Dates
-    if (!item.employee.is_active && !item.employee.exit_date && !item.record) {
+    // If inactive, no exit date, and no record, hide them.
+    if (item.employee.is_active === false && !item.employee.exit_date && !item.record) {
          return false;
     }
 
