@@ -48,7 +48,7 @@ type AttendanceRecord = {
   status: string; 
   early_checkout_requested: boolean;
   early_checkout_request_time: string | null;
-  created_at?: string; // Track when it was marked
+  created_at?: string;
 };
 
 const IST_OFFSET_MINUTES = 5.5 * 60; 
@@ -92,16 +92,13 @@ export default function AttendancePage() {
   const [outletFilter, setOutletFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Monthly Off Tracking
   const [monthlyOffCounts, setMonthlyOffCounts] = useState<Record<string, number>>({});
 
-  // Modals State
   const [isSingleDeleteModalOpen, setIsSingleDeleteModalOpen] = useState(false);
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [isOutletChangeModalOpen, setIsOutletChangeModalOpen] = useState(false);
   const [isForceLogoutModalOpen, setIsForceLogoutModalOpen] = useState(false);
   
-  // Edit Modal State
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [recordToEdit, setRecordToEdit] = useState<AttendanceRecord | null>(null);
   const [editForm, setEditForm] = useState({
@@ -110,32 +107,27 @@ export default function AttendancePage() {
       check_out_time: ''
   });
   
-  // Bulk Action Modals
   const [isBulkLogoutModalOpen, setIsBulkLogoutModalOpen] = useState(false);
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
 
-  // Summary Modal State
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [summaryEmployee, setSummaryEmployee] = useState<Employee | null>(null);
-  const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0, 7)); 
   const [summaryStats, setSummaryStats] = useState({ present: 0, absent: 0, weeklyOff: 0, halfDay: 0 });
   const [summaryHistory, setSummaryHistory] = useState<AttendanceRecord[]>([]); 
   const [isStatsLoading, setIsStatsLoading] = useState(false);
 
-  // Data State
   const [recordToDelete, setRecordToDelete] = useState<AttendanceRecord | null>(null);
   const [requestToApprove, setRequestToApprove] = useState<AttendanceRecord | null>(null);
   const [recordToTransfer, setRecordToTransfer] = useState<AttendanceRecord | null>(null);
   const [recordToLogout, setRecordToLogout] = useState<AttendanceRecord | null>(null);
   
-  // Form/Action State
   const [adminPassword, setAdminPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [newOutletId, setNewOutletId] = useState('');
   const [markingId, setMarkingId] = useState<string | null>(null); 
 
-  // Fetch Employees
   const fetchEmployees = useCallback(async () => {
     const { data } = await supabase
       .from('employees')
@@ -157,25 +149,22 @@ export default function AttendancePage() {
     }
   }, [dateFilter]);
 
-  // --- REALTIME SUBSCRIPTION (Admin Only) ---
   useEffect(() => {
     setLoading(true);
     fetchAttendance();
 
-    // Subscribe to changes
     const channel = supabase
       .channel('realtime-attendance')
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to INSERT, UPDATE, DELETE
+          event: '*',
           schema: 'public',
           table: 'attendance',
-          filter: `date=eq.${dateFilter}` // Only listen for changes on the selected date
+          filter: `date=eq.${dateFilter}`
         },
-        (payload) => {
-          console.log('Real-time update received:', payload);
-          fetchAttendance(); // Refresh data immediately
+        () => {
+          fetchAttendance();
         }
       )
       .subscribe();
@@ -230,10 +219,12 @@ export default function AttendancePage() {
 
           const stats = { present: 0, absent: 0, weeklyOff: 0, halfDay: 0 };
           data?.forEach(r => {
-              if (r.status === 'Absent') stats.absent++;
+              // FIX: Treat records as Absent if they lack a check-in time
+              if (r.status === 'Absent' || !r.check_in_time) stats.absent++;
               else if (r.status === 'Weekly Off') stats.weeklyOff++;
               else if (r.status === 'Half Day') stats.halfDay++;
-              else if (r.status === 'Present' || r.check_in_time) stats.present++;
+              // FIX: Ensure r.check_in_time exists for Present status
+              else if (r.status === 'Present' && r.check_in_time) stats.present++;
           });
           
           setSummaryStats(stats);
@@ -252,7 +243,7 @@ export default function AttendancePage() {
         const targetOutletId = outletFilter !== 'all' ? outletFilter : emp.outlet_id;
         
         if (!targetOutletId) {
-            alert("Please select a specific Outlet Filter to mark attendance for this employee, or ensure they have a default outlet assigned.");
+            alert("Please select a specific Outlet Filter or ensure they have a default outlet.");
             setMarkingId(null);
             return;
         }
@@ -265,7 +256,8 @@ export default function AttendancePage() {
             if (dateFilter === todayStr) {
                 checkInTime = new Date().toISOString();
             } else {
-                checkInTime = `${dateFilter}T04:30:00.000Z`; // 10:00 AM IST
+                // FIX: Use a properly formatted fallback time for past/future logs
+                checkInTime = new Date(`${dateFilter}T04:30:00.000Z`).toISOString(); 
             }
         }
 
@@ -290,7 +282,6 @@ export default function AttendancePage() {
              }).eq('id', emp.id);
         }
         
-        // No manual fetch needed thanks to Realtime, but explicit fetch is safer
         fetchAttendance();
         fetchEmployees(); 
         fetchMonthlyOffs(); 
@@ -339,7 +330,8 @@ export default function AttendancePage() {
 
           if (error) throw error;
 
-          if (editForm.status !== 'Present') {
+          // FIX: Employee is logged out if status isn't Present or if time is missing
+          if (editForm.status !== 'Present' || !newCheckIn) {
                await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).eq('id', recordToEdit.employee_id);
           }
           
@@ -443,7 +435,6 @@ export default function AttendancePage() {
     try {
         const now = new Date().toISOString();
         
-        // Exclude Absent/Weekly Off employees from bulk logout query
         let query = supabase
             .from('attendance')
             .select('id, employee_id')
@@ -460,7 +451,6 @@ export default function AttendancePage() {
             const ids = activeRecords.map(r => r.id);
             const empIds = activeRecords.map(r => r.employee_id);
             
-            // Only update check_out_time, do not force status to 'Present'
             await supabase.from('attendance').update({ check_out_time: now }).in('id', ids);
             await supabase.from('employees').update({ is_checked_in: false, current_attendance_id: null, current_outlet_name: null }).in('id', empIds);
         }
@@ -489,7 +479,6 @@ export default function AttendancePage() {
     } catch (err: any) { setErrorMsg(err.message); } finally { setIsProcessing(false); }
   };
 
-  // --- FILTERING LOGIC ---
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
@@ -497,30 +486,23 @@ export default function AttendancePage() {
     const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
     if (!nameMatch) return false;
     
-    // Compare dates as strings (YYYY-MM-DD)
     const filterDateStr = dateFilter; 
     
-    // 1. Hide if employee joined strictly AFTER the selected filter date
     if (item.employee.join_date) {
         const joinDateStr = item.employee.join_date.split('T')[0];
         if (filterDateStr < joinDateStr) return false;
     }
     
-    // 2. Hide if employee left BEFORE the selected filter date
     if (item.employee.exit_date) {
         const exitDateStr = item.employee.exit_date.split('T')[0];
         if (filterDateStr > exitDateStr) return false;
     }
 
-    // 3. STRICT ACTIVE CHECK (UPDATED)
-    // Only hide if explicitly marked as inactive (false). If null/undefined, assume active.
     const todayStr = getISTDateString();
     if (filterDateStr >= todayStr && item.employee.is_active === false && !item.record) {
         return false;
     }
 
-    // 4. Ghost Check for Past Dates
-    // If inactive, no exit date, and no record, hide them.
     if (item.employee.is_active === false && !item.employee.exit_date && !item.record) {
          return false;
     }
@@ -533,7 +515,6 @@ export default function AttendancePage() {
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6 bg-slate-50/50 min-h-screen">
-      
       {/* 1. HEADER */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div>
@@ -596,7 +577,7 @@ export default function AttendancePage() {
         </div>
       </div>
 
-      {/* 2. MAIN DATA TABLE */}
+      {/* 2. DATA TABLE */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -619,7 +600,6 @@ export default function AttendancePage() {
                 filteredData.map(({ employee, record }) => {
                   const isWorking = record?.check_in_time && !record?.check_out_time;
                   
-                  // Timestamp Logic
                   let markedAtLabel = null;
                   if (record?.created_at) {
                       const time = new Date(record.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
@@ -668,7 +648,6 @@ export default function AttendancePage() {
                         <div 
                             className="flex items-center gap-3 cursor-pointer group"
                             onClick={() => handleOpenSummary(employee)}
-                            title="Click to view attendance summary"
                         >
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm group-hover:bg-indigo-600 transition-colors shadow-sm ${employee.is_active === false ? 'bg-gray-400' : employee.status === 'long_leave' ? 'bg-amber-400' : 'bg-slate-900'}`}>
                                 {employee.name.charAt(0)}
@@ -704,7 +683,6 @@ export default function AttendancePage() {
                                      >
                                          Mark Present
                                      </button>
-                                     
                                      {employee.status !== 'long_leave' && (
                                          <>
                                              <button 
@@ -712,12 +690,12 @@ export default function AttendancePage() {
                                                  onClick={() => handleMarkStatus(employee, 'Absent')}
                                                  className="px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded text-[10px] font-bold uppercase hover:bg-rose-50 transition-colors disabled:opacity-50"
                                              >
-                                                 {markingId === employee.id ? '...' : 'Absent'}
+                                                 Absent
                                              </button>
                                              <button 
                                                  disabled={!!markingId}
                                                  onClick={() => handleMarkStatus(employee, 'Half Day')}
-                                                 className="px-2 py-1 bg-white border border-amber-300 text-amber-700 rounded text-[10px] font-bold uppercase hover:bg-amber-50 transition-colors disabled:opacity-50 flex items-center gap-1"
+                                                 className="px-2 py-1 bg-white border border-amber-300 text-amber-700 rounded text-[10px] font-bold uppercase hover:bg-amber-50 transition-colors disabled:opacity-50"
                                              >
                                                  Half Day
                                              </button>
@@ -735,8 +713,8 @@ export default function AttendancePage() {
                            </div>
                          ) : (
                            <div>
-                               {/* Updated Display Logic: Prioritize !check_in_time as Absent */}
-                               {record.status === 'Absent' || !record.check_in_time ? (
+                               {/* FIX: If a record exists but lacks a check-in time, it is shown as Absent */}
+                               {(record.status === 'Absent' || !record.check_in_time) ? (
                                    <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
                                        <XCircle size={12} /> Absent
                                    </span>
@@ -759,29 +737,22 @@ export default function AttendancePage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                            {record?.early_checkout_requested && (
-                                <button onClick={() => { setRequestToApprove(record); setIsApprovalModalOpen(true); }} className="px-3 py-1.5 bg-amber-500 text-black rounded-lg text-[10px] font-bold uppercase">Review</button>
-                            )}
-                            
                             {record && (
                                 <button 
                                     onClick={() => handleEditClick(record)} 
                                     className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                    title="Edit Record"
                                 >
                                     <Edit size={18} />
                                 </button>
                             )}
-                            
                             {isWorking && record && record.status !== 'Absent' && record.status !== 'Weekly Off' && record.status !== 'Half Day' && (
                                 <>
-                                  <button onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-all" title="Force Logout"><LogOut size={18} /></button>
-                                  <button onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg transition-all" title="Transfer Outlet"><MapPin size={18} /></button>
+                                  <button onClick={() => { setRecordToLogout(record); setErrorMsg(''); setAdminPassword(''); setIsForceLogoutModalOpen(true); }} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg" title="Force Logout"><LogOut size={18} /></button>
+                                  <button onClick={() => { setRecordToTransfer(record); setNewOutletId(record.outlet_id); setIsOutletChangeModalOpen(true); setErrorMsg(''); setAdminPassword(''); }} className="p-2 text-slate-900 hover:bg-slate-100 rounded-lg" title="Transfer"><MapPin size={18} /></button>
                                 </>
                             )}
-
                             {record && (
-                                <button onClick={() => { setRecordToDelete(record); setErrorMsg(''); setAdminPassword(''); setIsSingleDeleteModalOpen(true); }} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all" title="Delete Record"><Trash2 size={18} /></button>
+                                <button onClick={() => { setRecordToDelete(record); setErrorMsg(''); setAdminPassword(''); setIsSingleDeleteModalOpen(true); }} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={18} /></button>
                             )}
                         </div>
                       </td>
@@ -804,16 +775,14 @@ export default function AttendancePage() {
             </div>
             <div className="p-6 space-y-4">
                 <p className="text-sm text-slate-900 font-medium">
-                    Editing record for <strong className="text-black font-extrabold">{recordToEdit.employee_name}</strong> on {recordToEdit.date}.
+                    Editing record for <strong className="text-black">{recordToEdit.employee_name}</strong>.
                 </p>
-                
-                {/* Status Dropdown */}
                 <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Status</label>
                     <select 
                         value={editForm.status} 
                         onChange={(e) => setEditForm(p => ({...p, status: e.target.value}))}
-                        className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-900 outline-none"
                     >
                         <option value="Present">Present</option>
                         <option value="Absent">Absent</option>
@@ -821,41 +790,37 @@ export default function AttendancePage() {
                         <option value="Half Day">Half Day</option>
                     </select>
                 </div>
-
-                {/* Times (Only if Present) */}
                 {editForm.status === 'Present' && (
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">In Time (IST)</label>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">In Time</label>
                             <input 
                                 type="time" 
                                 value={editForm.check_in_time} 
                                 onChange={(e) => setEditForm(p => ({...p, check_in_time: e.target.value}))}
-                                className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" 
+                                className="w-full px-3 py-2.5 border rounded-xl text-sm font-bold text-black" 
                             />
                         </div>
                         <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Out Time (IST)</label>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase mb-1 block">Out Time</label>
                             <input 
                                 type="time" 
                                 value={editForm.check_out_time} 
                                 onChange={(e) => setEditForm(p => ({...p, check_out_time: e.target.value}))}
-                                className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-900 outline-none focus:ring-2 focus:ring-blue-500" 
+                                className="w-full px-3 py-2.5 border rounded-xl text-sm font-bold text-black" 
                             />
                         </div>
                     </div>
                 )}
-
                 <div>
                     <label className="text-[10px] font-bold text-slate-900 uppercase mb-1 block">Admin PIN</label>
-                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border border-slate-900 rounded-xl text-sm font-bold text-black outline-none" placeholder="••••••••" />
+                    <input type="password" value={adminPassword} onChange={(e) => {setAdminPassword(e.target.value); setErrorMsg('');}} className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" placeholder="••••••••" />
                     {errorMsg && <p className="text-[10px] text-rose-600 font-bold mt-1 uppercase">{errorMsg}</p>}
                 </div>
-                
                 <div className="flex gap-3 pt-2">
-                    <button onClick={() => setIsEditModalOpen(false)} className="flex-1 py-2.5 text-slate-900 font-bold text-xs uppercase bg-slate-100 rounded-xl transition-colors">Cancel</button>
-                    <button onClick={handleSaveEdit} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-blue-700 flex items-center justify-center gap-2">
-                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3" /> : <><Save size={16} /> Save Changes</>}
+                    <button onClick={() => setIsEditModalOpen(false)} className="flex-1 py-2.5 font-bold text-xs uppercase bg-slate-100 rounded-xl">Cancel</button>
+                    <button onClick={handleSaveEdit} disabled={isProcessing || !adminPassword} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-xs uppercase">
+                        {isProcessing ? <Loader2 className="animate-spin h-3 w-3 inline" /> : 'Save Changes'}
                     </button>
                 </div>
             </div>
