@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, FormEvent } from 'react';
+import { useState, useEffect, useCallback, FormEvent, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
@@ -1482,64 +1482,89 @@ export default function PackagesPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-  {historyRows.map((h, idx) => {
-    const isPurchase = h._raw?.took_package || h._raw?.tookPackage;
-    
-    return (
-      <tr
-        key={h.id || `${h.mobile}-${idx}`}
-        className={
-          h.is_package_customer
-            ? 'bg-indigo-50/50'
-            : 'hover:bg-gray-50'
-        }
-      >
-        <td className="px-4 py-2 whitespace-nowrap">
-          <div className="font-medium text-gray-900">
-            {fmtDate(h.date)}
-          </div>
-          <div className="text-xs text-gray-500">
-            {fmtTime(h.check_in_time)}
-          </div>
-        </td>
-        <td className="px-4 py-2">
-          {/* 1. Show the actual treatment name */}
-          <span className="text-gray-900 font-medium">
-            {h.treatment ?? '—'}
-          </span>
+                      {historyRows.map((h, idx) => {
+                        const isPurchase = h._raw?.took_package || h._raw?.tookPackage;
+                        const guests = Array.isArray(h._raw?.group_customers) ? h._raw.group_customers : [];
 
-          {/* 2. Show "Package Taken" badge on the side if applicable */}
-          {isPurchase && (
-            <span className="ml-2 text-xs bg-green-100 text-green-800 border border-green-200 px-2 py-0.5 rounded-md font-bold">
-              Package Taken
-            </span>
-          )}
+                        return (
+                          <Fragment key={h.id || idx}>
+                            <tr
+                              className={
+                                h.is_package_customer
+                                  ? 'bg-indigo-50/50'
+                                  : 'hover:bg-gray-50'
+                              }
+                            >
+                              <td className="px-4 py-2 whitespace-nowrap">
+                                <div className="font-medium text-gray-900">
+                                  {fmtDate(h.date)}
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {fmtTime(h.check_in_time)}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2">
+                                <span className="text-gray-900 font-medium">
+                                  {h.treatment ?? '—'}
+                                </span>
+                                {isPurchase && (
+                                  <span className="ml-2 text-xs bg-green-100 text-green-800 border border-green-200 px-2 py-0.5 rounded-md font-bold">
+                                    Package Taken
+                                  </span>
+                                )}
+                                {h.is_package_customer && (
+                                  <span className="ml-2 text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-md">
+                                    Redeemed
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                                {fmtDuration(h.session_hours)}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                                {h.therapist_name ?? '—'}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                                {h.outlet_name ?? '—'}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-right text-gray-900">
+                                {h.amount_paid
+                                  ? `₹${(h.amount_paid / 100).toLocaleString()}`
+                                  : '—'}
+                              </td>
+                            </tr>
 
-          {/* 3. Show "Redeemed" badge if applicable */}
-          {h.is_package_customer && (
-            <span className="ml-2 text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-md">
-              Redeemed
-            </span>
-          )}
-        </td>
-        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-          {fmtDuration(h.session_hours)}
-        </td>
-        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-          {h.therapist_name ?? '—'}
-        </td>
-        <td className="px-4 py-2 whitespace-nowrap text-gray-900">
-          {h.outlet_name ?? '—'}
-        </td>
-        <td className="px-4 py-2 whitespace-nowrap text-right text-gray-900">
-          {h.amount_paid
-            ? `₹${(h.amount_paid / 100).toLocaleString()}`
-            : '—'}
-        </td>
-      </tr>
-    );
-  })}
-</tbody>
+                            {/* Render Guests (Indented Rows) */}
+                            {guests.map((g: any, gIdx: number) => (
+                                <tr key={`${h.id}-guest-${gIdx}`} className="bg-gray-50/30">
+                                    <td className="px-4 py-2 pl-10 whitespace-nowrap relative">
+                                        <div className="absolute left-4 top-0 bottom-0 border-l-2 border-gray-200"></div>
+                                        <div className="absolute left-4 top-1/2 w-4 border-t-2 border-gray-200"></div>
+                                        <div className="font-medium text-gray-700 text-xs">
+                                            {g.name || 'Guest'} <span className="text-gray-400 font-normal">(Guest)</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-2 text-xs text-gray-600">
+                                        {g.treatment || '—'}
+                                    </td>
+                                    <td className="px-4 py-2 text-xs text-gray-600">
+                                        {fmtDuration(g.sessionHours ?? g.session_hours)}
+                                    </td>
+                                    <td className="px-4 py-2 text-xs text-gray-600">
+                                        {g.therapist_name || '—'}
+                                    </td>
+                                    <td className="px-4 py-2 text-xs text-gray-400">
+                                        {h.outlet_name ?? '—'}
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-xs text-gray-400">
+                                        —
+                                    </td>
+                                </tr>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
                   </table>
                 </div>
               )}

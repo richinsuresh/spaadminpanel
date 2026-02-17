@@ -16,6 +16,7 @@ type DueSale = {
   check_in_time: string | null;
   session_hours: number | null; 
   check_out_time: string | null;
+  group_customers?: any[] | null; // Added to identify group sales
 };
 
 const fmtTime = (dateString: string | null) => {
@@ -74,7 +75,8 @@ export default function SaleReminderPoller() {
     try {
       const { data, error } = await supabase
         .from('customers') 
-        .select('id, name, check_in_time, session_hours, check_out_time')
+        // FIX: Added group_customers to selection
+        .select('id, name, check_in_time, session_hours, check_out_time, group_customers')
         .eq('date', today);
         
       if (error) throw error;
@@ -84,6 +86,11 @@ export default function SaleReminderPoller() {
       if (ArrayOf(data)) {
           for (const sale of data) {
               const s = sale as DueSale;
+
+              // FIX: Skip alert if it is a Group Sale
+              if (s.group_customers && Array.isArray(s.group_customers) && s.group_customers.length > 0) {
+                  continue;
+              }
 
               if (
                   s.check_in_time && 

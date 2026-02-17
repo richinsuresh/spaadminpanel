@@ -57,11 +57,16 @@ async function processPayload(payload: any) {
     if (payload.isPackageCustomer && payload.packageId) {
       let hoursToDeduct = Number(payload.sessionHours || 0);
       
+      // Calculate total hours including group members
       if (payload.group_customers && Array.isArray(payload.group_customers)) {
         payload.group_customers.forEach((guest: any) => {
-          hoursToDeduct += Number(guest.sessionHours || 0);
+          // FIX: Check both sessionHours and session_hours to be safe
+          const guestHours = Number(guest.sessionHours ?? guest.session_hours ?? 0);
+          hoursToDeduct += guestHours;
         });
       }
+
+      console.log(`[Package Deduct] Package ID: ${payload.packageId}, Total Hours: ${hoursToDeduct}`);
 
       if (hoursToDeduct > 0) {
         let success = false;
@@ -83,7 +88,9 @@ async function processPayload(payload: any) {
             const currentRemaining = parseFloat(activePackage.remaining_hours || '0');
             const currentUsed = parseFloat(activePackage.used_hours || '0');
 
-            if (currentRemaining <= 0) throw new Error('Package has 0 hours remaining. Cannot redeem.');
+            if (currentRemaining < hoursToDeduct) {
+                throw new Error(`Insufficient package balance. Needed: ${hoursToDeduct}, Available: ${currentRemaining}`);
+            }
 
             const newRemainingHours = currentRemaining - hoursToDeduct;
             const newUsedHours = currentUsed + hoursToDeduct;
