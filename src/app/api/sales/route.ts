@@ -25,9 +25,10 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const outletId = searchParams.get('outletId') || null;
 
+    // Added 'meta' to select so you can see item details
     const query = supabase
       .from('sales')
-      .select('id, invoice_no, amount, date, outlet_id, customer_id, created_at')
+      .select('id, invoice_no, amount, date, outlet_id, customer_id, meta, created_at')
       .order('created_at', { ascending: false });
 
     if (outletId) query.eq('outlet_id', outletId);
@@ -127,12 +128,32 @@ export async function POST(req: NextRequest) {
           }
 
           const updateObj: any = {};
-          if (payload.invoiceNo !== undefined) updateObj.invoice_no = payload.invoiceNo;
-          if (payload.amount !== undefined) updateObj.amount = payload.amount;
-          if (payload.date !== undefined) updateObj.date = payload.date;
-          if (payload.outlet_id !== undefined) updateObj.outlet_id = payload.outlet_id;
-          if (payload.customer_id !== undefined) updateObj.customer_id = payload.customer_id;
-          if (payload.meta !== undefined) updateObj.meta = payload.meta;
+          
+          // Helper to get value from either casing
+          const getVal = (k1: string, k2?: string) => {
+             if (payload[k1] !== undefined) return payload[k1];
+             if (k2 && payload[k2] !== undefined) return payload[k2];
+             return undefined;
+          };
+
+          const inv = getVal('invoiceNo', 'invoice_no');
+          if (inv !== undefined) updateObj.invoice_no = inv;
+
+          const amt = getVal('amount', 'total');
+          if (amt !== undefined) updateObj.amount = amt;
+
+          const dt = getVal('date');
+          if (dt !== undefined) updateObj.date = dt;
+
+          const outId = getVal('outletId', 'outlet_id');
+          if (outId !== undefined) updateObj.outlet_id = outId;
+
+          const custId = getVal('customerId', 'customer_id');
+          if (custId !== undefined) updateObj.customer_id = custId;
+
+          const meta = getVal('meta', 'items');
+          if (meta !== undefined) updateObj.meta = meta;
+
           if (op_uuid) updateObj.op_uuid = op_uuid;
 
           let query = supabase.from('sales').update(updateObj);

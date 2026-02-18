@@ -3,8 +3,8 @@ import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * GET: existing packages listing (keeps your existing behavior)
- * POST: accepts { bulk: [ { op, op_uuid, payload }, ... ] }
+ * GET: existing packages listing
+ * POST: bulk handler { bulk: [ { op, op_uuid, payload }, ... ] }
  */
 
 // Helper to log activity
@@ -83,13 +83,19 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // Normalize inputs
+          const totalHours = payload.totalHours ?? payload.total_hours ?? payload.totalPackageHours ?? null;
+          const usedHours = payload.usedHours ?? payload.used_hours ?? 0;
+          // Auto-calculate remaining if missing
+          const remainingHours = payload.remainingHours ?? payload.remaining_hours ?? (totalHours !== null ? totalHours - usedHours : null);
+
           const insertObj: any = {
             name: payload.name,
             mobile: payload.mobile,
             package_amount: payload.packageAmount ?? payload.package_amount ?? 0,
-            total_hours: payload.totalHours ?? payload.total_hours ?? payload.totalPackageHours ?? null,
-            remaining_hours: payload.remainingHours ?? payload.remaining_hours ?? null,
-            used_hours: payload.usedHours ?? payload.used_hours ?? 0,
+            total_hours: totalHours,
+            remaining_hours: remainingHours,
+            used_hours: usedHours,
             expiry_date: payload.expiryDate ?? payload.expiry_date ?? null,
             status: payload.status ?? 'active',
             package_sold_by: payload.packageSoldBy ?? payload.package_sold_by ?? null,
@@ -143,18 +149,48 @@ export async function POST(req: NextRequest) {
           }
 
           const updateObj: any = {};
-          if (payload.name !== undefined) updateObj.name = payload.name;
-          if (payload.mobile !== undefined) updateObj.mobile = payload.mobile;
-          if (payload.packageAmount !== undefined) updateObj.package_amount = payload.packageAmount;
-          if (payload.totalHours !== undefined) updateObj.total_hours = payload.totalHours;
-          if (payload.remainingHours !== undefined) updateObj.remaining_hours = payload.remainingHours;
-          if (payload.usedHours !== undefined) updateObj.used_hours = payload.usedHours;
-          if (payload.expiryDate !== undefined) updateObj.expiry_date = payload.expiryDate;
-          if (payload.status !== undefined) updateObj.status = payload.status;
-          if (payload.packageSoldBy !== undefined) updateObj.package_sold_by = payload.packageSoldBy;
-          if (payload.paymentMethod !== undefined) updateObj.payment_method = payload.paymentMethod;
-          if (payload.startDate !== undefined) updateObj.start_date = payload.startDate;
-          // Ensure op_uuid stored (so future duplicates are detected)
+          
+          // Helper to check both camelCase and snake_case
+          const getVal = (k1: string, k2?: string) => {
+             if (payload[k1] !== undefined) return payload[k1];
+             if (k2 && payload[k2] !== undefined) return payload[k2];
+             return undefined;
+          };
+
+          const name = getVal('name');
+          if (name !== undefined) updateObj.name = name;
+
+          const mobile = getVal('mobile');
+          if (mobile !== undefined) updateObj.mobile = mobile;
+
+          const pAmt = getVal('packageAmount', 'package_amount');
+          if (pAmt !== undefined) updateObj.package_amount = pAmt;
+
+          const tHours = getVal('totalHours', 'total_hours');
+          if (tHours !== undefined) updateObj.total_hours = tHours;
+
+          const rHours = getVal('remainingHours', 'remaining_hours');
+          if (rHours !== undefined) updateObj.remaining_hours = rHours;
+
+          const uHours = getVal('usedHours', 'used_hours');
+          if (uHours !== undefined) updateObj.used_hours = uHours;
+
+          const expDate = getVal('expiryDate', 'expiry_date');
+          if (expDate !== undefined) updateObj.expiry_date = expDate;
+
+          const stat = getVal('status');
+          if (stat !== undefined) updateObj.status = stat;
+
+          const pSoldBy = getVal('packageSoldBy', 'package_sold_by');
+          if (pSoldBy !== undefined) updateObj.package_sold_by = pSoldBy;
+
+          const payMethod = getVal('paymentMethod', 'payment_method');
+          if (payMethod !== undefined) updateObj.payment_method = payMethod;
+
+          const sDate = getVal('startDate', 'start_date');
+          if (sDate !== undefined) updateObj.start_date = sDate;
+          
+          // Ensure op_uuid stored
           if (op_uuid) updateObj.op_uuid = op_uuid;
 
           const query = supabase.from('packages').update(updateObj);
