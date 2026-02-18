@@ -185,6 +185,9 @@ export default function PackagesPage() {
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  
+  // NEW: Computed usage state to fix discrepancy
+  const [computedUsage, setComputedUsage] = useState<number | null>(null);
 
   const normalizeRow = (row: any): PackageCustomer => {
     const safeNumber = (v: any) => {
@@ -612,6 +615,7 @@ export default function PackagesPage() {
     setHistoryLoading(true);
     setHistoryError(null);
     setHistoryRows([]);
+    setComputedUsage(null); // Reset calculation
 
     try {
       const { data, error } = await supabase
@@ -639,6 +643,13 @@ export default function PackagesPage() {
         });
 
       setHistoryRows(rows);
+      
+      // FIX: Calculate total used hours dynamically from the filtered rows.
+      // This ensures that even if the backend 'packages' table is missing the initial session,
+      // the UI shows the correct sum based on the actual history rows visible to the user.
+      const realUsage = rows.reduce((acc, curr) => acc + (curr.session_hours || 0), 0);
+      setComputedUsage(realUsage);
+      
     } catch (e: any) {
       console.error('Unexpected history fetch error:', e);
       setHistoryError('Unexpected error loading history');
@@ -660,6 +671,20 @@ export default function PackagesPage() {
     setHistoryRows([]);
     setHistoryLoading(false);
     setHistoryError(null);
+    setComputedUsage(null);
+  };
+
+  // Helper to determine what usage to show in the modal
+  const getDisplayedUsage = () => {
+    if (!selectedPackage) return { used: 0, total: 0, remaining: 0 };
+    
+    // If we have a computed usage from history, use that. Otherwise fallback to DB value.
+    const used = computedUsage !== null ? computedUsage : selectedPackage.used_hours;
+    const total = selectedPackage.total_hours;
+    // Remaining is strictly Total - Used
+    const remaining = Math.max(0, total - used); 
+    
+    return { used, total, remaining };
   };
 
   return (
@@ -1379,59 +1404,67 @@ export default function PackagesPage() {
             </div>
 
             {/* Package summary */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-500 uppercase">Status</p>
-                <p
-                  className={`font-bold ${
-                    selectedPackage.status === 'active'
-                      ? 'text-green-600'
-                      : 'text-red-600'
-                  }`}
-                >
-                  {String(selectedPackage.status).toUpperCase()}
-                </p>
-              </div>
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-500 uppercase">Start Date</p>
-                <p className="font-bold text-gray-800">
-                  {formatDate(selectedPackage.start_date)}
-                </p>
-              </div>
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-500 uppercase">
-                  Remaining Hours
-                </p>
-                <p className="font-bold text-gray-800">
-                  {fmtDuration(selectedPackage.remaining_hours)}
-                </p>
-              </div>
-            </div>
+            {(() => {
+                const { used, total, remaining } = getDisplayedUsage();
+                
+                return (
+                    <>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                          <div className="p-4 bg-gray-50 rounded-lg">
+                            <p className="text-xs text-gray-500 uppercase">Status</p>
+                            <p
+                              className={`font-bold ${
+                                selectedPackage.status === 'active'
+                                  ? 'text-green-600'
+                                  : 'text-red-600'
+                              }`}
+                            >
+                              {String(selectedPackage.status).toUpperCase()}
+                            </p>
+                          </div>
+                          <div className="p-4 bg-gray-50 rounded-lg">
+                            <p className="text-xs text-gray-500 uppercase">Start Date</p>
+                            <p className="font-bold text-gray-800">
+                              {formatDate(selectedPackage.start_date)}
+                            </p>
+                          </div>
+                          <div className="p-4 bg-gray-50 rounded-lg">
+                            <p className="text-xs text-gray-500 uppercase">
+                              Remaining Hours
+                            </p>
+                            <p className="font-bold text-gray-800">
+                              {fmtDuration(remaining)}
+                            </p>
+                          </div>
+                        </div>
 
-            <div className="space-y-4 mb-8">
-              <div>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-gray-600">Usage Progress</span>
-                  <span className="font-medium text-gray-900">
-                    {fmtDuration(selectedPackage.used_hours)} /{' '}
-                    {fmtDuration(selectedPackage.total_hours)}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-3">
-                  <div
-                    className="h-3 rounded-full bg-blue-600"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (selectedPackage.used_hours /
-                          (selectedPackage.total_hours || 1)) *
-                          100
-                      )}%`,
-                    }}
-                  ></div>
-                </div>
-              </div>
-            </div>
+                        <div className="space-y-4 mb-8">
+                          <div>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-gray-600">Usage Progress</span>
+                              <span className="font-medium text-gray-900">
+                                {fmtDuration(used)} /{' '}
+                                {fmtDuration(total)}
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-3">
+                              <div
+                                className="h-3 rounded-full bg-blue-600"
+                                style={{
+                                  width: `${Math.min(
+                                    100,
+                                    (used /
+                                      (total || 1)) *
+                                      100
+                                  )}%`,
+                                }}
+                              ></div>
+                            </div>
+                          </div>
+                        </div>
+                    </>
+                );
+            })()}
 
             {/* NEW: CLIENT VISIT HISTORY SECTION */}
             <div className="border-t pt-4">
