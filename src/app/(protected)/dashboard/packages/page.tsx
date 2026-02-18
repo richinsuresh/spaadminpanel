@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, FormEvent, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { User, Calendar as CalendarIcon, CheckSquare, Square } from 'lucide-react'; // Added icons
+import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw } from 'lucide-react'; // Added icons
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 /* ===================== TYPES ===================== */
@@ -24,7 +24,6 @@ type PackageCustomer = {
   created_at?: string | null;
 };
 
-// Same structure idea as search page, but minimal for this page
 type HistoryRow = {
   id: string;
   date: string | null;
@@ -41,7 +40,7 @@ type HistoryRow = {
   _raw?: any;
 };
 
-//* ===================== HELPERS ===================== */
+/* ===================== HELPERS ===================== */
 
 const toInputDate = (dateString: string | null): string => {
   if (!dateString) return '';
@@ -61,7 +60,6 @@ const formatDate = (dateString: string | null) => {
   });
 };
 
-// Short date format for history table
 const fmtDate = (iso: string | null) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -69,7 +67,6 @@ const fmtDate = (iso: string | null) => {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-// Time format for history table
 const fmtTime = (iso: string | null) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -142,7 +139,7 @@ export default function PackagesPage() {
   
   // Filters
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired' | 'expiring_soon'>('all');
-  const [amountFilter, setAmountFilter] = useState<string>('all'); // NEW: Amount Filter
+  const [amountFilter, setAmountFilter] = useState<string>('all');
   const [outletFilter, setOutletFilter] = useState('all');
   
   const [loading, setLoading] = useState(true);
@@ -151,14 +148,14 @@ export default function PackagesPage() {
 
   const outlets = ['all', ...OUTLETS.map((o) => o.name)];
 
-  // Selection State (NEW)
+  // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Modal States
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false); // NEW: Bulk Edit Modal
+  const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState<PackageCustomer | null>(null);
 
   // Form States
@@ -171,7 +168,7 @@ export default function PackagesPage() {
   const [deleteRemark, setDeleteRemark] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   
-  // Bulk Edit Form States (NEW)
+  // Bulk Edit Form States
   const [bulkExpiryDate, setBulkExpiryDate] = useState('');
   const [bulkPassword, setBulkPassword] = useState('');
   const [bulkRemark, setBulkRemark] = useState('');
@@ -180,13 +177,14 @@ export default function PackagesPage() {
 
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Sync State
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  // NEW: history for the selected package client
+  // History State
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  
-  // NEW: Computed usage state to fix discrepancy
   const [computedUsage, setComputedUsage] = useState<number | null>(null);
 
   const normalizeRow = (row: any): PackageCustomer => {
@@ -311,7 +309,7 @@ export default function PackagesPage() {
       );
     }
 
-    // NEW: Amount Filter Logic
+    // Amount Filter Logic
     if (amountFilter !== 'all') {
         result = result.filter((p) => {
             const amt = p.package_amount / 100; // stored as paise
@@ -327,7 +325,6 @@ export default function PackagesPage() {
     setFilteredPackages(result);
   }, [searchTerm, statusFilter, outletFilter, amountFilter, packages]);
 
-  // NEW: Selection Handlers
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
         setSelectedIds(new Set(filteredPackages.map(p => p.id)));
@@ -344,7 +341,6 @@ export default function PackagesPage() {
     setSelectedIds(newSet);
   };
 
-  // NEW: Bulk Edit Handler
   const handleBulkEditSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (selectedIds.size === 0) return;
@@ -439,13 +435,10 @@ export default function PackagesPage() {
       name: pkg.name,
       mobile: pkg.mobile,
       package_amount: pkg.package_amount / 100,
-      
-      // Store split values for the form inputs
       total_hours_h: totalH,
       total_hours_m: totalM,
       used_hours_h: usedH,
       used_hours_m: usedM,
-
       remaining_hours: pkg.remaining_hours,
       start_date: toInputDate(pkg.start_date),
       expiry_date: toInputDate(pkg.expiry_date),
@@ -486,10 +479,8 @@ export default function PackagesPage() {
     try {
       const before = { ...selectedPackage };
 
-      // Re-calculate decimals from the split form fields
       const total_hours = (Number(editFormData.total_hours_h) || 0) + (Number(editFormData.total_hours_m) || 0) / 60;
       const used_hours = (Number(editFormData.used_hours_h) || 0) + (Number(editFormData.used_hours_m) || 0) / 60;
-      
       const remaining_hours = total_hours - used_hours;
 
       const updates: any = {
@@ -507,7 +498,6 @@ export default function PackagesPage() {
         outlet: editFormData.outlet,
       };
 
-      // 1. Update the Package Record
       const { error } = await supabase
         .from('packages')
         .update(updates)
@@ -515,17 +505,14 @@ export default function PackagesPage() {
 
       if (error) throw error;
 
-      // 2. [NEW] Sync changes to Sales History (Customers Table)
-      // If Name or Mobile changed, update all historical visits for this client
       if (before.mobile !== updates.mobile || before.name !== updates.name) {
-         // Update all sales records where mobile matched the OLD mobile
          const { error: syncError } = await supabase
             .from('customers')
             .update({ 
                 name: updates.name, 
                 mobile: updates.mobile 
             })
-            .eq('mobile', before.mobile); // Match by OLD mobile to migrate history
+            .eq('mobile', before.mobile);
             
          if (syncError) {
              console.error("Warning: Failed to sync changes to sales history", syncError);
@@ -615,7 +602,7 @@ export default function PackagesPage() {
     setHistoryLoading(true);
     setHistoryError(null);
     setHistoryRows([]);
-    setComputedUsage(null); // Reset calculation
+    setComputedUsage(null);
 
     try {
       const { data, error } = await supabase
@@ -636,17 +623,13 @@ export default function PackagesPage() {
         .map(normalizeHistoryRow)
         .filter(r => {
             const isRedemption = r.is_package_customer;
-            // Check raw data for purchase flag
             const isPurchase = r._raw?.took_package || r._raw?.tookPackage;
-            
             return isRedemption || isPurchase;
         });
 
       setHistoryRows(rows);
       
-      // FIX: Calculate total used hours dynamically from the filtered rows.
-      // This ensures that even if the backend 'packages' table is missing the initial session,
-      // the UI shows the correct sum based on the actual history rows visible to the user.
+      // Calculate REAL usage from history
       const realUsage = rows.reduce((acc, curr) => acc + (curr.session_hours || 0), 0);
       setComputedUsage(realUsage);
       
@@ -674,18 +657,39 @@ export default function PackagesPage() {
     setComputedUsage(null);
   };
 
-  // Helper to determine what usage to show in the modal
-  const getDisplayedUsage = () => {
-    if (!selectedPackage) return { used: 0, total: 0, remaining: 0 };
-    
-    // If we have a computed usage from history, use that. Otherwise fallback to DB value.
-    const used = computedUsage !== null ? computedUsage : selectedPackage.used_hours;
-    const total = selectedPackage.total_hours;
-    // Remaining is strictly Total - Used
-    const remaining = Math.max(0, total - used); 
-    
-    return { used, total, remaining };
+  // Sync Handler
+  const handleSyncUsage = async () => {
+    if (!selectedPackage || computedUsage === null) return;
+    setIsSyncing(true);
+    try {
+        const newUsed = computedUsage;
+        const newRemaining = Math.max(0, selectedPackage.total_hours - newUsed);
+        
+        const { error } = await supabase
+            .from('packages')
+            .update({ 
+                used_hours: newUsed,
+                remaining_hours: newRemaining
+            })
+            .eq('id', selectedPackage.id);
+            
+        if (error) throw error;
+        
+        logActivity('sync_package_usage', `Synced package usage for ${selectedPackage.name}. Old Used: ${selectedPackage.used_hours}, New Used: ${newUsed}`);
+        
+        await fetchPackages(); 
+        setSelectedPackage(prev => prev ? ({...prev, used_hours: newUsed, remaining_hours: newRemaining}) : null);
+        
+    } catch (err: any) {
+        alert('Failed to sync: ' + err.message);
+    } finally {
+        setIsSyncing(false);
+    }
   };
+
+  const dbUsed = selectedPackage?.used_hours ?? 0;
+  const historyUsed = computedUsage ?? dbUsed;
+  const isMismatch = Math.abs(dbUsed - historyUsed) > 0.05;
 
   return (
     <div>
@@ -694,7 +698,6 @@ export default function PackagesPage() {
         <h1 className="text-2xl font-bold text-gray-800">All Package Clients</h1>
         <div className="flex flex-col sm:flex-row gap-3">
           
-          {/* NEW: Bulk Edit Button */}
           {selectedIds.size > 0 && (
               <button
                 onClick={() => {
@@ -776,7 +779,6 @@ export default function PackagesPage() {
             </select>
           </div>
           
-          {/* NEW: Amount Filter */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Package Value
@@ -813,7 +815,6 @@ export default function PackagesPage() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  {/* NEW: Checkbox Header */}
                   <th className="px-4 py-3 text-left">
                       <input 
                         type="checkbox" 
@@ -850,12 +851,11 @@ export default function PackagesPage() {
                     className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(customer.id) ? 'bg-blue-50' : ''}`}
                     onClick={() => handleRowClick(customer)}
                   >
-                    {/* NEW: Checkbox Row */}
                     <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                         <input 
                             type="checkbox"
                             checked={selectedIds.has(customer.id)}
-                            onChange={(e) => {}} // handled by div click or manual separate handler
+                            onChange={(e) => {}}
                             onClick={(e) => handleSelectRow(customer.id, e)}
                             className="w-4 h-4 text-blue-600 rounded cursor-pointer"
                         />
@@ -957,7 +957,7 @@ export default function PackagesPage() {
         </div>
       )}
 
-      {/* NEW: Bulk Edit Modal */}
+      {/* Bulk Edit Modal */}
       {isBulkEditModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <form
@@ -1188,7 +1188,7 @@ export default function PackagesPage() {
                 />
               </div>
 
-            {/* Total Hours Split Fields */}
+              {/* Total Hours Split Fields */}
               <div>
                 <label className="text-xs uppercase font-bold text-gray-500">Total Duration</label>
                 <div className="flex gap-2">
@@ -1403,68 +1403,88 @@ export default function PackagesPage() {
               </div>
             </div>
 
-            {/* Package summary */}
-            {(() => {
-                const { used, total, remaining } = getDisplayedUsage();
-                
-                return (
-                    <>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                          <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Status</p>
-                            <p
-                              className={`font-bold ${
-                                selectedPackage.status === 'active'
-                                  ? 'text-green-600'
-                                  : 'text-red-600'
-                              }`}
-                            >
-                              {String(selectedPackage.status).toUpperCase()}
-                            </p>
-                          </div>
-                          <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">Start Date</p>
-                            <p className="font-bold text-gray-800">
-                              {formatDate(selectedPackage.start_date)}
-                            </p>
-                          </div>
-                          <div className="p-4 bg-gray-50 rounded-lg">
-                            <p className="text-xs text-gray-500 uppercase">
-                              Remaining Hours
-                            </p>
-                            <p className="font-bold text-gray-800">
-                              {fmtDuration(remaining)}
-                            </p>
-                          </div>
-                        </div>
+            {/* MISMATCH WARNING & SYNC BUTTON */}
+            {isMismatch && (
+              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                    <AlertTriangle className="text-amber-600 mt-1" size={20} />
+                    <div>
+                        <h4 className="font-bold text-amber-800">Data Mismatch Detected</h4>
+                        <p className="text-sm text-amber-700">
+                            <strong>Database</strong> says {fmtDuration(dbUsed)} used.<br/>
+                            <strong>History</strong> shows {fmtDuration(historyUsed)} used.
+                        </p>
+                    </div>
+                </div>
+                <button
+                    onClick={handleSyncUsage}
+                    disabled={isSyncing}
+                    className="px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 flex items-center gap-2"
+                >
+                    {isSyncing ? (
+                        <RefreshCw className="animate-spin" size={16} />
+                    ) : (
+                        <RefreshCw size={16} />
+                    )}
+                    {isSyncing ? 'Syncing...' : 'Sync to Database'}
+                </button>
+              </div>
+            )}
 
-                        <div className="space-y-4 mb-8">
-                          <div>
-                            <div className="flex justify-between text-sm mb-1">
-                              <span className="text-gray-600">Usage Progress</span>
-                              <span className="font-medium text-gray-900">
-                                {fmtDuration(used)} /{' '}
-                                {fmtDuration(total)}
-                              </span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-3">
-                              <div
-                                className="h-3 rounded-full bg-blue-600"
-                                style={{
-                                  width: `${Math.min(
-                                    100,
-                                    (used /
-                                      (total || 1)) *
-                                      100
-                                  )}%`,
-                                }}
-                              ></div>
-                            </div>
-                          </div>
-                        </div>
-                    </>
-                );
-            })()}
+            {/* Package summary using Computed Values if Sync performed or just display */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">Status</p>
+                <p
+                  className={`font-bold ${
+                    selectedPackage.status === 'active'
+                      ? 'text-green-600'
+                      : 'text-red-600'
+                  }`}
+                >
+                  {String(selectedPackage.status).toUpperCase()}
+                </p>
+              </div>
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">Start Date</p>
+                <p className="font-bold text-gray-800">
+                  {formatDate(selectedPackage.start_date)}
+                </p>
+              </div>
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase">
+                  Remaining Hours (Database)
+                </p>
+                <p className="font-bold text-gray-800">
+                  {fmtDuration(selectedPackage.remaining_hours)}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4 mb-8">
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-600">Usage Progress (Database)</span>
+                  <span className="font-medium text-gray-900">
+                    {fmtDuration(selectedPackage.used_hours)} /{' '}
+                    {fmtDuration(selectedPackage.total_hours)}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    className="h-3 rounded-full bg-blue-600"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (selectedPackage.used_hours /
+                          (selectedPackage.total_hours || 1)) *
+                          100
+                      )}%`,
+                    }}
+                  ></div>
+                </div>
+              </div>
+            </div>
 
             {/* NEW: CLIENT VISIT HISTORY SECTION */}
             <div className="border-t pt-4">
