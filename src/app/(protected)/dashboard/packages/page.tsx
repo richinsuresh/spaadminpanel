@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, FormEvent, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw } from 'lucide-react'; // Added icons
+import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 /* ===================== TYPES ===================== */
@@ -657,31 +657,45 @@ export default function PackagesPage() {
     setComputedUsage(null);
   };
 
-  // Sync Handler
-  const handleSyncUsage = async () => {
+  // Sync Handler: Add missing hours to history to match the database
+  const handleSyncToHistory = async () => {
     if (!selectedPackage || computedUsage === null) return;
+    
+    const difference = selectedPackage.used_hours - computedUsage;
+    
+    if (difference === 0) {
+        alert("Usage already matches.");
+        return;
+    }
+
     setIsSyncing(true);
     try {
-        const newUsed = computedUsage;
-        const newRemaining = Math.max(0, selectedPackage.total_hours - newUsed);
-        
+        // Create an adjustment entry in the customers (history) table
         const { error } = await supabase
-            .from('packages')
-            .update({ 
-                used_hours: newUsed,
-                remaining_hours: newRemaining
-            })
-            .eq('id', selectedPackage.id);
+            .from('customers')
+            .insert([{
+                name: selectedPackage.name,
+                mobile: selectedPackage.mobile,
+                outlet: selectedPackage.outlet,
+                date: new Date().toISOString().split('T')[0],
+                treatment: 'Package Usage Adjustment',
+                session_hours: difference, // Can be positive or negative to balance the math
+                amount_paid: 0,
+                is_package_customer: true,
+                therapist_name: 'System', // CORRECTED COLUMN NAME
+                check_in_time: new Date().toISOString(),
+                check_out_time: new Date().toISOString()
+            }]);
             
         if (error) throw error;
         
-        logActivity('sync_package_usage', `Synced package usage for ${selectedPackage.name}. Old Used: ${selectedPackage.used_hours}, New Used: ${newUsed}`);
+        logActivity('sync_package_history', `Added a ${difference}h adjustment to history for ${selectedPackage.name}.`);
         
-        await fetchPackages(); 
-        setSelectedPackage(prev => prev ? ({...prev, used_hours: newUsed, remaining_hours: newRemaining}) : null);
+        // Refresh the history so the UI updates
+        await fetchHistoryForMobile(selectedPackage.mobile);
         
     } catch (err: any) {
-        alert('Failed to sync: ' + err.message);
+        alert('Failed to sync history: ' + err.message);
     } finally {
         setIsSyncing(false);
     }
@@ -1417,7 +1431,7 @@ export default function PackagesPage() {
                     </div>
                 </div>
                 <button
-                    onClick={handleSyncUsage}
+                    onClick={handleSyncToHistory}
                     disabled={isSyncing}
                     className="px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 flex items-center gap-2"
                 >
@@ -1426,7 +1440,7 @@ export default function PackagesPage() {
                     ) : (
                         <RefreshCw size={16} />
                     )}
-                    {isSyncing ? 'Syncing...' : 'Sync to Database'}
+                    {isSyncing ? 'Syncing...' : 'Sync History to Match DB'}
                 </button>
               </div>
             )}
