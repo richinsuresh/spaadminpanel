@@ -44,7 +44,6 @@ export default function ClientForm() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
 
-  // Helper for current time HH:mm
   const getCurrentTime = () => {
     const now = new Date();
     return now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -69,6 +68,10 @@ export default function ClientForm() {
     therapistName: '', 
     therapistName2: '', 
     room: '',
+    clientType: 'new', // NEW CLIENT TYPE
+    splitCash: 0, // SPLIT PAYMENT TRACKING
+    splitUpi: 0,
+    splitCard: 0,
   });
 
   const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
@@ -222,14 +225,12 @@ export default function ClientForm() {
       return;
     }
     
-    // Calculate total hours for the entire group
     let totalGroupHours = sessionHours;
     for (const c of additionalCustomers) {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         totalGroupHours += dur;
     }
 
-    // VALIDATION: Check if package has enough hours for everyone
     if (formData.isPackageCustomer && clientInfo) {
         if (totalGroupHours > clientInfo.remainingHours) {
             setInputError(`Insufficient package hours. Total needed: ${totalGroupHours.toFixed(1)} hrs, Remaining: ${clientInfo.remainingHours.toFixed(1)} hrs.`);
@@ -284,7 +285,26 @@ export default function ClientForm() {
     }
 
     const finalAmountInPaise = getFinalAmountInPaise();
-    const effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
+    let effectivePaymentMethod = formData.isPackageCustomer ? 'package' : formData.paymentMethod;
+    
+    // SPLIT PAYMENT VALIDATION & STRING COMPOSITION
+    if (!formData.isPackageCustomer && formData.paymentMethod === 'split') {
+        const totalSplit = (Number(formData.splitCash) || 0) + (Number(formData.splitUpi) || 0) + (Number(formData.splitCard) || 0);
+        const targetAmount = formData.tookPackage ? formData.packageAmount : formData.amountPaid;
+        
+        if (totalSplit !== Number(targetAmount)) {
+            setInputError(`Split payment amounts (₹${totalSplit}) must exactly equal the total amount (₹${targetAmount}).`);
+            setIsSubmitting(false);
+            return;
+        }
+        
+        let splitParts = [];
+        if (formData.splitCash > 0) splitParts.push(`Cash: ₹${formData.splitCash}`);
+        if (formData.splitUpi > 0) splitParts.push(`UPI: ₹${formData.splitUpi}`);
+        if (formData.splitCard > 0) splitParts.push(`Card: ₹${formData.splitCard}`);
+        
+        effectivePaymentMethod = `Split (${splitParts.join(', ')})`;
+    }
     
     const outlet = OUTLETS.find(o => o.name === formData.outlet);
     const outlet_id = outlet ? outlet.id : 'unknown';
@@ -328,7 +348,7 @@ export default function ClientForm() {
 
     try {
       let checkInTime: string | null = null;
-      if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.isPackageCustomer) {
+      if (formData.paymentMethod === 'cash' || formData.paymentMethod === 'card' || formData.paymentMethod === 'upi' || formData.paymentMethod === 'split' || formData.isPackageCustomer) {
         checkInTime = checkInDateTime.toISOString();
       }
       
@@ -355,6 +375,7 @@ export default function ClientForm() {
         packageValidity: formData.tookPackage ? formData.packageValidity : null, 
         therapist_name: combinedTherapistName, 
         room: formData.room,
+        clientType: formData.clientType, // NEW
         
         in_time: mainCheckInStr,
         out_time: mainCheckOutStr, 
@@ -470,6 +491,26 @@ export default function ClientForm() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
+        
+        {/* CLIENT TYPE SELECTOR */}
+        <div className="mb-2">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Client Type *</label>
+            <div className="flex gap-6">
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="clientType" value="new" checked={formData.clientType === 'new'} onChange={handleChange} className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
+                    <span className="text-sm font-medium text-gray-700">New Client</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="clientType" value="regular" checked={formData.clientType === 'regular'} onChange={handleChange} className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
+                    <span className="text-sm font-medium text-gray-700">Regular Client</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="clientType" value="therapist" checked={formData.clientType === 'therapist'} onChange={handleChange} className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
+                    <span className="text-sm font-medium text-gray-700">Therapist Client</span>
+                </label>
+            </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Full Name (Main Customer) *</label>
@@ -480,7 +521,7 @@ export default function ClientForm() {
               onChange={handleChange}
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-              placeholder={clientInfo ? '' : 'Enter name or lookup via mobile'}
+              placeholder={clientInfo ? '' : 'Enter name'}
             />
           </div>
           
@@ -498,7 +539,6 @@ export default function ClientForm() {
             </select>
           </div>
 
-          {/* Treatment: Optional if taking package */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
                 Treatment {formData.tookPackage ? '' : '*'}
@@ -561,7 +601,7 @@ export default function ClientForm() {
 
           {showAmountField && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid (₹) *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Total Amount (₹) *</label>
               <input
                 name="amountPaid"
                 type="number"
@@ -588,11 +628,32 @@ export default function ClientForm() {
                 <option value="cash">Cash</option>
                 <option value="card">Card</option>
                 <option value="upi">UPI</option>
+                <option value="split">Split Payment (Multiple Methods)</option>
               </select>
             </div>
           )}
 
-          {/* DURATION + TIME FIELDS */}
+          {/* SPLIT PAYMENT UI */}
+          {showPaymentSelector && formData.paymentMethod === 'split' && (
+            <div className="md:col-span-2 bg-gray-50 p-4 rounded-lg border border-gray-200 mt-2">
+                <label className="block text-sm font-medium text-gray-700 mb-3">Split Payment Details</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Cash Amount (₹)</label>
+                        <input type="number" name="splitCash" min="0" value={formData.splitCash || ''} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 text-black" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">UPI Amount (₹)</label>
+                        <input type="number" name="splitUpi" min="0" value={formData.splitUpi || ''} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 text-black" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Card Amount (₹)</label>
+                        <input type="number" name="splitCard" min="0" value={formData.splitCard || ''} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 text-black" />
+                    </div>
+                </div>
+            </div>
+          )}
+
           <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Session Duration {formData.isPackageCustomer ? '*' : ''}</label>
@@ -840,7 +901,6 @@ export default function ClientForm() {
                   required={formData.tookPackage}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-1 focus:ring-purple-500 focus:border-purple-500 text-black bg-white"
                 >
-                  {/* GENERATE OPTIONS 1 to 12 */}
                   {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                     <option key={m} value={`${m} month${m > 1 ? 's' : ''}`}>
                       {m} Month{m > 1 ? 's' : ''}

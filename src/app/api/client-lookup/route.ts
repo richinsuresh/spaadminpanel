@@ -12,7 +12,8 @@ export async function GET(request: Request) {
 
     const mobile = mobileRaw.replace(/\D/g, '');
 
-    const { data: pkg, error } = await supabase
+    // Fetch ALL active packages ordered by created_at (FIFO)
+    const { data: pkgs, error } = await supabase
       .from('packages')
       .select(
         `
@@ -31,31 +32,47 @@ export async function GET(request: Request) {
       .eq('mobile', mobile)
       .eq('status', 'active')
       .gt('remaining_hours', 0)
-      // ✅ FIX: Prioritize OLDEST active package first (FIFO)
-      .order('created_at', { ascending: true }) 
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: true });
 
     if (error) {
       console.error('Lookup error:', error);
-      // keep old behavior: don't crash form, just return null
       return Response.json(null);
     }
 
-    if (!pkg) return Response.json(null);
+    if (!pkgs || pkgs.length === 0) return Response.json(null);
+
+    // Aggregate totals across all active packages
+    let totalPackageHours = 0;
+    let usedPackageHours = 0;
+    let remainingHours = 0;
+    let latestExpiry = pkgs[0].expiry_date;
+
+    for (const p of pkgs) {
+        totalPackageHours += Number(p.total_hours);
+        usedPackageHours += Number(p.used_hours);
+        remainingHours += Number(p.remaining_hours);
+        
+        // Find the furthest expiry date to show to the customer
+        if (p.expiry_date) {
+            if (!latestExpiry) {
+                latestExpiry = p.expiry_date;
+            } else if (new Date(p.expiry_date) > new Date(latestExpiry)) {
+                latestExpiry = p.expiry_date;
+            }
+        }
+    }
 
     return Response.json({
-      status: pkg.status === 'active' ? 'active' : 'expired',
-      name: pkg.name,
-      mobile: pkg.mobile,
-      packageAmount: pkg.package_amount,
-      totalPackageHours: pkg.total_hours,
-      usedPackageHours: pkg.used_hours,
-      remainingHours: pkg.remaining_hours,
-      expiryDate: pkg.expiry_date,
-      email: pkg.email,
-      // 🔑 NEW: expose the package row id so client-form can send it to /client-form-submit
-      packageId: pkg.id,
+      status: 'active',
+      name: pkgs[0].name,
+      mobile: pkgs[0].mobile,
+      packageAmount: pkgs.reduce((sum, p) => sum + Number(p.package_amount), 0),
+      totalPackageHours,
+      usedPackageHours,
+      remainingHours,
+      expiryDate: latestExpiry,
+      email: pkgs[0].email,
+      packageId: pkgs[0].id, 
     });
   } catch (error) {
     console.error('Lookup error:', error);

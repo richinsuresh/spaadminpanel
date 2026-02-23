@@ -24,7 +24,6 @@ import { v4 as uuidv4 } from 'uuid';
 // --- Type Definitions ---
 type Treatment = { id: string; name: string };
 
-// Extended ClientInfo type
 type ClientInfo = {
   status: 'active' | 'expired' | 'not_found';
   name: string;
@@ -36,7 +35,6 @@ type ClientInfo = {
   usedPackageHours: number;
 };
 
-// Additional customer type for group entries
 type AdditionalCustomer = {
   id: string;
   name: string;
@@ -45,7 +43,6 @@ type AdditionalCustomer = {
   sessionMinutes: number;
 };
 
-// Visit History Type
 type VisitHistory = {
   id: string;
   date: string;
@@ -165,7 +162,6 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({
           </button>
         </div>
 
-        {/* --- Summary Bar --- */}
         <div className="grid grid-cols-3 gap-3 p-4 bg-gray-800 border-b border-gray-700">
           <div className="bg-gray-700 p-3 rounded-lg text-center">
             <p className="text-xs text-gray-400 uppercase font-medium">Remaining</p>
@@ -195,7 +191,6 @@ const PackageHistoryModal: React.FC<PackageHistoryModalProps> = ({
           </div>
         </div>
 
-        {/* --- History List --- */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {loading ? (
             <div className="text-center p-8 text-gray-400">
@@ -279,7 +274,6 @@ export default function ClientCheckinForm() {
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  // --- Main customer form data ---
   const [formData, setFormData] = useState({
     name: '',
     treatment: '',
@@ -287,22 +281,19 @@ export default function ClientCheckinForm() {
     sessionHours: 0,
     sessionMinutes: 0,
     paymentMethod: 'cash',
+    clientType: 'new', // NEW CLIENT TYPE
+    splitCash: 0, // SPLIT PAYMENT TRACKING
+    splitUpi: 0,
+    splitCard: 0,
   });
   
-  // --- States for Package Actions ---
   const [usePackageCredit, setUsePackageCredit] = useState(false);
-
-  // --- Additional customers ---
   const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  // --- Modal State ---
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
-  // --- Data Fetching Functions ---
   const fetchTreatments = useCallback(async () => {
     if (!outletId) return;
     try {
@@ -318,7 +309,6 @@ export default function ClientCheckinForm() {
     }
   }, [outletId]);
 
-  // --- Initial Load & Outlet Validation ---
   useEffect(() => {
     if (!outletId) return;
     
@@ -339,7 +329,6 @@ export default function ClientCheckinForm() {
       .catch(() => setLoading(false));
   }, [outletId, fetchTreatments]);
 
-  // --- Realtime listeners ---
   useEffect(() => {
     if (!outletId) return;
 
@@ -363,7 +352,6 @@ export default function ClientCheckinForm() {
     };
   }, [fetchTreatments, outletId]);
 
-  // --- Client lookup ---
   const performClientLookup = useCallback(async () => {
     if (mobile.length !== 10) return;
     try {
@@ -372,14 +360,7 @@ export default function ClientCheckinForm() {
       
       if (!res.ok) {
         setClientInfo({
-          status: 'not_found',
-          name: '',
-          mobile,
-          remainingHours: 0,
-          expiryDate: null,
-          packageId: null,
-          totalPackageHours: 0,
-          usedPackageHours: 0,
+          status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0,
         });
         setFormData((prev) => ({ ...prev, name: '' }));
         return;
@@ -400,45 +381,23 @@ export default function ClientCheckinForm() {
               usedPackageHours: data.usedPackageHours || 0,
             }
           : {
-              status: 'not_found',
-              name: '',
-              mobile,
-              remainingHours: 0,
-              expiryDate: null,
-              packageId: null,
-              totalPackageHours: 0,
-              usedPackageHours: 0,
+              status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0,
             };
 
       setClientInfo(finalClientInfo);
 
       if (finalClientInfo.status !== 'not_found') {
-        setFormData((prev) => ({
-          ...prev,
-          name: finalClientInfo.name || '',
-        }));
+        setFormData((prev) => ({ ...prev, name: finalClientInfo.name || '' }));
         if (finalClientInfo.status === 'active') {
             setUsePackageCredit(true);
         }
       } else {
-        setFormData((prev) => ({
-          ...prev,
-          name: '',
-        }));
+        setFormData((prev) => ({ ...prev, name: '' }));
         setUsePackageCredit(false);
       }
     } catch (e) {
       console.error('Client lookup error:', e);
-      setClientInfo({
-        status: 'not_found',
-        name: '',
-        mobile,
-        remainingHours: 0,
-        expiryDate: null,
-        packageId: null,
-        totalPackageHours: 0,
-        usedPackageHours: 0,
-      });
+      setClientInfo({ status: 'not_found', name: '', mobile, remainingHours: 0, expiryDate: null, packageId: null, totalPackageHours: 0, usedPackageHours: 0 });
       setFormData((prev) => ({ ...prev, name: '' }));
     }
   }, [mobile]);
@@ -464,13 +423,11 @@ export default function ClientCheckinForm() {
     };
   }, [mobile, performClientLookup]);
 
-  // handleChange supports checkbox and number coercion
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     const checked = type === 'checkbox' ? (e.target as HTMLInputElement).checked : undefined;
 
     setError('');
-
     setFormData((prev) => {
       let updatedValue: string | number | boolean;
       if (type === 'checkbox') {
@@ -489,17 +446,10 @@ export default function ClientCheckinForm() {
       setError('');
   }
 
-  // --- Group Customer Helpers ---
   const addAdditionalCustomer = () => {
     setAdditionalCustomers((prev) => [
       ...prev,
-      {
-        id: uuidv4(),
-        name: '',
-        treatment: '',
-        sessionHours: 0,
-        sessionMinutes: 0,
-      },
+      { id: uuidv4(), name: '', treatment: '', sessionHours: 0, sessionMinutes: 0 },
     ]);
   };
 
@@ -507,14 +457,8 @@ export default function ClientCheckinForm() {
     setAdditionalCustomers((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const updateAdditionalCustomer = <K extends keyof AdditionalCustomer>(
-    id: string,
-    field: K,
-    value: AdditionalCustomer[K],
-  ) => {
-    setAdditionalCustomers((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
-    );
+  const updateAdditionalCustomer = <K extends keyof AdditionalCustomer>(id: string, field: K, value: AdditionalCustomer[K]) => {
+    setAdditionalCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
   };
 
   const getSessionDuration = useCallback(() => {
@@ -523,30 +467,18 @@ export default function ClientCheckinForm() {
     return hours + minutes / 60;
   }, [formData.sessionHours, formData.sessionMinutes]);
 
-  const getFinalAmountInPaise = useCallback(() => {
-    if (usePackageCredit) return 0;
-    
-    return (Number(formData.amountPaid) || 0) * 100;
-  }, [usePackageCredit, formData.amountPaid]);
-
-
-  // --- UPDATED handleSubmit ---
   const handleSubmit = async (e: React.FormEvent) => {
-    
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
-    
 
     if (!outlet) {
       setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
       return;
     }
-    
 
-    // --- 1. STRICT MOBILE VALIDATION ---
     if (!mobile || mobile.length !== 10) {
         setError('Phone number must be exactly 10 digits.');
         setLoading(false);
@@ -554,15 +486,11 @@ export default function ClientCheckinForm() {
     }
 
     const sessionHours = getSessionDuration();
-
-    // ✅ Snapshot values
-    const paymentMethod = formData.paymentMethod;
-    const finalAmountInPaise = getFinalAmountInPaise();
+    const isPackageRedemption = usePackageCredit && clientInfo?.status === 'active';
+    const finalAmountInPaise = isPackageRedemption ? 0 : (Number(formData.amountPaid) || 0) * 100;
     const amountInRupees = finalAmountInPaise / 100;
     const outletIdForRedirect = outlet.id;
-    const isPackageRedemption = usePackageCredit && clientInfo?.status === 'active';
     
-    // --- Validation: Main Customer ---
     if (sessionHours <= 0) {
       setError('Please enter a valid Session Duration (Main Customer).');
       setLoading(false);
@@ -575,63 +503,66 @@ export default function ClientCheckinForm() {
         return;
     }
 
-    // Calculate total hours for the entire group (Main + Guests)
     let totalGroupHours = sessionHours;
     for (const c of additionalCustomers) {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         totalGroupHours += dur;
     }
 
-    // VALIDATION: Package Redemption
     if (isPackageRedemption) {
         if (totalGroupHours > (clientInfo?.remainingHours || 0)) {
-            // Updated validation to check total hours against remaining hours
             setError(`Insufficient package balance. Total needed: ${formatDuration(totalGroupHours)}, Remaining: ${formatDuration(clientInfo?.remainingHours || 0)}.`);
             setLoading(false);
             return;
         }
-    } 
-    // Validation: Standard Paid Session
-    else {
+    } else {
         const MIN_AMOUNT_RUPEES = 1500;
         if (amountInRupees < MIN_AMOUNT_RUPEES) {
-            setError(
-                `Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}.`,
-            );
+            setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}.`);
             setLoading(false);
             return;
         }
     }
 
-    // --- Validation: Group Customers ---
     for (let i = 0; i < additionalCustomers.length; i++) {
       const c = additionalCustomers[i];
       const duration = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
-
       if (!c.name || !c.treatment || duration <= 0) {
-        setError(
-          `Please fill name, treatment, and duration for Customer ${i + 2}.`,
-        );
+        setError(`Please fill name, treatment, and duration for Customer ${i + 2}.`);
         setLoading(false);
         return;
       }
     }
 
-    const treatmentName = formData.treatment;
+    // SPLIT PAYMENT VALIDATION & STRING COMPOSITION
+    let effectivePaymentMethod = formData.paymentMethod;
+    let upiAmountForQr = amountInRupees;
+    
+    if (!isPackageRedemption && formData.paymentMethod === 'split') {
+        const totalSplit = (Number(formData.splitCash) || 0) + (Number(formData.splitUpi) || 0) + (Number(formData.splitCard) || 0);
+        if (totalSplit !== amountInRupees) {
+            setError(`Split payment amounts (₹${totalSplit}) must exactly equal the total amount (₹${amountInRupees}).`);
+            setLoading(false);
+            return;
+        }
+        let splitParts = [];
+        if (formData.splitCash > 0) splitParts.push(`Cash: ₹${formData.splitCash}`);
+        if (formData.splitUpi > 0) splitParts.push(`UPI: ₹${formData.splitUpi}`);
+        if (formData.splitCard > 0) splitParts.push(`Card: ₹${formData.splitCard}`);
+        
+        effectivePaymentMethod = `Split (${splitParts.join(', ')})`;
+        upiAmountForQr = Number(formData.splitUpi) || 0;
+    }
 
-    const clientUuid =
-      typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
+    const clientUuid = typeof uuidv4 === 'function' ? uuidv4() : `${Date.now()}-${Math.random()}`;
 
     try {
       const checkInTime: string | null = new Date().toISOString();
       const checkInDate = new Date(checkInTime);
-      const mainOutDate = new Date(
-        checkInDate.getTime() + sessionHours * 60 * 60 * 1000,
-      );
+      const mainOutDate = new Date(checkInDate.getTime() + sessionHours * 60 * 60 * 1000);
       const mainInTimeStr = formatTimeHM(checkInDate);
       const mainOutTimeStr = formatTimeHM(mainOutDate);
 
-      // --- Group Customers Payload Building ---
       const groupCustomersPayload = additionalCustomers.map((c) => {
         const dur = (Number(c.sessionHours) || 0) + (Number(c.sessionMinutes) || 0) / 60;
         const outDate = new Date(checkInDate.getTime() + dur * 60 * 60 * 1000);
@@ -646,44 +577,34 @@ export default function ClientCheckinForm() {
         };
       });
 
-     // --- FINAL PAYLOAD ---
       const payload: any = { 
         client_uuid: clientUuid,
         name: String(formData.name || '').trim(),
         mobile: mobile,
         date: new Date().toISOString().split('T')[0],
-        treatment: treatmentName,
-
-        // Package Purchase Fields (Disabled/Removed from UI)
+        treatment: formData.treatment,
         tookPackage: false, 
         packageAmount: 0,
         totalPackageHours: 0,
         packageSoldBy: null,
         packageValidity: null,
-
-        // Amount Paid Handling
         amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
         sessionHours: sessionHours,
-        
         isPackageCustomer: isPackageRedemption,
         packageId: isPackageRedemption ? clientInfo?.packageId : null,
         is_redemption_request: isPackageRedemption,
-
-        // Outlet/Payment Info
         outlet: outlet.name,
         outlet_id: outlet.id,
-        paymentMethod: paymentMethod,
+        paymentMethod: effectivePaymentMethod,
         finalAmountInPaise: finalAmountInPaise,
         check_in_time: checkInTime,
-        
-        // Therapist/Room fields are null, must be filled by staff later
         therapist_name: null,
         therapist_primary: null,
         therapist_secondary: null,
         room: null,
         in_time: mainInTimeStr,
         out_time: mainOutTimeStr,
-        
+        clientType: formData.clientType, // NEW
         group_customers: groupCustomersPayload.length > 0 ? groupCustomersPayload : null,
       };
 
@@ -694,26 +615,15 @@ export default function ClientCheckinForm() {
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error((data as any).error || `Submission failed (${res.status})`);
-        await logActivity('create_sale', {
-          customer_name: formData.name,
-          mobile: mobile, // Use the 'mobile' state variable
-          amount: usePackageCredit ? 0 : (getFinalAmountInPaise() / 100),
-          treatment: formData.treatment,
-          message: `Added new client: ${formData.name} (${formData.treatment})`
-      });
-      }
+      if (!res.ok) throw new Error((data as any).error || `Submission failed (${res.status})`);
 
-      // Handle Redirection
       const paymentRequired = !isPackageRedemption;
       
-      if (paymentMethod === 'upi' && paymentRequired) {
+      // QR Redirect logic specifically checks for split UPI portion as well
+      if (paymentRequired && (formData.paymentMethod === 'upi' || (formData.paymentMethod === 'split' && upiAmountForQr > 0))) {
         setSuccess('Registration complete. Redirecting to payment QR...');
         setTimeout(() => {
-          router.push(
-            `/pay/qr/${outletIdForRedirect}?amount=${amountInRupees}&outletId=${outletIdForRedirect}`,
-          );
+          router.push(`/pay/qr/${outletIdForRedirect}?amount=${upiAmountForQr}&outletId=${outletIdForRedirect}`);
         }, 1500);
       } else {
         setSuccess('Registration successful! Redirecting...');
@@ -738,20 +648,20 @@ export default function ClientCheckinForm() {
               totalPackageHours: 0,
               packageSoldBy: null,
               packageValidity: null,
-              
               amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
               sessionHours: getSessionDuration(),
               isPackageCustomer: isPackageRedemption,
               packageId: isPackageRedemption ? clientInfo?.packageId : null,
               outlet: outlet.name,
               outlet_id: outlet.id,
-              paymentMethod: paymentMethod,
+              paymentMethod: effectivePaymentMethod,
               finalAmountInPaise: finalAmountInPaise,
               check_in_time: new Date().toISOString(),
               therapist_name: null,
               therapist_primary: null,
               therapist_secondary: null,
               room: null,
+              client_type: formData.clientType, // NEW OFFLINE
               created_local_at: new Date().toISOString(),
               status: 'pending',
               sync_error: String(err?.message || err),
@@ -759,19 +669,11 @@ export default function ClientCheckinForm() {
 
             await offlineDb.pending_clients.add(localPayload);
 
-            setSuccess(
-              'Saved locally — server unreachable. Entry will sync automatically when server is back.',
-            );
+            setSuccess('Saved locally — server unreachable. Entry will sync automatically when server is back.');
             setLoading(false);
 
-            // reset form for next entry
             setFormData({
-              name: '',
-              treatment: '',
-              amountPaid: 0,
-              sessionHours: 0,
-              sessionMinutes: 0,
-              paymentMethod: 'cash',
+              name: '', treatment: '', amountPaid: 0, sessionHours: 0, sessionMinutes: 0, paymentMethod: 'cash', clientType: 'new', splitCash: 0, splitUpi: 0, splitCard: 0
             });
             setMobile('');
             setClientInfo(null);
@@ -782,7 +684,6 @@ export default function ClientCheckinForm() {
             setError(err?.message || 'An unknown error occurred and local save failed.');
             setLoading(false);
           }
-          
     }
   };
 
@@ -805,7 +706,6 @@ export default function ClientCheckinForm() {
         }
       : null;
 
-  // Guard clause: If outletId is not yet available, show a loader or empty state.
   if (!outletId) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
@@ -845,13 +745,30 @@ export default function ClientCheckinForm() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
+          
+          {/* CLIENT TYPE SELECTOR */}
+          <div className="mb-2">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Client Type *</label>
+              <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="clientType" value="new" checked={formData.clientType === 'new'} onChange={handleChange} className="w-4 h-4 text-red-600 bg-gray-800 border-gray-600 focus:ring-red-500" />
+                      <span className="text-sm font-medium text-gray-300">New Client</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="clientType" value="regular" checked={formData.clientType === 'regular'} onChange={handleChange} className="w-4 h-4 text-red-600 bg-gray-800 border-gray-600 focus:ring-red-500" />
+                      <span className="text-sm font-medium text-gray-300">Regular Client</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="clientType" value="therapist" checked={formData.clientType === 'therapist'} onChange={handleChange} className="w-4 h-4 text-red-600 bg-gray-800 border-gray-600 focus:ring-red-500" />
+                      <span className="text-sm font-medium text-gray-300">Therapist Client</span>
+                  </label>
+              </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label
-                htmlFor="mobile"
-                className="block text-sm font-medium text-gray-300 mb-1"
-              >
-                Phone Number (for the group) *
+              <label htmlFor="mobile" className="block text-sm font-medium text-gray-300 mb-1">
+                Phone Number *
               </label>
               <input
                 id="mobile"
@@ -866,10 +783,7 @@ export default function ClientCheckinForm() {
               />
             </div>
             <div>
-              <label
-                htmlFor="name"
-                className="block text-sm font-medium text-gray-300 mb-1"
-              >
+              <label htmlFor="name" className="block text-sm font-medium text-gray-300 mb-1">
                 Main Customer Name *
               </label>
               <input
@@ -886,10 +800,9 @@ export default function ClientCheckinForm() {
             </div>
           </div>
 
-          {/* --- Package Info, Progress Bar & History Button --- */}
+          {/* --- Package Info --- */}
           {clientInfo && clientInfo.status !== 'not_found' && (
             <div className="p-3 bg-gray-800 rounded-lg border border-gray-700 space-y-3">
-              {/* Status Bar */}
               <div className="flex flex-col sm:flex-row gap-3">
                 <div
                   className={`flex-1 p-3 rounded-lg text-sm text-center ${
@@ -898,20 +811,11 @@ export default function ClientCheckinForm() {
                       : 'bg-yellow-900/50 border border-yellow-700 text-yellow-300'
                   }`}
                 >
-                  <strong className="block">
-                    Package Status:{' '}
-                    {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}
-                  </strong>
+                  <strong className="block">Package Status: {clientInfo.status === 'active' ? 'ACTIVE' : 'EXPIRED'}</strong>
                   <span className="block text-xs mt-1">
-                    Expiry:{' '}
-                    <strong>
-                      {clientInfo.expiryDate
-                        ? formatDate(clientInfo.expiryDate)
-                        : 'N/A'}
-                    </strong>
+                    Expiry: <strong>{clientInfo.expiryDate ? formatDate(clientInfo.expiryDate) : 'N/A'}</strong>
                   </span>
                 </div>
-                
                 <button
                     type="button"
                     onClick={() => setIsHistoryModalOpen(true)}
@@ -922,7 +826,6 @@ export default function ClientCheckinForm() {
                 </button>
               </div>
 
-            {/* Package Redemption Checkbox */}
             <div className="flex flex-col gap-2 mt-2">
                 {isPackageActive && (
                     <label className="inline-flex items-center gap-2 cursor-pointer">
@@ -933,32 +836,21 @@ export default function ClientCheckinForm() {
                         className="h-4 w-4 text-red-600 bg-gray-700 border-gray-600 rounded focus:ring-red-500"
                         disabled={loading}
                         />
-                        <span className="text-sm font-medium text-green-400">
-                        Request Package Redemption
-                        </span>
+                        <span className="text-sm font-medium text-green-400">Request Package Redemption</span>
                     </label>
                 )}
             </div>
 
-              {/* Progress Bar */}
               {packageHours && (
                 <div className="pt-2">
                   <div className="flex justify-between text-xs font-medium text-gray-400 mb-1">
                     <span>Total Hours: {formatDuration(packageHours.total)}</span>
-                    <span>
-                      Used: {formatDuration(packageHours.used)} (
-                      {packageHours.percentUsed.toFixed(1)}%)
-                    </span>
+                    <span>Used: {formatDuration(packageHours.used)} ({packageHours.percentUsed.toFixed(1)}%)</span>
                   </div>
                   <div className="w-full bg-gray-700 rounded-full h-2.5">
                     <div
                       className="bg-red-600 h-2.5 rounded-full transition-all duration-500 ease-out"
-                      style={{
-                        width: `${Math.min(
-                          Math.max(packageHours.percentUsed, 0),
-                          100,
-                        )}%`,
-                      }}
+                      style={{ width: `${Math.min(Math.max(packageHours.percentUsed, 0), 100)}%` }}
                     ></div>
                   </div>
                   <div className="text-right text-sm font-semibold text-green-400 mt-1">
@@ -973,16 +865,9 @@ export default function ClientCheckinForm() {
               No active package found.
             </div>
           )}
-          {/* --- End Package Info, Progress Bar & History Button --- */}
 
-          {/* SERVICE DETAILS (Main Customer) */}
           <div>
-            <label
-              htmlFor="treatment"
-              className="block text-sm font-medium text-gray-300 mb-1"
-            >
-              Treatment *
-            </label>
+            <label htmlFor="treatment" className="block text-sm font-medium text-gray-300 mb-1">Treatment *</label>
             <select
               id="treatment"
               name="treatment"
@@ -994,18 +879,13 @@ export default function ClientCheckinForm() {
             >
               <option value="">-- Select a Treatment --</option>
               {treatments.map((t) => (
-                <option key={t.id} value={t.name}>
-                  {t.name}
-                </option>
+                <option key={t.id} value={t.name}>{t.name}</option>
               ))}
             </select>
           </div>
           
-          {/* --- Session Duration (Main Customer) --- */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Session Duration (Main Customer) *
-            </label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Session Duration (Main Customer) *</label>
             <div className="grid grid-cols-2 gap-4">
               <input
                 name="sessionHours"
@@ -1033,22 +913,14 @@ export default function ClientCheckinForm() {
                 disabled={loading}
               />
             </div>
-            <p className="text-[11px] text-gray-400 mt-1">
-              In / Out time will be auto-calculated from this duration.
-            </p>
           </div>
-          {/* --- End Session Duration --- */}
 
           {/* --- GROUP CUSTOMERS --- */}
           <div className="border border-gray-700 rounded-lg p-4 space-y-3 bg-gray-900/60">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-gray-100">
-                  Additional Customers (Same Sale)
-                </h3>
-                <p className="text-xs text-gray-400">
-                  For friends in the same group.
-                </p>
+                <h3 className="text-sm font-semibold text-gray-100">Additional Customers (Same Sale)</h3>
+                <p className="text-xs text-gray-400">For friends in the same group.</p>
               </div>
               <button
                 type="button"
@@ -1063,104 +935,31 @@ export default function ClientCheckinForm() {
             {additionalCustomers.length > 0 && (
               <div className="space-y-3 pt-2">
                 {additionalCustomers.map((c, index) => (
-                  <div
-                    key={c.id}
-                    className="rounded-lg border border-gray-700 bg-gray-800/70 p-3 space-y-3"
-                  >
+                  <div key={c.id} className="rounded-lg border border-gray-700 bg-gray-800/70 p-3 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-gray-300">
-                        Customer {index + 2}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removeAdditionalCustomer(c.id)}
-                        className="text-xs text-red-400 hover:text-red-300"
-                        disabled={loading}
-                      >
-                        Remove
-                      </button>
+                      <span className="text-xs font-semibold text-gray-300">Customer {index + 2}</span>
+                      <button type="button" onClick={() => removeAdditionalCustomer(c.id)} className="text-red-400 hover:text-red-300" disabled={loading}>Remove</button>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">
-                          Name *
-                        </label>
-                        <input
-                          type="text"
-                          value={c.name}
-                          onChange={(e) =>
-                            updateAdditionalCustomer(c.id, 'name', e.target.value)
-                          }
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
-                          placeholder="Customer name"
-                          disabled={loading}
-                          required
-                        />
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Name *</label>
+                        <input type="text" value={c.name} onChange={(e) => updateAdditionalCustomer(c.id, 'name', e.target.value)} className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white" placeholder="Customer name" disabled={loading} required />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">
-                          Treatment *
-                        </label>
-                        <select
-                          value={c.treatment}
-                          onChange={(e) =>
-                            updateAdditionalCustomer(c.id, 'treatment', e.target.value)
-                          }
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
-                          disabled={loading || treatments.length === 0}
-                          required
-                        >
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Treatment *</label>
+                        <select value={c.treatment} onChange={(e) => updateAdditionalCustomer(c.id, 'treatment', e.target.value)} className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white" disabled={loading || treatments.length === 0} required>
                           <option value="">-- Select Treatment --</option>
-                          {treatments.map((t) => (
-                            <option key={t.id} value={t.name}>
-                              {t.name}
-                            </option>
-                          ))}
+                          {treatments.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                         </select>
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-gray-300 mb-1">
-                        Session Duration *
-                      </label>
+                      <label className="block text-xs font-medium text-gray-300 mb-1">Session Duration *</label>
                       <div className="grid grid-cols-2 gap-3">
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={c.sessionHours}
-                          onChange={(e) =>
-                            updateAdditionalCustomer(
-                              c.id,
-                              'sessionHours',
-                              Number(e.target.value) || 0,
-                            )
-                          }
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
-                          placeholder="Hours"
-                          disabled={loading}
-                          required
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          max={59}
-                          step={5}
-                          value={c.sessionMinutes}
-                          onChange={(e) =>
-                            updateAdditionalCustomer(
-                              c.id,
-                              'sessionMinutes',
-                              Number(e.target.value) || 0,
-                            )
-                          }
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white"
-                          placeholder="Mins"
-                          disabled={loading}
-                          required
-                        />
+                        <input type="number" min={0} step={1} value={c.sessionHours} onChange={(e) => updateAdditionalCustomer(c.id, 'sessionHours', Number(e.target.value) || 0)} className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white" placeholder="Hours" disabled={loading} required />
+                        <input type="number" min={0} max={59} step={5} value={c.sessionMinutes} onChange={(e) => updateAdditionalCustomer(c.id, 'sessionMinutes', Number(e.target.value) || 0)} className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white" placeholder="Mins" disabled={loading} required />
                       </div>
                     </div>
                   </div>
@@ -1168,92 +967,81 @@ export default function ClientCheckinForm() {
               </div>
             )}
           </div>
-          {/* --- END GROUP CUSTOMERS --- */}
 
-
-          {/* --- Amount Paid & Payment Method (CONDITIONAL) --- */}
+          {/* --- Amount Paid & Payment Method --- */}
           {isPaidSession && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label
-                  htmlFor="amountPaid"
-                  className="block text-sm font-medium text-gray-300 mb-1"
-                >
-                  Total Amount (₹) *
-                </label>
-                <input
-                  id="amountPaid"
-                  name="amountPaid"
-                  type="number"
-                  step="1"
-                  min="1500"
-                  value={formData.amountPaid || ''}
-                  onChange={handleChange}
-                  required={isPaidSession}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
-                  placeholder="Enter amount"
-                  disabled={loading}
-                />
-              </div>
+            <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label htmlFor="amountPaid" className="block text-sm font-medium text-gray-300 mb-1">Total Amount (₹) *</label>
+                    <input
+                    id="amountPaid"
+                    name="amountPaid"
+                    type="number"
+                    step="1"
+                    min="1500"
+                    value={formData.amountPaid || ''}
+                    onChange={handleChange}
+                    required={isPaidSession}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white placeholder:text-gray-500"
+                    placeholder="Enter amount"
+                    disabled={loading}
+                    />
+                </div>
 
-              <div>
-                <label
-                  htmlFor="paymentMethod"
-                  className="block text-sm font-medium text-gray-300 mb-1"
-                >
-                  Payment Option *
-                </label>
-                <select
-                  name="paymentMethod"
-                  value={formData.paymentMethod}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
-                  disabled={loading}
-                  required={isPaidSession}
-                >
-                  <option value="cash">Pay with Cash</option>
-                  <option value="card">Pay with Card</option>
-                  <option value="upi">Pay with UPI</option>
-                </select>
-              </div>
-            </div>
+                <div>
+                    <label htmlFor="paymentMethod" className="block text-sm font-medium text-gray-300 mb-1">Payment Option *</label>
+                    <select
+                    name="paymentMethod"
+                    value={formData.paymentMethod}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:ring-1 focus:ring-red-500 text-white"
+                    disabled={loading}
+                    required={isPaidSession}
+                    >
+                    <option value="cash">Pay with Cash</option>
+                    <option value="card">Pay with Card</option>
+                    <option value="upi">Pay with UPI</option>
+                    <option value="split">Split Payment (Multiple Methods)</option>
+                    </select>
+                </div>
+                </div>
+
+                {/* SPLIT PAYMENT UI */}
+                {formData.paymentMethod === 'split' && (
+                    <div className="p-4 bg-gray-800/60 border border-gray-700 rounded-lg mt-2">
+                        <label className="block text-sm font-medium text-gray-300 mb-3">Split Details</label>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Cash Amount (₹)</label>
+                                <input type="number" name="splitCash" min="0" value={formData.splitCash || ''} onChange={handleChange} disabled={loading} className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">UPI Amount (₹)</label>
+                                <input type="number" name="splitUpi" min="0" value={formData.splitUpi || ''} onChange={handleChange} disabled={loading} className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Card Amount (₹)</label>
+                                <input type="number" name="splitCard" min="0" value={formData.splitCard || ''} onChange={handleChange} disabled={loading} className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg focus:ring-1 focus:ring-red-500 text-white" />
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </>
           )}
-          {/* --- End Amount Paid & Payment Method --- */}
 
           <button
             type="submit"
             disabled={isSubmitDisabled}
             className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition duration-300 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {loading
-              ? 'Processing...'
-              : usePackageCredit
-              ? 'Redeem Session'
-              : formData.paymentMethod === 'upi'
-              ? 'Proceed to UPI Payment'
-              : 'Register Group & Proceed'}
+            {loading ? 'Processing...' : usePackageCredit ? 'Redeem Session' : (formData.paymentMethod === 'upi' || (formData.paymentMethod === 'split' && formData.splitUpi > 0)) ? 'Proceed to UPI Payment' : 'Register Group & Proceed'}
           </button>
         </form>
       </div>
 
-      {/* Small indicator — local queue */}
-      <div
-        style={{
-          position: 'fixed',
-          right: 12,
-          bottom: 12,
-          zIndex: 9999,
-          background: 'rgba(0,0,0,0.7)',
-          color: 'white',
-          padding: 8,
-          borderRadius: 8,
-          fontSize: 12,
-        }}
-      >
-        <small>
-          Local queue enabled — unsynced entries are stored locally if server is unreachable.
-        </small>
-        
+      <div style={{ position: 'fixed', right: 12, bottom: 12, zIndex: 9999, background: 'rgba(0,0,0,0.7)', color: 'white', padding: 8, borderRadius: 8, fontSize: 12 }}>
+        <small>Local queue enabled — unsynced entries are stored locally if server is unreachable.</small>
       </div>
     </div>
   );

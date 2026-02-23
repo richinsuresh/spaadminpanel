@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, FormEvent, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw } from 'lucide-react';
+import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw, CheckCircle, Edit2, Trash2 } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 /* ===================== TYPES ===================== */
@@ -37,6 +37,7 @@ type HistoryRow = {
   therapist_name: string | null;
   outlet_name: string | null;
   is_package_customer?: boolean | null;
+  package_id?: string | null;
   _raw?: any;
 };
 
@@ -49,6 +50,13 @@ const toInputDate = (dateString: string | null): string => {
   } catch (e) {
     return '';
   }
+};
+
+const toInputTime = (d: string | null) => {
+  if (!d) return '';
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return '';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
 const formatDate = (dateString: string | null) => {
@@ -125,6 +133,7 @@ const normalizeHistoryRow = (r: any): HistoryRow => {
     therapist_name: maybeStr(r.therapist_name ?? r.therapist ?? null),
     outlet_name: maybeStr(r.outlet_name ?? r.outlet ?? null),
     is_package_customer: !!(r.is_package_customer ?? r.isPackageCustomer ?? r.package_redeemed ?? false),
+    package_id: maybeStr(r.package_id ?? r.packageId ?? null),
     _raw: r,
   };
 };
@@ -179,13 +188,27 @@ export default function PackagesPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   
   // Sync State
+  const [computedUsage, setComputedUsage] = useState<number | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
   // History State
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [computedUsage, setComputedUsage] = useState<number | null>(null);
+
+  // --- HISTORY EDIT / DELETE STATES ---
+  const [isHistoryEditOpen, setIsHistoryEditOpen] = useState(false);
+  const [historyEditForm, setHistoryEditForm] = useState<any>({});
+  const [editingHistoryRow, setEditingHistoryRow] = useState<HistoryRow | null>(null);
+
+  const [isHistoryDeleteOpen, setIsHistoryDeleteOpen] = useState(false);
+  const [deletingHistoryRow, setDeletingHistoryRow] = useState<HistoryRow | null>(null);
+
+  const [historyActionPassword, setHistoryActionPassword] = useState('');
+  const [historyActionRemark, setHistoryActionRemark] = useState('');
+  const [historyActionError, setHistoryActionError] = useState<string | null>(null);
+  const [isHistoryActionLoading, setIsHistoryActionLoading] = useState(false);
+
 
   const normalizeRow = (row: any): PackageCustomer => {
     const safeNumber = (v: any) => {
@@ -196,6 +219,27 @@ export default function PackagesPage() {
       row.total_hours ?? row.totalPackageHours ?? row.total_hours
     );
     const used_hours = safeNumber(row.used_hours ?? row.usedPackageHours ?? 0);
+    const remaining_hours = safeNumber(
+      row.remaining_hours ?? total_hours - used_hours
+    );
+    
+    let currentStatus = row.status ?? 'active';
+
+    if (row.expiry_date) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const expDate = new Date(row.expiry_date);
+        if (expDate < today && currentStatus === 'active') {
+            currentStatus = 'expired';
+            supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
+        }
+    }
+
+    if (remaining_hours <= 0 && currentStatus === 'active') {
+        currentStatus = 'expired';
+        supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
+    }
+
     return {
       id: String(row.id),
       name: row.name ?? '—',
@@ -205,12 +249,10 @@ export default function PackagesPage() {
       ),
       total_hours: total_hours,
       used_hours: used_hours,
-      remaining_hours: safeNumber(
-        row.remaining_hours ?? total_hours - used_hours
-      ),
+      remaining_hours: remaining_hours,
       start_date: row.start_date ?? null,
       expiry_date: row.expiry_date ?? null,
-      status: row.status ?? 'active',
+      status: currentStatus,
       outlet: row.outlet ?? '—',
       created_at: row.created_at ?? null,
     };
@@ -312,7 +354,7 @@ export default function PackagesPage() {
     // Amount Filter Logic
     if (amountFilter !== 'all') {
         result = result.filter((p) => {
-            const amt = p.package_amount / 100; // stored as paise
+            const amt = p.package_amount / 100; 
             if (amountFilter === '0-5000') return amt <= 5000;
             if (amountFilter === '5000-10000') return amt > 5000 && amt <= 10000;
             if (amountFilter === '10000-25000') return amt > 10000 && amt <= 25000;
@@ -377,7 +419,7 @@ export default function PackagesPage() {
         
         await fetchPackages();
         setIsBulkEditModalOpen(false);
-        setSelectedIds(new Set()); // Clear selection
+        setSelectedIds(new Set()); 
         setBulkPassword('');
         setBulkRemark('');
         setBulkExpiryDate('');
@@ -427,7 +469,6 @@ export default function PackagesPage() {
     e.stopPropagation();
     setSelectedPackage(pkg);
 
-    // Convert decimals to Hours & Minutes
     const { hrs: totalH, mins: totalM } = decimalToTime(pkg.total_hours);
     const { hrs: usedH, mins: usedM } = decimalToTime(pkg.used_hours);
 
@@ -519,10 +560,7 @@ export default function PackagesPage() {
          }
       }
 
-      const after = {
-        ...before,
-        ...updates,
-      };
+      const after = { ...before, ...updates };
 
       const description = JSON.stringify({
         remark: editRemark,
@@ -595,48 +633,109 @@ export default function PackagesPage() {
     }
   };
 
-  /* ========== FETCH HISTORY (FILTERED) ========== */
+  /* ========== FETCH HISTORY & AUTO-SYNC ========== */
 
-  const fetchHistoryForMobile = async (mobile: string) => {
-    if (!mobile) return;
+  const fetchHistoryForPackage = async (pkg: PackageCustomer) => {
+    if (!pkg.mobile) return;
     setHistoryLoading(true);
     setHistoryError(null);
     setHistoryRows([]);
-    setComputedUsage(null);
 
     try {
       const { data, error } = await supabase
         .from('customers')
         .select('*')
-        .eq('mobile', mobile)
-        .order('date', { ascending: false });
+        .eq('mobile', pkg.mobile)
+        .order('date', { ascending: true }); 
 
-      if (error) {
-        console.error('Error fetching history:', error);
-        setHistoryError('Failed to load visit history');
-        setHistoryRows([]);
-        return;
-      }
+      if (error) throw error;
 
-      // Filter: Only show Package Usage or Package Purchase.
-      const rows = (data ?? [])
-        .map(normalizeHistoryRow)
-        .filter(r => {
-            const isRedemption = r.is_package_customer;
-            const isPurchase = r._raw?.took_package || r._raw?.tookPackage;
-            return isRedemption || isPurchase;
-        });
+      const { data: allPkgsData } = await supabase
+        .from('packages')
+        .select('id, created_at, start_date')
+        .eq('mobile', pkg.mobile)
+        .order('created_at', { ascending: true });
+        
+      const sortedPkgs = allPkgsData || [];
 
-      setHistoryRows(rows);
+      const rawRows = (data ?? []).map(normalizeHistoryRow);
       
-      // Calculate REAL usage from history
-      const realUsage = rows.reduce((acc, curr) => acc + (curr.session_hours || 0), 0);
-      setComputedUsage(realUsage);
+      const packageRows = rawRows.filter(r => {
+          const isPurchase = r._raw?.took_package || r._raw?.tookPackage;
+          if (isPurchase) {
+              const pkgDate = pkg.start_date || pkg.created_at?.split('T')[0];
+              return r.date === pkgDate; 
+          }
+          
+          const isRedemption = r.is_package_customer;
+          if (isRedemption) {
+              const rPkgId = r.package_id;
+              if (rPkgId) {
+                  return String(rPkgId) === String(pkg.id); 
+              } else {
+                  let assignedPkgId = sortedPkgs[0]?.id;
+                  for (const p of sortedPkgs) {
+                      const pDate = p.start_date || p.created_at?.split('T')[0] || '';
+                      if (r.date && pDate && r.date >= pDate) {
+                          assignedPkgId = p.id;
+                      }
+                  }
+                  return String(assignedPkgId) === String(pkg.id);
+              }
+          }
+          return false;
+      }).reverse();
+
+      setHistoryRows(packageRows);
+      
+      // Calculate Bulletproof Usage (Main + Group/Guests)
+      const realUsage = packageRows.reduce((acc, curr) => {
+          let usage = 0;
+          
+          usage += (Number(curr.session_hours) || 0);
+          
+          let guests: any[] = [];
+          const rawGuests = curr._raw?.group_customers || curr._raw?.guests;
+          
+          if (typeof rawGuests === 'string') {
+              try { guests = JSON.parse(rawGuests); } catch (e) {}
+          } else if (Array.isArray(rawGuests)) {
+              guests = rawGuests;
+          }
+
+          guests.forEach((g: any) => {
+              const gVal = g.sessionHours ?? g.session_hours ?? g.duration ?? 0;
+              usage += (Number(gVal) || 0);
+          });
+          
+          return acc + usage;
+      }, 0);
+      
+      // SILENT BACKGROUND SYNC: Instantly fix the database if it doesn't match history accurately
+      if (Math.abs(pkg.used_hours - realUsage) > 0.05) {
+          const newRemaining = pkg.total_hours - realUsage;
+          let newStatus = pkg.status;
+          if (newRemaining <= 0) newStatus = 'expired';
+
+          await supabase.from('packages').update({
+              used_hours: realUsage,
+              remaining_hours: newRemaining,
+              status: newStatus
+          }).eq('id', pkg.id);
+          
+          setPackages(prev => prev.map(p => 
+              p.id === pkg.id 
+                  ? { ...p, used_hours: realUsage, remaining_hours: newRemaining, status: newStatus } 
+                  : p
+          ));
+          setSelectedPackage(prev => 
+              prev ? { ...prev, used_hours: realUsage, remaining_hours: newRemaining, status: newStatus } : prev
+          );
+      }
       
     } catch (e: any) {
-      console.error('Unexpected history fetch error:', e);
+      console.error('History fetch error:', e);
       setHistoryError('Unexpected error loading history');
-      setHistoryRows([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -645,7 +744,7 @@ export default function PackagesPage() {
   const handleRowClick = (pkg: PackageCustomer) => {
     setSelectedPackage(pkg);
     setIsDetailsModalOpen(true);
-    fetchHistoryForMobile(pkg.mobile);
+    fetchHistoryForPackage(pkg);
   };
   
   const closeDetailsModal = () => {
@@ -654,56 +753,121 @@ export default function PackagesPage() {
     setHistoryRows([]);
     setHistoryLoading(false);
     setHistoryError(null);
-    setComputedUsage(null);
   };
 
-  // Sync Handler: Add missing hours to history to match the database
-  const handleSyncToHistory = async () => {
-    if (!selectedPackage || computedUsage === null) return;
+  /* ========== HISTORY EDIT & DELETE HANDLERS ========== */
+  const handleOpenHistoryEdit = (row: HistoryRow) => {
+    setEditingHistoryRow(row);
+    const { hrs, mins } = decimalToTime(row.session_hours || 0);
+    setHistoryEditForm({
+      treatment: row.treatment || '',
+      therapist_name: row.therapist_name || '',
+      session_hours_h: hrs,
+      session_hours_m: mins,
+      date: toInputDate(row.date),
+      check_in_time: toInputTime(row.check_in_time),
+      check_out_time: toInputTime(row.check_out_time),
+    });
+    setHistoryActionPassword('');
+    setHistoryActionRemark('');
+    setHistoryActionError(null);
+    setIsHistoryEditOpen(true);
+  };
+
+  const handleSaveHistoryEdit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingHistoryRow || !selectedPackage) return;
     
-    const difference = selectedPackage.used_hours - computedUsage;
-    
-    if (difference === 0) {
-        alert("Usage already matches.");
-        return;
+    setHistoryActionError(null);
+    if (historyActionPassword !== 'admin123') {
+      setHistoryActionError('Incorrect Admin Password');
+      return;
+    }
+    if (!historyActionRemark.trim()) {
+      setHistoryActionError('Remark is required');
+      return;
     }
 
-    setIsSyncing(true);
+    setIsHistoryActionLoading(true);
     try {
-        // Create an adjustment entry in the customers (history) table
-        const { error } = await supabase
-            .from('customers')
-            .insert([{
-                name: selectedPackage.name,
-                mobile: selectedPackage.mobile,
-                outlet: selectedPackage.outlet,
-                date: new Date().toISOString().split('T')[0],
-                treatment: 'Package Usage Adjustment',
-                session_hours: difference, // Can be positive or negative to balance the math
-                amount_paid: 0,
-                is_package_customer: true,
-                therapist_name: 'System', // CORRECTED COLUMN NAME
-                check_in_time: new Date().toISOString(),
-                check_out_time: new Date().toISOString()
-            }]);
-            
-        if (error) throw error;
-        
-        logActivity('sync_package_history', `Added a ${difference}h adjustment to history for ${selectedPackage.name}.`);
-        
-        // Refresh the history so the UI updates
-        await fetchHistoryForMobile(selectedPackage.mobile);
-        
+      const totalHours = (Number(historyEditForm.session_hours_h) || 0) + (Number(historyEditForm.session_hours_m) || 0) / 60;
+      
+      let newCheckInTime: string | null = editingHistoryRow.check_in_time;
+      if (historyEditForm.date && historyEditForm.check_in_time) {
+        const combined = new Date(`${historyEditForm.date}T${historyEditForm.check_in_time}`);
+        if (!isNaN(combined.getTime())) newCheckInTime = combined.toISOString();
+      }
+      
+      let newCheckOutTime: string | null = editingHistoryRow.check_out_time;
+      if (historyEditForm.date && historyEditForm.check_out_time) {
+        const combinedOut = new Date(`${historyEditForm.date}T${historyEditForm.check_out_time}`);
+        if (!isNaN(combinedOut.getTime())) newCheckOutTime = combinedOut.toISOString();
+      } else if (!historyEditForm.check_out_time) {
+        newCheckOutTime = null;
+      }
+
+      const updates = {
+        treatment: historyEditForm.treatment,
+        therapist_name: historyEditForm.therapist_name,
+        session_hours: totalHours,
+        date: historyEditForm.date,
+        check_in_time: newCheckInTime,
+        check_out_time: newCheckOutTime
+      };
+
+      const { error } = await supabase.from('customers').update(updates).eq('id', editingHistoryRow.id);
+      if (error) throw error;
+
+      logActivity('edit_history_row', `Edited history row for ${editingHistoryRow.name || 'Package Client'}. Remark: ${historyActionRemark}`);
+      
+      setIsHistoryEditOpen(false);
+      setEditingHistoryRow(null);
+      await fetchHistoryForPackage(selectedPackage); // Refresh history & auto-sync package!
     } catch (err: any) {
-        alert('Failed to sync history: ' + err.message);
+      setHistoryActionError(err.message || 'Failed to update history row');
     } finally {
-        setIsSyncing(false);
+      setIsHistoryActionLoading(false);
     }
   };
 
-  const dbUsed = selectedPackage?.used_hours ?? 0;
-  const historyUsed = computedUsage ?? dbUsed;
-  const isMismatch = Math.abs(dbUsed - historyUsed) > 0.05;
+  const handleOpenHistoryDelete = (row: HistoryRow) => {
+    setDeletingHistoryRow(row);
+    setHistoryActionPassword('');
+    setHistoryActionRemark('');
+    setHistoryActionError(null);
+    setIsHistoryDeleteOpen(true);
+  };
+
+  const handleConfirmHistoryDelete = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!deletingHistoryRow || !selectedPackage) return;
+
+    setHistoryActionError(null);
+    if (historyActionPassword !== 'admin123') {
+      setHistoryActionError('Incorrect Admin Password');
+      return;
+    }
+    if (!historyActionRemark.trim()) {
+      setHistoryActionError('Remark is required');
+      return;
+    }
+
+    setIsHistoryActionLoading(true);
+    try {
+      const { error } = await supabase.from('customers').delete().eq('id', deletingHistoryRow.id);
+      if (error) throw error;
+
+      logActivity('delete_history_row', `Deleted history row for ${deletingHistoryRow.name || 'Package Client'}. Remark: ${historyActionRemark}`);
+      
+      setIsHistoryDeleteOpen(false);
+      setDeletingHistoryRow(null);
+      await fetchHistoryForPackage(selectedPackage); // Refresh history & auto-sync package!
+    } catch (err: any) {
+      setHistoryActionError(err.message || 'Failed to delete history row');
+    } finally {
+      setIsHistoryActionLoading(false);
+    }
+  };
 
   return (
     <div>
@@ -1370,7 +1534,7 @@ export default function PackagesPage() {
       {/* Details Modal WITH FULL HISTORY */}
       {isDetailsModalOpen && selectedPackage && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl p-6 relative">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl p-6 relative">
             <button
               onClick={closeDetailsModal}
               className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
@@ -1417,35 +1581,7 @@ export default function PackagesPage() {
               </div>
             </div>
 
-            {/* MISMATCH WARNING & SYNC BUTTON */}
-            {isMismatch && (
-              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div className="flex items-start gap-3">
-                    <AlertTriangle className="text-amber-600 mt-1" size={20} />
-                    <div>
-                        <h4 className="font-bold text-amber-800">Data Mismatch Detected</h4>
-                        <p className="text-sm text-amber-700">
-                            <strong>Database</strong> says {fmtDuration(dbUsed)} used.<br/>
-                            <strong>History</strong> shows {fmtDuration(historyUsed)} used.
-                        </p>
-                    </div>
-                </div>
-                <button
-                    onClick={handleSyncToHistory}
-                    disabled={isSyncing}
-                    className="px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 flex items-center gap-2"
-                >
-                    {isSyncing ? (
-                        <RefreshCw className="animate-spin" size={16} />
-                    ) : (
-                        <RefreshCw size={16} />
-                    )}
-                    {isSyncing ? 'Syncing...' : 'Sync History to Match DB'}
-                </button>
-              </div>
-            )}
-
-            {/* Package summary using Computed Values if Sync performed or just display */}
+            {/* Package summary */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500 uppercase">Status</p>
@@ -1467,7 +1603,7 @@ export default function PackagesPage() {
               </div>
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500 uppercase">
-                  Remaining Hours (Database)
+                  Remaining Hours
                 </p>
                 <p className="font-bold text-gray-800">
                   {fmtDuration(selectedPackage.remaining_hours)}
@@ -1478,7 +1614,7 @@ export default function PackagesPage() {
             <div className="space-y-4 mb-8">
               <div>
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-gray-600">Usage Progress (Database)</span>
+                  <span className="text-gray-600">Usage Progress</span>
                   <span className="font-medium text-gray-900">
                     {fmtDuration(selectedPackage.used_hours)} /{' '}
                     {fmtDuration(selectedPackage.total_hours)}
@@ -1500,14 +1636,14 @@ export default function PackagesPage() {
               </div>
             </div>
 
-            {/* NEW: CLIENT VISIT HISTORY SECTION */}
+            {/* CLIENT VISIT HISTORY SECTION */}
             <div className="border-t pt-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-semibold text-gray-800">
                   Visit History
                 </h3>
-                <span className="text-xs text-gray-500">
-                  Mobile: {selectedPackage.mobile}
+                <span className="text-sm bg-gray-100 px-3 py-1 rounded font-medium text-gray-700">
+                  Total Used: <strong>{fmtDuration(selectedPackage.used_hours)}</strong>
                 </span>
               </div>
 
@@ -1546,12 +1682,22 @@ export default function PackagesPage() {
                         <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">
                           Amount
                         </th>
+                        <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {historyRows.map((h, idx) => {
                         const isPurchase = h._raw?.took_package || h._raw?.tookPackage;
-                        const guests = Array.isArray(h._raw?.group_customers) ? h._raw.group_customers : [];
+                        
+                        let guests: any[] = [];
+                        const rawGuests = h._raw?.group_customers || h._raw?.guests;
+                        if (typeof rawGuests === 'string') {
+                            try { guests = JSON.parse(rawGuests); } catch (e) {}
+                        } else if (Array.isArray(rawGuests)) {
+                            guests = rawGuests;
+                        }
 
                         return (
                           <Fragment key={h.id || idx}>
@@ -1585,7 +1731,7 @@ export default function PackagesPage() {
                                   </span>
                                 )}
                               </td>
-                              <td className="px-4 py-2 whitespace-nowrap text-gray-900">
+                              <td className="px-4 py-2 whitespace-nowrap text-gray-900 font-medium">
                                 {fmtDuration(h.session_hours)}
                               </td>
                               <td className="px-4 py-2 whitespace-nowrap text-gray-900">
@@ -1598,6 +1744,10 @@ export default function PackagesPage() {
                                 {h.amount_paid
                                   ? `₹${(h.amount_paid / 100).toLocaleString()}`
                                   : '—'}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-right">
+                                  <button onClick={() => handleOpenHistoryEdit(h)} className="text-blue-600 hover:text-blue-800 text-xs font-semibold mr-3 transition">Edit</button>
+                                  <button onClick={() => handleOpenHistoryDelete(h)} className="text-red-600 hover:text-red-800 text-xs font-semibold transition">Delete</button>
                               </td>
                             </tr>
 
@@ -1614,8 +1764,8 @@ export default function PackagesPage() {
                                     <td className="px-4 py-2 text-xs text-gray-600">
                                         {g.treatment || '—'}
                                     </td>
-                                    <td className="px-4 py-2 text-xs text-gray-600">
-                                        {fmtDuration(g.sessionHours ?? g.session_hours)}
+                                    <td className="px-4 py-2 text-xs text-gray-600 font-medium">
+                                        {fmtDuration(g.sessionHours ?? g.session_hours ?? g.duration)}
                                     </td>
                                     <td className="px-4 py-2 text-xs text-gray-600">
                                         {g.therapist_name || '—'}
@@ -1626,6 +1776,7 @@ export default function PackagesPage() {
                                     <td className="px-4 py-2 text-right text-xs text-gray-400">
                                         —
                                     </td>
+                                    <td className="px-4 py-2"></td>
                                 </tr>
                             ))}
                           </Fragment>
@@ -1640,7 +1791,7 @@ export default function PackagesPage() {
             <div className="mt-6 flex justify-end">
               <button
                 onClick={closeDetailsModal}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium"
               >
                 Close
               </button>
@@ -1648,6 +1799,122 @@ export default function PackagesPage() {
           </div>
         </div>
       )}
+
+      {/* --- HISTORY ACTION MODALS (Rendered on top of Details Modal z-[60]) --- */}
+
+      {/* Edit History Modal */}
+      {isHistoryEditOpen && editingHistoryRow && (
+          <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+            <form onSubmit={handleSaveHistoryEdit} className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+                <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <Edit2 size={18} className="text-blue-600" /> Edit Treatment Row
+                </h2>
+
+                {historyActionError && (
+                    <div className="mb-4 p-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded font-medium">
+                        {historyActionError}
+                    </div>
+                )}
+
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Date</label>
+                            <input type="date" value={historyEditForm.date || ''} onChange={e => setHistoryEditForm({...historyEditForm, date: e.target.value})} className="w-full border p-2 rounded text-sm text-black" required />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Treatment</label>
+                            <input type="text" value={historyEditForm.treatment || ''} onChange={e => setHistoryEditForm({...historyEditForm, treatment: e.target.value})} className="w-full border p-2 rounded text-sm text-black" required />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Therapist</label>
+                            <input type="text" value={historyEditForm.therapist_name || ''} onChange={e => setHistoryEditForm({...historyEditForm, therapist_name: e.target.value})} className="w-full border p-2 rounded text-sm text-black" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Main Session Duration</label>
+                            <div className="flex gap-2">
+                                <input type="number" min="0" placeholder="Hrs" value={historyEditForm.session_hours_h ?? ''} onChange={e => setHistoryEditForm({...historyEditForm, session_hours_h: e.target.value})} className="w-full border p-2 rounded text-sm text-black" required />
+                                <input type="number" min="0" max="59" placeholder="Mins" value={historyEditForm.session_hours_m ?? ''} onChange={e => setHistoryEditForm({...historyEditForm, session_hours_m: e.target.value})} className="w-full border p-2 rounded text-sm text-black" required />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Check In Time</label>
+                            <input type="time" value={historyEditForm.check_in_time || ''} onChange={e => setHistoryEditForm({...historyEditForm, check_in_time: e.target.value})} className="w-full border p-2 rounded text-sm text-black" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Check Out Time</label>
+                            <input type="time" value={historyEditForm.check_out_time || ''} onChange={e => setHistoryEditForm({...historyEditForm, check_out_time: e.target.value})} className="w-full border p-2 rounded text-sm text-black" />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Remark (Required)</label>
+                        <textarea value={historyActionRemark} onChange={e => setHistoryActionRemark(e.target.value)} rows={2} className="w-full border p-2 rounded text-sm text-black" placeholder="Why are you editing this row?" required />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Admin Password</label>
+                        <input type="password" value={historyActionPassword} onChange={e => setHistoryActionPassword(e.target.value)} className="w-full border p-2 rounded text-sm text-black" placeholder="admin123" required />
+                    </div>
+                </div>
+
+                <div className="mt-6 flex justify-end gap-3">
+                    <button type="button" onClick={() => setIsHistoryEditOpen(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded transition">Cancel</button>
+                    <button type="submit" disabled={isHistoryActionLoading} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded transition">
+                        {isHistoryActionLoading ? 'Saving...' : 'Save & Recalculate Sync'}
+                    </button>
+                </div>
+            </form>
+          </div>
+      )}
+
+      {/* Delete History Modal */}
+      {isHistoryDeleteOpen && deletingHistoryRow && (
+          <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+            <form onSubmit={handleConfirmHistoryDelete} className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+                <h2 className="text-xl font-bold text-red-700 mb-2 flex items-center gap-2">
+                    <Trash2 size={20} /> Delete History Row
+                </h2>
+                
+                <p className="text-sm text-gray-600 mb-4">
+                    Are you sure you want to delete this visit from <strong>{fmtDate(deletingHistoryRow.date)}</strong>? <br/>
+                    <span className="font-semibold text-red-600">The package balance will automatically refund these hours.</span>
+                </p>
+
+                {historyActionError && (
+                    <div className="mb-4 p-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded font-medium">
+                        {historyActionError}
+                    </div>
+                )}
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Remark (Required)</label>
+                        <textarea value={historyActionRemark} onChange={e => setHistoryActionRemark(e.target.value)} rows={2} className="w-full border p-2 rounded text-sm text-black" placeholder="Reason for deletion?" required />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Admin Password</label>
+                        <input type="password" value={historyActionPassword} onChange={e => setHistoryActionPassword(e.target.value)} className="w-full border p-2 rounded text-sm text-black" placeholder="admin123" required />
+                    </div>
+                </div>
+
+                <div className="mt-6 flex justify-end gap-3">
+                    <button type="button" onClick={() => setIsHistoryDeleteOpen(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded transition">Cancel</button>
+                    <button type="submit" disabled={isHistoryActionLoading} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded transition">
+                        {isHistoryActionLoading ? 'Deleting...' : 'Confirm Delete'}
+                    </button>
+                </div>
+            </form>
+          </div>
+      )}
+
     </div>
   );
 }

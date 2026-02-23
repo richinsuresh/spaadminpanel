@@ -12,6 +12,7 @@ export type OfflineClientPayload = {
   treatment?: string;
   amountPaid?: number;
   sessionHours?: number;
+  client_type?: string | null; // <--- ADDED THIS LINE
 
   // package-related fields
   isPackageCustomer?: boolean;
@@ -20,7 +21,7 @@ export type OfflineClientPayload = {
   totalPackageHours?: number;
   packageSoldBy?: string | null;
   packageValidity?: string | null;
-  packageId?: string | null; // <--- ADDED: package id (active package being used)
+  packageId?: string | null; // package id (active package being used)
 
   // outlet / payment / therapist
   outlet?: string;
@@ -32,6 +33,9 @@ export type OfflineClientPayload = {
   therapist_primary?: string | null;
   therapist_secondary?: string | null;
   room?: string | null;
+
+  // group customers
+  group_customers?: any[] | null;
 
   // local metadata for sync
   created_local_at?: string;
