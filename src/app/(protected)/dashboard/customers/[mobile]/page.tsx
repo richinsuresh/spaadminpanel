@@ -4,12 +4,22 @@ import React, { useCallback, useEffect, useState, use } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { 
-    Loader2, AlertTriangle, X, Clock, Calendar
+    Loader2, AlertTriangle, X, Clock, Calendar, 
+    CornerDownRight, History, PackageCheck, PackageMinus, Activity,
+    Edit, Trash // <-- Fixed: Added the missing icons back here
 } from 'lucide-react';
 import { useRouter } from 'next/navigation'; 
 import { useActivityLog } from '@/hooks/useActivityLog';
 
 /* ---------------- types ---------------- */
+type GroupCustomer = {
+  name?: string;
+  treatment?: string;
+  therapist_name?: string;
+  sessionHours?: number;
+  session_hours?: number;
+};
+
 type HistoryRow = {
   id: string; date: string | null; name: string | null; mobile: string | null; treatment: string | null;
   session_hours: number | null; amount_paid: number | null; took_package: boolean | null;
@@ -19,9 +29,10 @@ type HistoryRow = {
   status?: string | null; package_status?: string | null; 
   used_hours?: number | null; remaining_hours?: number | null; expiry_date?: string | null;
   start_date?: string | null; package_name?: string | null; is_package_customer?: boolean | null;
+  group_customers?: GroupCustomer[] | null;
   _raw?: any; _raw_pkg?: any; [k: string]: any; eventType: 'visit' | 'package_purchase' | 'audit_log'; 
   user_name?: string | null; related_table?: string | null;
-  audit_details?: { before: any; after: any; remark: string };
+  audit_details?: { before?: any; after?: any; remark?: string };
 };
 
 type ClientSummary = {
@@ -101,7 +112,9 @@ const normalizeCustomerRow = (r: any): HistoryRow => {
     check_out_time: maybeStr(r.check_out_time ?? r.checkOutTime ?? r.check_out ?? null), therapist_name: maybeStr(r.therapist_name ?? r.therapist ?? null),
     outlet_name: maybeStr(r.outlet_name ?? r.outlet ?? null), outlet_id: maybeStr(r.outlet_id ?? null),
     is_package_customer: !!(r.is_package_customer ?? r.isPackageCustomer ?? r.package_redeemed ?? false),
-    status: maybeStr(r.status ?? null), _raw: r, eventType: 'visit',
+    status: maybeStr(r.status ?? null), 
+    group_customers: Array.isArray(r.group_customers) ? r.group_customers : null,
+    _raw: r, eventType: 'visit',
   };
 };
 
@@ -181,8 +194,27 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
             status: String(p.status ?? p.package_status ?? null), took_package: true, check_in_time: String(p.created_at ?? null), check_out_time: null, is_package_customer: false, _raw: p,
         }));
       }
+
+      // FETCH AUDIT LOGS (Edit History)
+      let auditLogs: HistoryRow[] = [];
+      try {
+          const { data: logData } = await supabase.from('activity_logs').select('*').ilike('description', `%${mobile}%`).order('created_at', { ascending: false });
+          if (Array.isArray(logData)) {
+             auditLogs = logData.map(log => {
+                let details = { remark: '' };
+                try { details = JSON.parse(log.description); } catch (e) {}
+                return {
+                    id: log.id, date: log.created_at, name: 'System Log', mobile: mobile,
+                    eventType: 'audit_log', treatment: `Audit: ${log.action_type.replace(/_/g, ' ').toUpperCase()}`,
+                    therapist_name: log.username, outlet_name: 'Admin Panel', outlet_id: null,
+                    check_in_time: log.created_at, check_out_time: null, session_hours: null, amount_paid: null, 
+                    took_package: false, package_amount: null, audit_details: details, _raw: log
+                } as HistoryRow;
+             });
+          }
+      } catch (logErr) { console.warn('Log fetch error', logErr); }
       
-      const combinedHistory: HistoryRow[] = [...visits, ...packagePurchases].sort((a, b) => {
+      const combinedHistory: HistoryRow[] = [...visits, ...packagePurchases, ...auditLogs].sort((a, b) => {
           const dateA = a.date ? new Date(a.date).getTime() : 0;
           const dateB = b.date ? new Date(b.date).getTime() : 0;
           return dateB - dateA;
@@ -277,6 +309,13 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
           if (isPkg) { updates.package_name = historyForm.treatment; updates.sold_by = historyForm.therapist; } else { updates.treatment = historyForm.treatment; updates.therapist_name = historyForm.therapist; }
 
           await supabase.from(table).update(updates).eq('id', historyEditItem.id);
+          
+          await logActivity('history_edit_individual', JSON.stringify({
+              id: historyEditItem.id,
+              type: historyEditItem.eventType,
+              remark: 'Edited via Client History Timeline'
+          }));
+
           setIsHistoryEditOpen(false); setHistoryEditItem(null); fetchClientData();
       } catch (err: any) { alert('Update failed.'); } finally { setIsSavingHistory(false); }
   };
@@ -310,9 +349,9 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
         </div>
         <button 
             onClick={() => setIsEditProfileOpen(true)} 
-            className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-600 hover:text-white rounded-lg text-sm font-semibold transition-colors"
+            className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-600 hover:text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
         >
-            Edit Client Info
+            <Edit size={14} /> Edit Client Info
         </button>
       </div>
 
@@ -347,11 +386,11 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
       {/* --- HISTORY TABLE --- */}
       <div className="bg-white shadow-sm border border-gray-200 rounded-xl overflow-hidden">
         <div className="p-4 bg-gray-50 border-b border-gray-200">
-            <h2 className="text-lg font-bold text-gray-800">Client Visit History</h2>
+            <h2 className="text-lg font-bold text-gray-800">Client Visit & Edit History</h2>
         </div>
 
         {summary.history.length === 0 ? (
-          <div className="p-8 text-center text-sm text-gray-500 font-medium">No visits recorded yet.</div>
+          <div className="p-8 text-center text-sm text-gray-500 font-medium">No activity recorded yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left border-collapse">
@@ -368,91 +407,138 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
               </thead>
               <tbody className="text-sm">
                 {summary.history.map((row) => {
+                  
+                  // --- HANDLE SYSTEM AUDIT LOGS ---
+                  if (row.eventType === 'audit_log') {
+                      return (
+                          <tr key={row.id} className="border-b border-gray-100 bg-orange-50/40 hover:bg-orange-50 transition-colors">
+                              <td className="px-4 py-3">
+                                  <div className="font-bold text-gray-900 flex items-center gap-1.5 text-sm">
+                                      <Calendar size={14} className="text-gray-500" /> {fmtDate(row.date)}
+                                  </div>
+                                  <div className="text-gray-500 font-medium text-xs mt-1 flex items-center gap-1.5">
+                                      <Clock size={12} /> {row.check_in_time ? fmtTime(row.check_in_time) : ''}
+                                  </div>
+                              </td>
+                              <td className="px-4 py-3 text-gray-500">—</td>
+                              <td className="px-4 py-3">
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-orange-100 text-orange-800 border border-orange-200">
+                                      <History size={14} /> System Log
+                                  </span>
+                              </td>
+                              <td className="px-4 py-3" colSpan={2}>
+                                  <div className="font-semibold text-gray-800 text-sm">Record Edited / Updated</div>
+                                  <div className="text-gray-600 text-xs mt-1 italic">"{row.audit_details?.remark || 'No remark provided'}"</div>
+                              </td>
+                              <td className="px-4 py-3 text-gray-500">—</td>
+                              <td className="px-4 py-3 text-center text-xs text-gray-400 font-medium">Log Record</td>
+                          </tr>
+                      );
+                  }
+
+                  // --- HANDLE VISITS & PURCHASES ---
                   const isPurchase = row.eventType === 'package_purchase';
                   const isRedemption = !!row.is_package_customer;
+                  const hasGroup = row.group_customers && row.group_customers.length > 0;
                   
                   // Setup Badges
-                  let typeLabel = "Visit";
+                  let typeLabel = hasGroup ? `Group Visit (+${row.group_customers?.length})` : "Visit";
                   let typeColor = "text-blue-700 bg-blue-50 border-blue-200";
                   
                   if (isPurchase) {
                       typeLabel = "Bought Package";
                       typeColor = "text-green-700 bg-green-50 border-green-200";
                   } else if (isRedemption) {
-                      typeLabel = "Redeemed";
+                      typeLabel = hasGroup ? `Group Redemption (+${row.group_customers?.length})` : "Redeemed";
                       typeColor = "text-purple-700 bg-purple-50 border-purple-200";
                   }
 
                   return (
-                    <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                      
-                      {/* Highlight 1: Date & Time */}
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-gray-900 flex items-center gap-1.5 text-sm">
-                            <Calendar size={14} className="text-gray-500" /> {fmtDate(row.date)}
-                        </div>
-                        <div className="text-gray-500 font-medium text-xs mt-1 flex items-center gap-1.5">
-                            <Clock size={12} /> {row.check_in_time ? fmtTime(row.check_in_time) : 'Time Not Set'}
-                        </div>
-                      </td>
+                    <React.Fragment key={row.id}>
+                        {/* MAIN ROW */}
+                        <tr className={`border-b ${hasGroup ? 'border-dashed border-gray-200' : 'border-gray-100'} hover:bg-gray-50 transition-colors`}>
+                          
+                          {/* Date & Time */}
+                          <td className="px-4 py-3">
+                            <div className="font-bold text-gray-900 flex items-center gap-1.5 text-sm">
+                                <Calendar size={14} className="text-gray-500" /> {fmtDate(row.date)}
+                            </div>
+                            <div className="text-gray-500 font-medium text-xs mt-1 flex items-center gap-1.5">
+                                <Clock size={12} /> {row.check_in_time ? fmtTime(row.check_in_time) : 'Time Not Set'}
+                            </div>
+                          </td>
 
-                      {/* Highlight 2: Duration */}
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-sm text-indigo-800 bg-indigo-50 border border-indigo-200 inline-block px-2 py-1 rounded">
-                          {fmtDuration(row.session_hours)}
-                        </div>
-                      </td>
+                          {/* Duration */}
+                          <td className="px-4 py-3">
+                            <div className="font-bold text-sm text-indigo-800 bg-indigo-50 border border-indigo-200 inline-block px-2 py-1 rounded">
+                              {fmtDuration(row.session_hours)}
+                            </div>
+                          </td>
 
-                      {/* Type */}
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded text-xs font-bold border ${typeColor}`}>
-                          {typeLabel}
-                        </span>
-                      </td>
+                          {/* Type */}
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${typeColor}`}>
+                              {isPurchase ? <PackageCheck size={14} /> : isRedemption ? <PackageMinus size={14} /> : <Activity size={14} />}
+                              {typeLabel}
+                            </span>
+                          </td>
 
-                      {/* Treatment & Location */}
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-gray-800 text-sm">
-                            {isPurchase ? row.package_name : row.treatment}
-                        </div>
-                        <div className="text-gray-500 font-medium text-xs mt-0.5">
-                            {row.outlet_name || 'No Outlet Selected'}
-                        </div>
-                      </td>
+                          {/* Treatment & Location */}
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-gray-800 text-sm">
+                                {isPurchase ? row.package_name : (hasGroup ? 'Main: ' + row.treatment : row.treatment)}
+                            </div>
+                            <div className="text-gray-500 font-medium text-xs mt-0.5">
+                                {row.outlet_name || 'No Outlet Selected'}
+                            </div>
+                          </td>
 
-                      {/* Staff */}
-                      <td className="px-4 py-3 text-gray-700 font-medium">
-                        {row.therapist_name || '—'}
-                      </td>
+                          {/* Staff */}
+                          <td className="px-4 py-3 text-gray-700 font-medium">
+                            {row.therapist_name || '—'}
+                          </td>
 
-                      {/* Value / Amount */}
-                      <td className="px-4 py-3">
-                        {isPurchase ? (
-                          <div className="font-semibold text-green-600 text-sm">{formatCurrency(row.package_amount)}</div>
-                        ) : isRedemption ? (
-                          <div className="font-semibold text-gray-400 text-sm">—</div>
-                        ) : (
-                          <div className="font-semibold text-gray-800 text-sm">{formatCurrency(row.amount_paid)}</div>
-                        )}
-                      </td>
+                          {/* Value / Amount */}
+                          <td className="px-4 py-3">
+                            {isPurchase ? (
+                              <div className="font-semibold text-green-600 text-sm">{formatCurrency(row.package_amount)}</div>
+                            ) : isRedemption ? (
+                              <div className="font-semibold text-gray-400 text-sm">—</div>
+                            ) : (
+                              <div className="font-semibold text-gray-800 text-sm">{formatCurrency(row.amount_paid)}</div>
+                            )}
+                          </td>
 
-                      {/* Actions (ALWAYS VISIBLE) */}
-                      <td className="px-4 py-3 text-center space-x-2 whitespace-nowrap">
-                        <button 
-                            onClick={() => handleOpenHistoryEdit(row)} 
-                            className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-xs font-semibold rounded hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                        >
-                            Edit
-                        </button>
-                        <button 
-                            onClick={() => handleOpenDelete(row)} 
-                            className="px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-semibold rounded hover:bg-red-100 transition-colors"
-                        >
-                            Delete
-                        </button>
-                      </td>
+                          {/* Actions */}
+                          <td className="px-4 py-3 text-center space-x-2 whitespace-nowrap">
+                            <button 
+                                onClick={() => handleOpenHistoryEdit(row)} 
+                                className="px-3 py-1.5 bg-white border border-gray-300 text-gray-600 text-xs font-semibold rounded hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                            >
+                                Edit
+                            </button>
+                            <button 
+                                onClick={() => handleOpenDelete(row)} 
+                                className="px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-semibold rounded hover:bg-red-100 transition-colors"
+                            >
+                                Delete
+                            </button>
+                          </td>
+                        </tr>
 
-                    </tr>
+                        {/* SUB-ROWS FOR GROUP CUSTOMERS */}
+                        {hasGroup && row.group_customers?.map((guest, idx) => (
+                            <tr key={`${row.id}-guest-${idx}`} className="bg-gray-50/50 border-b border-gray-100 text-xs">
+                                <td className="px-4 py-2 text-gray-400 text-right"><CornerDownRight size={14} className="inline ml-auto" /></td>
+                                <td className="px-4 py-2 font-bold text-indigo-700">{fmtDuration(guest.sessionHours || guest.session_hours)}</td>
+                                <td className="px-4 py-2 font-medium text-gray-600">Guest: {guest.name || `Friend ${idx + 1}`}</td>
+                                <td className="px-4 py-2 font-medium text-gray-800">{guest.treatment || '—'}</td>
+                                <td className="px-4 py-2 text-gray-600">{guest.therapist_name || '—'}</td>
+                                <td className="px-4 py-2 text-gray-400">—</td>
+                                <td className="px-4 py-2"></td>
+                            </tr>
+                        ))}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -465,7 +551,7 @@ export default function ClientDetailPage({ params }: { params: Promise<{ mobile:
       
       {/* 1. Global Profile Edit Modal */}
       {isEditProfileOpen && (
-        <div className="fixed inset-0 bg-gray-900/50 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-gray-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
             <div className="bg-white rounded-xl shadow-lg w-full max-w-sm p-6">
                 <div className="flex justify-between items-center mb-4 border-b pb-2">
                     <h2 className="font-bold text-lg text-gray-900">Edit Client</h2>
