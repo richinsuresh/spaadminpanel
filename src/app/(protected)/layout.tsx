@@ -6,6 +6,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useUser } from '@/context/UserContext';
 import { Loader2 } from 'lucide-react';
 import SaleReminderPoller from '@/components/SaleReminderPoller'; // <-- IMPORT THE POLLER
+import SmartAssistant from '@/components/SmartAssistant'; // <-- IMPORT THE CHATBOT
 
 function readCookie(name: string) {
   if (typeof document === 'undefined') return null;
@@ -15,6 +16,7 @@ function readCookie(name: string) {
 }
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
+  
   const router = useRouter();
   const { user, isLoading } = useUser();
   const [isChecking, setIsChecking] = useState(true);
@@ -76,9 +78,14 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
 
   return (
     <>
-      {/* 🛑 ADD THE GLOBAL POLLER HERE 🛑 */}
+      {/* 🛑 GLOBAL POLLER 🛑 */}
       <SaleReminderPoller /> 
+      
+      {/* PAGE CONTENT */}
       {children}
+
+      {/* 🤖 FLOATING SMART ASSISTANT 🤖 */}
+      <SmartAssistant />
     </>
   );
 }
