@@ -13,7 +13,7 @@ import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
-import { Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, UserPlus, Users, Stethoscope } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
 
@@ -48,6 +48,7 @@ type Sale = {
   package_sold_by: string | null;
   payment_method: string | null;
   is_package_customer: boolean;
+  client_type: string | null; // NEW: Track client category
 
   // in/out time for main customer (HH:mm)
   in_time: string | null;
@@ -348,29 +349,28 @@ export default function AdminSalesPage() {
     () => activeSales.length,
     [activeSales],
   );
+
+  // NEW: Client Category Counts (Uses full 'sales' array so it updates immediately when added)
+  const newClientsCount = useMemo(() => 
+    sales.filter(s => {
+      const type = (s.client_type || '').trim().toLowerCase();
+      return type === 'new' || type === '';
+    }).length, 
+    [sales]
+  );
+
+  const regularClientsCount = useMemo(() => 
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'regular').length, 
+    [sales]
+  );
+
+  const therapistClientsCount = useMemo(() => 
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
+    [sales]
+  );
   
 
  /* ===================== EDIT ===================== */
-  // Helper to calculate new Out Time based on In Time + Duration
-  const calculateOutTime = (startTime: string, h: string | number, m: string | number) => {
-    if (!startTime) return '';
-    const [hours, minutes] = startTime.split(':').map(Number);
-    if (isNaN(hours) || isNaN(minutes)) return '';
-    
-    const date = new Date();
-    date.setHours(hours);
-    date.setMinutes(minutes);
-    
-    // Add Duration
-    const addH = Number(h) || 0;
-    const addM = Number(m) || 0;
-    
-    date.setHours(date.getHours() + addH);
-    date.setMinutes(date.getMinutes() + addM);
-    
-    // Return HH:MM (24h format)
-    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  };
 
   const handleOpenEdit = (sale: Sale) => {
     setEditingSale(sale);
@@ -390,6 +390,7 @@ export default function AdminSalesPage() {
       mobile: sale.mobile || '',
       date: toInputDate(sale.date),
       outlet_id: currentOutletId || '', // Use resolved ID
+      client_type: (sale.client_type || 'new').toLowerCase(), // Bind client type
       treatment: sale.treatment || '',
       payment_method: sale.payment_method || 'cash',
       amount: (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
@@ -502,6 +503,7 @@ export default function AdminSalesPage() {
       name: editForm.name,
       mobile: editForm.mobile,
       treatment: editForm.treatment,
+      client_type: editForm.client_type, // Persist client type edit
       therapist_name: combinedTherapist,
       room: editForm.room || null,
       session_hours: totalHours,
@@ -700,6 +702,7 @@ export default function AdminSalesPage() {
           Outlet: sale.outlet_name,
           CustomerName: sale.name,
           Mobile: sale.mobile,
+          ClientType: sale.client_type || 'New',
           ServiceType: formatService(sale),
           Treatment: sale.treatment,
           SessionHours: sale.session_hours ?? '',
@@ -869,6 +872,33 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
+      {/* NEW: Client Category Counts */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-orange-500 flex items-center justify-between">
+          <div>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">New Clients</h3>
+            <p className="text-3xl font-bold text-gray-800">{newClientsCount}</p>
+          </div>
+          <UserPlus className="text-orange-200 h-10 w-10" />
+        </div>
+
+        <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-blue-500 flex items-center justify-between">
+          <div>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">Regular Clients</h3>
+            <p className="text-3xl font-bold text-gray-800">{regularClientsCount}</p>
+          </div>
+          <Users className="text-blue-200 h-10 w-10" />
+        </div>
+
+        <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-indigo-600 flex items-center justify-between">
+          <div>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">Therapist Clients</h3>
+            <p className="text-3xl font-bold text-gray-800">{therapistClientsCount}</p>
+          </div>
+          <Stethoscope className="text-indigo-200 h-10 w-10" />
+        </div>
+      </div>
+
       {/* Sales Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
@@ -877,6 +907,9 @@ export default function AdminSalesPage() {
               <tr>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
                   Customer
+                </th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
+                  Type
                 </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
                   Outlet
@@ -912,7 +945,7 @@ export default function AdminSalesPage() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="p-6 text-center text-gray-500"
                   >
                     Loading…
@@ -921,7 +954,7 @@ export default function AdminSalesPage() {
               ) : sales.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="p-6 text-center text-gray-500"
                   >
                     No sales found.
@@ -962,6 +995,10 @@ export default function AdminSalesPage() {
 
                   const showEstimated =
                     !sale.out_time && !sale.check_out_time;
+                    
+                  // Safe category display check
+                  const cType = (sale.client_type || '').trim().toLowerCase();
+                  const displayType = cType === '' ? 'new' : cType;
 
                   return (
                     <tr
@@ -981,6 +1018,17 @@ export default function AdminSalesPage() {
                             Group of {totalGuests}
                           </div>
                         )}
+                      </td>
+
+                      {/* TYPE (NEW) */}
+                      <td className="px-3 py-2 text-xs align-top">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          displayType === 'regular' ? 'bg-blue-100 text-blue-700' :
+                          displayType === 'therapist' ? 'bg-indigo-100 text-indigo-700' :
+                          'bg-orange-100 text-orange-700'
+                        }`}>
+                          {displayType}
+                        </span>
                       </td>
 
                       {/* OUTLET */}
@@ -1194,7 +1242,7 @@ export default function AdminSalesPage() {
                   name="outlet_id"
                   value={editForm.outlet_id}
                   onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black focus:text-black"
+                  className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black"
                 >
                   {OUTLETS.map((o) => (
                     <option
@@ -1223,18 +1271,36 @@ export default function AdminSalesPage() {
               </div>
             </div>
 
-            <div>
-              <label className="text-xs font-semibold text-black">
-                Treatment
-              </label>
-              <input
-                type="text"
-                name="treatment"
-                value={editForm.treatment}
-                onChange={handleEditFormChange}
-                className="w-full p-2 border rounded text-black bg-white"
-                required
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-black">
+                  Treatment
+                </label>
+                <input
+                  type="text"
+                  name="treatment"
+                  value={editForm.treatment}
+                  onChange={handleEditFormChange}
+                  className="w-full p-2 border rounded text-black bg-white"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-black">
+                  Client Category
+                </label>
+                <select
+                  name="client_type"
+                  value={editForm.client_type || 'new'}
+                  onChange={handleEditFormChange}
+                  className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black"
+                >
+                  <option value="new" className="text-black">New Client</option>
+                  <option value="regular" className="text-black">Regular Client</option>
+                  <option value="therapist" className="text-black">Therapist Reference</option>
+                </select>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">

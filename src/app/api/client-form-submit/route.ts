@@ -1,3 +1,4 @@
+// src/app/api/client-form-submit/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -81,7 +82,10 @@ async function processPayload(payload: any) {
       room: payload.room,
       in_time: payload.in_time ?? null,
       out_time: payload.out_time ?? null,
-      client_uuid: payload.client_uuid || null
+      client_uuid: payload.client_uuid || null,
+      
+      // 🔥 FIX: ADD THE CLIENT TYPE HERE SO THE DATABASE SAVES IT 🔥
+      client_type: payload.clientType || 'new',
     };
 
     // 1. PACKAGE REDEMPTION (Multi-Package FIFO Support)
