@@ -491,7 +491,8 @@ export default function OutletSalesPage() {
 
 
   const today = useMemo(
-    () => new Date().toISOString().split('T')[0],
+    // 🛑 FIX: Use Asia/Kolkata timezone so the date represents IST, not UTC
+    () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
     [],
   );
   // 🛑 FIX: Use isOverdueFilterActive to set the initial dateFilter
