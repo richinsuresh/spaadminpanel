@@ -187,10 +187,6 @@ export default function PackagesPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   
-  // Sync State
-  const [computedUsage, setComputedUsage] = useState<number | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-
   // History State
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -225,11 +221,10 @@ export default function PackagesPage() {
     
     let currentStatus = row.status ?? 'active';
 
+    // FIX: String-based date comparison to avoid timezone shifts
     if (row.expiry_date) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const expDate = new Date(row.expiry_date);
-        if (expDate < today && currentStatus === 'active') {
+        const todayStr = new Date().toISOString().split('T')[0];
+        if (row.expiry_date < todayStr && currentStatus === 'active') {
             currentStatus = 'expired';
             supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
         }
@@ -524,6 +519,13 @@ export default function PackagesPage() {
       const used_hours = (Number(editFormData.used_hours_h) || 0) + (Number(editFormData.used_hours_m) || 0) / 60;
       const remaining_hours = total_hours - used_hours;
 
+      // Determine updated status based on new balance or expiry date
+      const todayStr = new Date().toISOString().split('T')[0];
+      let newStatus = editFormData.status;
+      if (remaining_hours <= 0 || (editFormData.expiry_date && editFormData.expiry_date < todayStr)) {
+        newStatus = 'expired';
+      }
+
       const updates: any = {
         name: editFormData.name,
         mobile: editFormData.mobile,
@@ -535,7 +537,7 @@ export default function PackagesPage() {
         remaining_hours,
         start_date: editFormData.start_date || null,
         expiry_date: editFormData.expiry_date || null,
-        status: editFormData.status,
+        status: newStatus,
         outlet: editFormData.outlet,
       };
 
@@ -714,8 +716,11 @@ export default function PackagesPage() {
       // SILENT BACKGROUND SYNC: Instantly fix the database if it doesn't match history accurately
       if (Math.abs(pkg.used_hours - realUsage) > 0.05) {
           const newRemaining = pkg.total_hours - realUsage;
+          const todayStr = new Date().toISOString().split('T')[0];
           let newStatus = pkg.status;
-          if (newRemaining <= 0) newStatus = 'expired';
+          if (newRemaining <= 0 || (pkg.expiry_date && pkg.expiry_date < todayStr)) {
+             newStatus = 'expired';
+          }
 
           await supabase.from('packages').update({
               used_hours: realUsage,
@@ -1140,7 +1145,7 @@ export default function PackagesPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleBulkEditSubmit}
-            className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4"
+            className="bg-white rounded-lg shadow-xl w-full max-md p-6 space-y-4"
           >
             <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                 <CalendarIcon className="text-purple-600" />
@@ -1479,7 +1484,7 @@ export default function PackagesPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <form
             onSubmit={handleDeleteConfirm}
-            className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4"
+            className="bg-white rounded-lg shadow-xl w-full max-md p-6 space-y-4"
           >
             <h2 className="text-xl font-bold text-red-700">Delete Package</h2>
             <p className="text-sm text-gray-600">
