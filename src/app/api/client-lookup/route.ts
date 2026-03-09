@@ -1,4 +1,3 @@
-// src/app/api/client-lookup/route.ts
 import { supabase } from '@/lib/supabase';
 
 export async function GET(request: Request) {
@@ -12,27 +11,12 @@ export async function GET(request: Request) {
 
     const mobile = mobileRaw.replace(/\D/g, '');
 
-    // Fetch ALL active packages ordered by created_at (FIFO)
+    // FETCH ALL packages regardless of status to handle "Expired" or "Empty" in UI
     const { data: pkgs, error } = await supabase
       .from('packages')
-      .select(
-        `
-          id,
-          name,
-          mobile,
-          package_amount,
-          total_hours,
-          used_hours,
-          remaining_hours,
-          expiry_date,
-          status,
-          email
-        `
-      )
+      .select(`id, name, mobile, package_amount, total_hours, used_hours, remaining_hours, expiry_date, status, email`)
       .eq('mobile', mobile)
-      .eq('status', 'active')
-      .gt('remaining_hours', 0)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error('Lookup error:', error);
@@ -41,38 +25,38 @@ export async function GET(request: Request) {
 
     if (!pkgs || pkgs.length === 0) return Response.json(null);
 
-    // Aggregate totals across all active packages
+    // Aggregate totals only for strictly active packages
     let totalPackageHours = 0;
     let usedPackageHours = 0;
     let remainingHours = 0;
-    let latestExpiry = pkgs[0].expiry_date;
+    
+    // Find the latest valid expiry date among all packages
+    const activePkgs = pkgs.filter(p => p.status === 'active');
+    const primaryPkg = activePkgs.length > 0 ? activePkgs[0] : pkgs[0];
+    let latestExpiry = primaryPkg.expiry_date;
 
     for (const p of pkgs) {
-        totalPackageHours += Number(p.total_hours);
-        usedPackageHours += Number(p.used_hours);
-        remainingHours += Number(p.remaining_hours);
-        
-        // Find the furthest expiry date to show to the customer
-        if (p.expiry_date) {
-            if (!latestExpiry) {
-                latestExpiry = p.expiry_date;
-            } else if (new Date(p.expiry_date) > new Date(latestExpiry)) {
-                latestExpiry = p.expiry_date;
-            }
+        if (p.status === 'active') {
+            totalPackageHours += Number(p.total_hours);
+            usedPackageHours += Number(p.used_hours);
+            remainingHours += Number(p.remaining_hours);
+        }
+        if (p.expiry_date && (!latestExpiry || new Date(p.expiry_date) > new Date(latestExpiry))) {
+            latestExpiry = p.expiry_date;
         }
     }
 
     return Response.json({
-      status: 'active',
-      name: pkgs[0].name,
-      mobile: pkgs[0].mobile,
+      status: (remainingHours <= 0 && pkgs.some(p => p.status === 'active')) ? 'expired' : primaryPkg.status,
+      name: primaryPkg.name,
+      mobile: primaryPkg.mobile,
       packageAmount: pkgs.reduce((sum, p) => sum + Number(p.package_amount), 0),
       totalPackageHours,
       usedPackageHours,
       remainingHours,
       expiryDate: latestExpiry,
-      email: pkgs[0].email,
-      packageId: pkgs[0].id, 
+      email: primaryPkg.email,
+      packageId: primaryPkg.id, 
     });
   } catch (error) {
     console.error('Lookup error:', error);
