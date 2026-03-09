@@ -1,6 +1,8 @@
 // src/app/api/export/route.ts
 import * as XLSX from 'xlsx';
 
+export const runtime = 'nodejs'; // Add this line
+
 export async function POST(request: Request) {
   try {
     const { data, filename } = await request.json();
