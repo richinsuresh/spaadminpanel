@@ -97,7 +97,8 @@ export async function POST(req: NextRequest) {
             remaining_hours: remainingHours,
             used_hours: usedHours,
             expiry_date: payload.expiryDate ?? payload.expiry_date ?? null,
-            status: payload.status ?? 'active',
+            // FORCE status to lowercase to avoid case-sensitivity lookup issues
+            status: (payload.status ?? 'active').toLowerCase(),
             package_sold_by: payload.packageSoldBy ?? payload.package_sold_by ?? null,
             outlet: payload.outlet ?? null,
             outlet_id: payload.outlet_id ?? null,
@@ -179,7 +180,7 @@ export async function POST(req: NextRequest) {
           if (expDate !== undefined) updateObj.expiry_date = expDate;
 
           const stat = getVal('status');
-          if (stat !== undefined) updateObj.status = stat;
+          if (stat !== undefined) updateObj.status = stat.toLowerCase(); // Ensure lowercase
 
           const pSoldBy = getVal('packageSoldBy', 'package_sold_by');
           if (pSoldBy !== undefined) updateObj.package_sold_by = pSoldBy;
