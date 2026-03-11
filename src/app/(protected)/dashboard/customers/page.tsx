@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { useRouter } from 'next/navigation';
+import { exportToExcel } from '@/lib/exportToExcel';
 import { 
     Loader2, Search, Filter, History, 
     Package, X, Calendar, MapPin, 
     Clock, Tag, ChevronRight, ExternalLink,
-    AlertCircle, CheckCircle
+    AlertCircle, CheckCircle, Download
 } from 'lucide-react';
 
 // --- Types ---
@@ -22,7 +23,6 @@ type CustomerVisit = {
   session_hours: number;
   outlet_name: string;
   therapist_name?: string;
-  // Package Data (Merged for Table View)
   active_package?: string | null;
   remaining_hours?: number | null;
   package_status?: string | null;
@@ -93,6 +93,8 @@ export default function CustomersPage() {
   // Filter State
   const [searchTerm, setSearchTerm] = useState('');
   const [outletFilter, setOutletFilter] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   // Modal State
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerVisit | null>(null);
@@ -106,7 +108,6 @@ export default function CustomersPage() {
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      
       const { data: visitData, error: visitError } = await supabase
         .from('customers')
         .select('id, name, mobile, date, treatment, session_hours, outlet_name, therapist_name')
@@ -163,6 +164,23 @@ export default function CustomersPage() {
     fetchCustomers();
   }, []);
 
+  // --- Export to Excel ---
+  const handleExport = () => {
+    const dataToExport = filteredCustomers.map(cust => ({
+      'Customer Name': cust.name,
+      'Mobile': cust.mobile,
+      'Last Visit Date': cust.date ? formatDate(cust.date) : 'N/A',
+      'Outlet': cust.outlet_name,
+      'Last Treatment': cust.treatment,
+      'Active Package': cust.active_package || 'None',
+      'Remaining Hours': cust.remaining_hours ?? 0,
+      'Used Hours': cust.used_hours ?? 0,
+      'Total Hours': cust.total_hours ?? 0
+    }));
+
+    exportToExcel(dataToExport, `Customers_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
   // --- Fetch Modal Data ---
   const fetchCustomerHistory = useCallback(async (mobile: string) => {
       setHistoryLoading(true);
@@ -170,17 +188,13 @@ export default function CustomersPage() {
       setPkgSummary(null);
 
       try {
-          // 1. Fetch Raw Data
           const { data: visits } = await supabase.from('customers').select('*').eq('mobile', mobile);
           const { data: pkgs } = await supabase.from('packages').select('*').eq('mobile', mobile);
           
-          // 2. Calculate Package Summary Stats (Best Package Logic)
           if (pkgs && pkgs.length > 0) {
               const bestPkg = pickBestPackage(pkgs);
               const total = toNum(bestPkg.total_hours || bestPkg.totalHours);
               const used = toNum(bestPkg.used_hours || bestPkg.usedHours);
-              
-              // Recalculate used based on actual visits if needed, but trusting DB for now
               const dbRemaining = Math.max(0, total - used);
 
               setPkgSummary({
@@ -198,7 +212,6 @@ export default function CustomersPage() {
               setPkgSummary({ hasPackage: false } as PackageSummary);
           }
 
-          // 3. Normalize History Rows
           const normalizedVisits: HistoryRow[] = (visits || []).map((v: any) => ({
               id: v.id,
               date: v.date || v.created_at,
@@ -247,30 +260,120 @@ export default function CustomersPage() {
       fetchCustomerHistory(cust.mobile);
   };
 
-  // --- Filtering ---
+  // --- Filtering Logic (Search + Outlet + Date Range) ---
   const filteredCustomers = uniqueCustomers.filter(customer => {
     const matchesSearch = !searchTerm || 
       customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.mobile.includes(searchTerm);
+    
     const matchesOutlet = outletFilter === 'all' || customer.outlet_name === outletFilter;
-    return matchesSearch && matchesOutlet;
+
+    // Date Filtering
+    let matchesDate = true;
+    if (startDate || endDate) {
+      const visitDate = new Date(customer.date);
+      // Reset hours for accurate date-only comparison
+      visitDate.setHours(0, 0, 0, 0);
+
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        if (visitDate < start) matchesDate = false;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(0, 0, 0, 0);
+        if (visitDate > end) matchesDate = false;
+      }
+    }
+
+    return matchesSearch && matchesOutlet && matchesDate;
   });
 
   return (
     <div className="min-h-screen bg-gray-50/50 p-4 lg:p-6">
-      {/* Header & Filter Controls (Same as before) */}
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-6 gap-4">
-        <div><h1 className="text-2xl font-bold text-gray-800 tracking-tight">Customer Directory</h1><p className="text-gray-500 text-sm mt-1">Manage clients, view balances, and track history</p></div>
-        <div className="flex flex-wrap gap-3"><button onClick={fetchCustomers} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 shadow-sm font-medium"><History size={16} /> Refresh</button><Link href="/form" className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg flex items-center gap-2 font-medium"><span>+</span> Add Customer</Link></div>
-      </div>
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 sticky top-0 z-10">
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="flex-1 relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><input type="text" placeholder="Search by name or mobile number..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all" /></div>
-          <div className="w-full md:w-64 relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} /><select value={outletFilter} onChange={(e) => setOutletFilter(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none appearance-none cursor-pointer">{outlets.map(outlet => (<option key={outlet} value={outlet}>{outlet === 'all' ? 'All Outlets' : outlet}</option>))}</select></div>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Customer Directory</h1>
+          <p className="text-gray-500 text-sm mt-1">Manage clients, view balances, and track history</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button 
+            onClick={handleExport}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all shadow-md flex items-center gap-2 font-medium"
+          >
+            <Download size={16} /> Export Excel
+          </button>
+          <button onClick={fetchCustomers} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 shadow-sm font-medium">
+            <History size={16} /> Refresh
+          </button>
+          <Link href="/form" className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg flex items-center gap-2 font-medium">
+            <span>+</span> Add Customer
+          </Link>
         </div>
       </div>
 
-      {/* Main Table (Same as before) */}
+      {/* Filter Controls */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 sticky top-0 z-10 space-y-4">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="Search by name or mobile number..." 
+              value={searchTerm} 
+              onChange={(e) => setSearchTerm(e.target.value)} 
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all" 
+            />
+          </div>
+          <div className="w-full md:w-64 relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <select 
+              value={outletFilter} 
+              onChange={(e) => setOutletFilter(e.target.value)} 
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer"
+            >
+              {outlets.map(outlet => (
+                <option key={outlet} value={outlet}>{outlet === 'all' ? 'All Outlets' : outlet}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Date Range Selectors */}
+        <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-gray-50">
+          <div className="flex items-center gap-2">
+            <Calendar size={16} className="text-gray-400" />
+            <span className="text-sm font-medium text-gray-600">From:</span>
+            <input 
+              type="date" 
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="bg-gray-50 border border-gray-200 rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-600">To:</span>
+            <input 
+              type="date" 
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-gray-50 border border-gray-200 rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+          {(startDate || endDate) && (
+            <button 
+              onClick={() => { setStartDate(''); setEndDate(''); }}
+              className="text-xs font-bold text-red-500 hover:text-red-700 flex items-center gap-1 ml-2"
+            >
+              <X size={14} /> Clear Dates
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Table */}
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 bg-white rounded-xl border border-gray-100 shadow-sm"><Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" /><p className="text-gray-500 font-medium">Loading customer database...</p></div>
       ) : (
@@ -302,12 +405,10 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {/* --- RICH HISTORY MODAL --- */}
+      {/* Modal - Unchanged but integrated */}
       {selectedCustomer && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedCustomer(null)}>
             <div className="bg-gray-50 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-                
-                {/* 1. Modal Header */}
                 <div className="bg-white px-8 py-6 border-b border-gray-100 flex justify-between items-start">
                     <div className="flex items-center gap-4">
                         <div className="h-12 w-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-xl font-bold">
@@ -321,7 +422,6 @@ export default function CustomersPage() {
                             </div>
                         </div>
                     </div>
-                    
                     <div className="text-right">
                          {pkgSummary?.hasPackage && (
                             <>
@@ -335,10 +435,7 @@ export default function CustomersPage() {
                         </button>
                     </div>
                 </div>
-
-                {/* 2. Scrollable Content Area */}
                 <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                    
                     {historyLoading ? (
                         <div className="flex flex-col items-center justify-center h-48 space-y-3">
                             <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
@@ -346,65 +443,40 @@ export default function CustomersPage() {
                         </div>
                     ) : (
                         <>
-                            {/* SECTION: PACKAGE SUMMARY CARDS */}
                             {pkgSummary?.hasPackage && (
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        {/* Status Card */}
                                         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
                                             <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Status</div>
-                                            <div className="text-lg font-bold text-green-600 flex items-center gap-2">
-                                                {pkgSummary.status.toUpperCase()} <CheckCircle size={18} />
-                                            </div>
+                                            <div className="text-lg font-bold text-green-600 flex items-center gap-2">{pkgSummary.status.toUpperCase()} <CheckCircle size={18} /></div>
                                         </div>
-                                        {/* Start Date Card */}
                                         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
                                             <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Start Date</div>
-                                            <div className="text-lg font-bold text-gray-800">
-                                                {formatDate(pkgSummary.startDate)}
-                                            </div>
+                                            <div className="text-lg font-bold text-gray-800">{formatDate(pkgSummary.startDate)}</div>
                                         </div>
-                                        {/* Remaining Hours Card */}
                                         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 bg-gradient-to-br from-white to-blue-50">
                                             <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Remaining Hours</div>
-                                            <div className="text-2xl font-bold text-indigo-700">
-                                                {pkgSummary.remainingHours}h
-                                            </div>
+                                            <div className="text-2xl font-bold text-indigo-700">{pkgSummary.remainingHours}h</div>
                                         </div>
                                     </div>
-
-                                    {/* Progress Bar */}
                                     <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
                                         <div className="flex justify-between items-end mb-2">
                                             <h3 className="text-sm font-semibold text-gray-700">Usage Progress</h3>
                                             <span className="text-sm font-bold text-gray-900">{pkgSummary.usedHours}h / {pkgSummary.totalHours}h</span>
                                         </div>
                                         <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-                                            <div 
-                                                className="bg-blue-600 h-full rounded-full transition-all duration-500 ease-out"
-                                                style={{ width: `${Math.min(100, (pkgSummary.usedHours / pkgSummary.totalHours) * 100)}%` }}
-                                            />
+                                            <div className="bg-blue-600 h-full rounded-full transition-all duration-500 ease-out" style={{ width: `${Math.min(100, (pkgSummary.usedHours / pkgSummary.totalHours) * 100)}%` }} />
                                         </div>
                                     </div>
                                 </div>
                             )}
-
-                            {/* SECTION: VISIT HISTORY TABLE */}
                             <div>
                                 <div className="flex justify-between items-center mb-4">
                                     <h3 className="text-lg font-bold text-gray-800">Visit History</h3>
-                                    <Link 
-                                        href={`/dashboard/customers/${selectedCustomer.mobile}`}
-                                        className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
-                                    >
-                                        Full Edit Mode <ExternalLink size={14} />
-                                    </Link>
+                                    <Link href={`/dashboard/customers/${selectedCustomer.mobile}`} className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline">Full Edit Mode <ExternalLink size={14} /></Link>
                                 </div>
-                                
                                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                                    {customerHistory.length === 0 ? (
-                                        <div className="p-8 text-center text-gray-400 italic">No visits recorded yet.</div>
-                                    ) : (
+                                    {customerHistory.length === 0 ? (<div className="p-8 text-center text-gray-400 italic">No visits recorded yet.</div>) : (
                                         <table className="w-full text-left">
                                             <thead className="bg-gray-50 border-b border-gray-100">
                                                 <tr>
@@ -422,35 +494,19 @@ export default function CustomersPage() {
                                                         <td className="px-6 py-4">
                                                             <div className="flex flex-col">
                                                                 <span className="font-bold text-gray-800 text-sm">{formatDate(item.date)}</span>
-                                                                <span className="text-xs text-gray-400">
-                                                                    {new Date(item.date || '').toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit', hour12: true})}
-                                                                </span>
+                                                                <span className="text-xs text-gray-400">{new Date(item.date || '').toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit', hour12: true})}</span>
                                                             </div>
                                                         </td>
                                                         <td className="px-6 py-4">
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-sm font-medium text-gray-800">{item.name}</span>
-                                                                {item.is_package_redemption && (
-                                                                    <span className="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Package</span>
-                                                                )}
-                                                                {item.eventType === 'package_purchase' && (
-                                                                    <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Purchased</span>
-                                                                )}
+                                                                {item.is_package_redemption && (<span className="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Package</span>)}
                                                             </div>
-                                                            {item.is_package_redemption && <span className="text-xs text-green-600 font-medium bg-green-50 px-1 rounded mt-1 inline-block">Redeemed</span>}
                                                         </td>
-                                                        <td className="px-6 py-4 text-sm font-medium text-gray-600">
-                                                            {item.session_hours ? `${item.session_hours}h` : item.total_hours ? `${item.total_hours}h` : '—'}
-                                                        </td>
-                                                        <td className="px-6 py-4 text-sm text-gray-600 capitalize">
-                                                            {item.staff_name || '—'}
-                                                        </td>
-                                                        <td className="px-6 py-4 text-sm text-gray-500">
-                                                            {item.outlet_name}
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right text-sm font-mono font-medium text-gray-800">
-                                                            {item.amount ? `₹${(item.amount / 100).toLocaleString('en-IN')}` : '—'}
-                                                        </td>
+                                                        <td className="px-6 py-4 text-sm font-medium text-gray-600">{item.session_hours ? `${item.session_hours}h` : item.total_hours ? `${item.total_hours}h` : '—'}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600 capitalize">{item.staff_name || '—'}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-500">{item.outlet_name}</td>
+                                                        <td className="px-6 py-4 text-right text-sm font-mono font-medium text-gray-800">{item.amount ? `₹${(item.amount / 100).toLocaleString('en-IN')}` : '—'}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -461,13 +517,9 @@ export default function CustomersPage() {
                         </>
                     )}
                 </div>
-                
-                {/* 3. Footer Actions */}
                 <div className="bg-gray-50 border-t border-gray-200 p-4 flex justify-end gap-3">
                     <button onClick={() => setSelectedCustomer(null)} className="px-5 py-2.5 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition-colors">Close</button>
-                    <Link href={`/dashboard/customers/${selectedCustomer.mobile}`} className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2">
-                        View Full Details & Edit <ChevronRight size={16} />
-                    </Link>
+                    <Link href={`/dashboard/customers/${selectedCustomer.mobile}`} className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2">View Full Details & Edit <ChevronRight size={16} /></Link>
                 </div>
             </div>
         </div>
