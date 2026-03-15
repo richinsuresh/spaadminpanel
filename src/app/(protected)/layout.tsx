@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useUser } from '@/context/UserContext';
 import { Loader2 } from 'lucide-react';
-import SaleReminderPoller from '@/components/SaleReminderPoller'; // <-- IMPORT THE POLLER
 import SmartAssistant from '@/components/SmartAssistant'; // <-- IMPORT THE CHATBOT
 
 function readCookie(name: string) {
@@ -78,8 +77,6 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
 
   return (
     <>
-      {/* 🛑 GLOBAL POLLER 🛑 */}
-      <SaleReminderPoller /> 
       
       {/* PAGE CONTENT */}
       {children}
