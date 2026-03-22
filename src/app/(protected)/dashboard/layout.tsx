@@ -1,14 +1,29 @@
-// src/app/(protected)/dashboard/layout.tsx (Server Component)
-// This file must NOT have 'use client'.
-
+import { ReactNode } from 'react';
+import { redirect } from 'next/navigation';
+import { createClient } from '@/lib/supabaseServer';
 import NavigationWrapper from './NavigationWrapper';
 
-// This component ensures that route params are handled correctly by the Server.
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default async function DashboardLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const supabase = await createClient();
+
+  // Efficient session check
+  const { data: { session }, error } = await supabase.auth.getSession();
+
+  if (error || !session) {
+    redirect('/login');
+  }
+
   return (
-    // Passes the children (which will be your page component) to the Client wrapper.
-    <NavigationWrapper>
-      {children}
-    </NavigationWrapper>
+    <div className="min-h-screen bg-gray-50">
+      <NavigationWrapper>
+        <main className="p-4 md:p-8 max-w-7xl mx-auto">
+          {children}
+        </main>
+      </NavigationWrapper>
+    </div>
   );
 }
