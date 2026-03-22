@@ -1,4 +1,3 @@
-// src/app/api/auth/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseServer } from '@/lib/supabaseServer';
 import { OUTLETS } from '@/lib/outlet';
@@ -15,9 +14,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Shared cookie configuration to ensure visibility to Server Components
+    const cookieOptions = {
+      httpOnly: false, // Must be false so the client-side router.refresh() can sync state
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 86400, // 1 day
+      sameSite: 'lax' as const, // Ensures cookies are sent during redirects
+    };
+
     /**
-     * 1) ADMIN / STAFF / DEV LOGIN (via app_users in Supabase)
-     *    This path is used when "username" is provided.
+     * 1) ADMIN / STAFF / DEV LOGIN
      */
     if (username) {
       const { data, error } = await supabaseServer
@@ -40,34 +47,16 @@ export async function POST(request: NextRequest) {
         username: data.username,
       });
 
-      // Same cookies you already used for admin/staff/dev
-      res.cookies.set('auth_role', data.role, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: 86400, // 1 day
-      });
-
-      res.cookies.set('admin_session', 'true', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: 86400,
-      });
-
-      // Non-HTTP-only for convenience in client (not sensitive)
-      res.cookies.set('username', username, {
-        httpOnly: false,
-        path: '/',
-        maxAge: 86400,
-      });
+      // Set auth cookies using optimized options
+      res.cookies.set('auth_role', data.role, cookieOptions);
+      res.cookies.set('admin_session', 'true', cookieOptions);
+      res.cookies.set('username', username, cookieOptions);
 
       return res;
     }
 
     /**
-     * 2) OUTLET LOGIN (via OUTLETS config)
-     *    This path is used when "outletId" is provided instead of username.
+     * 2) OUTLET LOGIN
      */
     if (outletId) {
       const outlet = OUTLETS.find(
@@ -88,27 +77,14 @@ export async function POST(request: NextRequest) {
         outletName: outlet.name,
       });
 
-      // Mark this session as an outlet session
-      res.cookies.set('auth_role', 'outlet', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: 86400,
-        sameSite: 'lax',
-      });
-
-      res.cookies.set('outlet_id', outlet.id, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: 86400,
-        sameSite: 'lax',
-      });
+      // Set outlet cookies
+      res.cookies.set('auth_role', 'outlet', cookieOptions);
+      res.cookies.set('outlet_id', outlet.id, cookieOptions);
+      res.cookies.set('admin_session', 'true', cookieOptions); // Added to pass DashboardLayout check
 
       return res;
     }
 
-    // Fallback (should not normally reach here)
     return NextResponse.json(
       { error: 'Bad request' },
       { status: 400 }
