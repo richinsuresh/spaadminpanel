@@ -8,9 +8,9 @@ export default async function DashboardLayout({
 }: {
   children: ReactNode;
 }) {
+  // Now matches the export in supabaseServer.ts
   const supabase = await createClient();
 
-  // Efficient session check
   const { data: { session }, error } = await supabase.auth.getSession();
 
   if (error || !session) {
