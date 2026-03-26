@@ -164,13 +164,15 @@ export default function EmployeesPage() {
     const fetchHistory = async () => {
       setStatsLoading(true);
       try {
+        // FIXED: Use .ilike to catch paired therapists (e.g., "Sarah & John")
         const { data } = await supabase.from('customers').select('*').gte('date', startDate).lte('date', endDate)
-          .or(`therapist_name.eq.${selectedEmployee.name},package_sold_by.eq.${selectedEmployee.name}`);
+          .or(`therapist_name.ilike.%${selectedEmployee.name}%,package_sold_by.eq.${selectedEmployee.name}`);
         
         const rows: StatRow[] = [];
         let total = 0;
         (data || []).forEach((row: any) => {
-          if (row.therapist_name === selectedEmployee.name) {
+          // FIXED: Use .includes() to count the service if they were part of a duo
+          if (row.therapist_name && row.therapist_name.includes(selectedEmployee.name)) {
             rows.push({ 
               id: row.id + '_svc', date: row.date, name: row.name, 
               treatment: row.took_package ? `(Pkg) ${row.treatment}` : row.treatment, 

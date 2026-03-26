@@ -1,4 +1,3 @@
-// src/app/(protected)/dashboard/sales/page.tsx
 'use client';
 
 import React, {
@@ -7,7 +6,6 @@ import React, {
   useCallback,
   useMemo,
   FormEvent,
-  
 } from 'react';
 import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
@@ -48,21 +46,18 @@ type Sale = {
   package_sold_by: string | null;
   payment_method: string | null;
   is_package_customer: boolean;
-  client_type: string | null; // NEW: Track client category
+  client_type: string | null;
 
-  // in/out time for main customer (HH:mm)
   in_time: string | null;
   out_time: string | null;
 
-  // group customers (friends in same sale)
   group_customers: GroupCustomer[] | null;
 };
 
-type Employee = { id: string; name: string }; // Type for therapists
+type Employee = { id: string; name: string };
 
 /* ===================== HELPERS ===================== */
 
-// Helper to split decimal hours into { hrs, mins }
 const decimalToTime = (decimal: number) => {
   const safeDecimal = Number(decimal) || 0;
   const hrs = Math.floor(safeDecimal);
@@ -87,7 +82,6 @@ const formatTime = (d: string | null) => {
   });
 };
 
-// For plain "HH:mm" strings
 const formatPlainTime = (t: string | null | undefined) => {
   if (!t) return '—';
   try {
@@ -115,7 +109,6 @@ const formatDuration = (h: number | null | undefined) => {
   const n = Number(h);
   if (n === 0) return '—';
 
-  // Convert to total minutes to avoid decimal math errors
   const totalMins = Math.round(n * 60);
   const hrs = Math.floor(totalMins / 60);
   const mins = totalMins % 60;
@@ -125,7 +118,6 @@ const formatDuration = (h: number | null | undefined) => {
   return `${hrs}hr ${mins}m`;
 };
 
-// UPDATED: Now accepts isRedemption flag to override display
 const formatPaymentMethod = (m: string | null, isRedemption?: boolean) => {
   if (isRedemption) return 'REDEMPTION';
   if (!m) return '—';
@@ -138,7 +130,6 @@ const formatService = (sale: Sale) => {
   return sale.treatment;
 };
 
-// Force HH:mm format (24h) regardless of locale
 const toInputTime = (d: string | null) => {
   if (!d) return '';
   const date = new Date(d);
@@ -148,7 +139,6 @@ const toInputTime = (d: string | null) => {
   return `${h}:${m}`;
 };
 
-// Robust calculation that returns strict HH:mm
 const calculateOutTime = (startTime: string, h: string | number, m: string | number) => {
   if (!startTime) return '';
   const [hoursStr, minutesStr] = startTime.split(':');
@@ -161,14 +151,12 @@ const calculateOutTime = (startTime: string, h: string | number, m: string | num
   date.setHours(startH);
   date.setMinutes(startM);
 
-  // Add Duration
   const addH = Number(h) || 0;
   const addM = Number(m) || 0;
 
   date.setHours(date.getHours() + addH);
   date.setMinutes(date.getMinutes() + addM);
 
-  // Format manually to ensure HH:mm
   const finalH = String(date.getHours()).padStart(2, '0');
   const finalM = String(date.getMinutes()).padStart(2, '0');
   return `${finalH}:${finalM}`;
@@ -191,7 +179,6 @@ export default function AdminSalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
-  // NEW: State for therapist list
   const [therapists, setTherapists] = useState<Employee[]>([]); 
 
   const [startDate, setStartDate] = useState<string>(getToday());
@@ -211,14 +198,10 @@ export default function AdminSalesPage() {
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteRemark, setDeleteRemark] = useState('');
   const [deleteError, setDeleteError] = useState('');
-  const [selectedSaleForDelete, setSelectedSaleForDelete] =
-    useState<Sale | null>(null);
+  const [selectedSaleForDelete, setSelectedSaleForDelete] = useState<Sale | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // track which group rows are expanded
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const toggleGroup = (id: string) => {
     setExpandedGroups((prev) => ({
@@ -229,14 +212,12 @@ export default function AdminSalesPage() {
 
   /* ===================== FETCH DATA ===================== */
 
-  // NEW: Fetch all active therapists/employees
   const fetchTherapists = useCallback(async () => {
     try {
-      // ASSUMPTION: 'employees' table exists and has 'name' column for therapists
       const { data } = await supabase
         .from('employees')
         .select('id, name')
-        .eq('is_active', true) // Only fetch active therapists
+        .eq('is_active', true)
         .order('name', { ascending: true });
         
       setTherapists((data as Employee[]) || []);
@@ -254,7 +235,7 @@ export default function AdminSalesPage() {
       .gte('date', startDate)
       .lte('date', endDate)
       .order('check_in_time', { ascending: false })
-      .limit(10000); // <--- ADDED: Increases limit from default 1000 to 10,000
+      .limit(10000);
 
     if (selectedOutletId !== 'all') {
       query = query.eq('outlet_id', selectedOutletId);
@@ -266,11 +247,10 @@ export default function AdminSalesPage() {
   }, [startDate, endDate, selectedOutletId]);
 
   useEffect(() => {
-    fetchTherapists(); // Fetch therapists once on mount
+    fetchTherapists();
     fetchSales();
   }, [fetchSales, fetchTherapists]);
 
-  // 🔄 Realtime auto-refresh when any customer row changes
   useEffect(() => {
     const channel = supabase
       .channel('admin-sales-customers')
@@ -282,7 +262,6 @@ export default function AdminSalesPage() {
           table: 'customers',
         },
         () => {
-          // re-fetch based on current filters
           fetchSales();
         },
       )
@@ -299,58 +278,35 @@ export default function AdminSalesPage() {
 
   /* ===================== TOTALS ===================== */
 
-  const activeSales = useMemo(
-    () => sales.filter((s) => s.check_out_time),
-    [sales],
-  );
+  const activeSales = useMemo(() => sales.filter((s) => s.check_out_time), [sales]);
 
   const totalSales = useMemo(
-    () =>
-      activeSales.reduce(
-        (a, s) => a + (s.took_package ? s.package_amount : s.amount_paid),
-        0,
-      ),
+    () => activeSales.reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
     [activeSales],
   );
 
   const totalCashSales = useMemo(
-    () =>
-      activeSales
-        .filter((s) => s.payment_method === 'cash' && !s.is_package_customer) // Exclude redemptions from Cash
-        .reduce((a, s) => a + s.amount_paid, 0),
+    () => activeSales.filter((s) => s.payment_method === 'cash' && !s.is_package_customer).reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
 
   const totalUpiSales = useMemo(
-    () =>
-      activeSales
-        .filter((s) => s.payment_method === 'upi' && !s.is_package_customer)
-        .reduce((a, s) => a + s.amount_paid, 0),
+    () => activeSales.filter((s) => s.payment_method === 'upi' && !s.is_package_customer).reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
 
   const totalCardSales = useMemo(
-    () =>
-      activeSales
-        .filter((s) => s.payment_method === 'card' && !s.is_package_customer)
-        .reduce((a, s) => a + s.amount_paid, 0),
+    () => activeSales.filter((s) => s.payment_method === 'card' && !s.is_package_customer).reduce((a, s) => a + s.amount_paid, 0),
     [activeSales],
   );
 
   const totalPackageSales = useMemo(
-    () =>
-      activeSales
-        .filter((s) => s.took_package)
-        .reduce((a, s) => a + s.package_amount, 0),
+    () => activeSales.filter((s) => s.took_package).reduce((a, s) => a + s.package_amount, 0),
     [activeSales],
   );
 
-  const activeSalesCount = useMemo(
-    () => activeSales.length,
-    [activeSales],
-  );
+  const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
 
-  // NEW: Client Category Counts (Uses full 'sales' array so it updates immediately when added)
   const newClientsCount = useMemo(() => 
     sales.filter(s => {
       const type = (s.client_type || '').trim().toLowerCase();
@@ -368,7 +324,11 @@ export default function AdminSalesPage() {
     sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
     [sales]
   );
-  
+
+  const officeClientsCount = useMemo(() => 
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'office').length, 
+    [sales]
+  );
 
  /* ===================== EDIT ===================== */
 
@@ -377,20 +337,18 @@ export default function AdminSalesPage() {
     const tParts = (sale.therapist_name || '').split(' & ');
     const { hrs, mins } = decimalToTime(sale.session_hours || 0);
 
-    // --- FIX: Resolve Outlet ID from Name if ID is missing ---
     let currentOutletId = sale.outlet_id;
     if (!currentOutletId && sale.outlet_name) {
        const matched = OUTLETS.find(o => o.name === sale.outlet_name);
        if (matched) currentOutletId = matched.id;
     }
-    // ---------------------------------------------------------
 
     setEditForm({
       name: sale.name || '',
       mobile: sale.mobile || '',
       date: toInputDate(sale.date),
-      outlet_id: currentOutletId || '', // Use resolved ID
-      client_type: (sale.client_type || 'new').toLowerCase(), // Bind client type
+      outlet_id: currentOutletId || '',
+      client_type: (sale.client_type || 'new').toLowerCase(),
       treatment: sale.treatment || '',
       payment_method: sale.payment_method || 'cash',
       amount: (sale.took_package ? sale.package_amount : sale.amount_paid) / 100,
@@ -419,7 +377,6 @@ export default function AdminSalesPage() {
     setEditForm((prev: any) => {
       const updated = { ...prev, [name]: value };
 
-      // 🛑 FIX: Only update check_out_time if the sale is ALREADY checked out.
       if (updated.check_in_time && prev.check_out_time) {
          updated.check_out_time = calculateOutTime(
             updated.check_in_time, 
@@ -453,7 +410,6 @@ export default function AdminSalesPage() {
     }
     if (!editingSale) return;
 
-    // Validate Duration
     const totalHours = (Number(editForm.session_hours_h) || 0) + (Number(editForm.session_hours_m) || 0) / 60;
     if (totalHours < 0) { 
       setSaveError('Duration cannot be negative.');
@@ -465,7 +421,6 @@ export default function AdminSalesPage() {
     const before = { ...editingSale };
     const amountNumber = Number(editForm.amount || 0);
 
-    // ... (Time reconstruction logic stays the same) ...
     let newCheckInTime: string | null = editingSale.check_in_time;
     if (editForm.date && editForm.check_in_time) {
       const combined = new Date(`${editForm.date}T${editForm.check_in_time}`);
@@ -503,7 +458,7 @@ export default function AdminSalesPage() {
       name: editForm.name,
       mobile: editForm.mobile,
       treatment: editForm.treatment,
-      client_type: editForm.client_type, // Persist client type edit
+      client_type: editForm.client_type,
       therapist_name: combinedTherapist,
       room: editForm.room || null,
       session_hours: totalHours,
@@ -519,7 +474,6 @@ export default function AdminSalesPage() {
       out_time: null,
     };
 
-    // 1. Update Customers Table
     const { error } = await supabase
       .from('customers')
       .update(updates)
@@ -531,29 +485,22 @@ export default function AdminSalesPage() {
       return;
     }
 
-    // 2. [NEW] Sync Packages (Bi-directional)
-    // If name/mobile changed, we must update the linked Package if it exists.
     if (before.name !== editForm.name || before.mobile !== editForm.mobile) {
-        // Attempt to update any package holding the OLD mobile number
         const { error: pkgError } = await supabase
             .from('packages')
             .update({
                 name: editForm.name,
                 mobile: editForm.mobile
             })
-            .eq('mobile', before.mobile); // Match by OLD mobile
+            .eq('mobile', before.mobile);
 
         if (pkgError) {
             console.error('Failed to sync package update:', pkgError);
         }
     }
 
-    // (The specific logic for `took_package` is now redundant because the block above covers it, 
-    // but we can leave or remove the specific 'start_date' check. The general update above is safer.)
-
     const after = { ...before, ...updates };
 
-    // 3. Log Activity
     await supabase.from('activity_logs').insert({
       action_type: 'edit_sale',
       description: JSON.stringify({
@@ -564,7 +511,6 @@ export default function AdminSalesPage() {
       username: user?.username || 'System',
     });
 
-    // 4. Update Local State Immediately
     setSales(prev => prev.map(s => s.id === editingSale.id ? { ...s, ...updates } as Sale : s));
 
     setIsEditModalOpen(false);
@@ -625,7 +571,6 @@ export default function AdminSalesPage() {
       return;
     }
 
-    // Log Activity with Real Username
     await supabase.from('activity_logs').insert({
       action_type: 'delete_sale',
       description: JSON.stringify({
@@ -633,7 +578,7 @@ export default function AdminSalesPage() {
         before,
         after: null,
       }),
-      username: user?.username || 'System', // <--- UPDATED HERE
+      username: user?.username || 'System',
     });
 
     setIsDeleteModalOpen(false);
@@ -652,7 +597,6 @@ export default function AdminSalesPage() {
 
     setIsExporting(true);
     try {
-      // Helper to build a flat row for Excel from a Sale
       const buildRow = (sale: Sale) => {
         const amountPaise = sale.took_package
           ? sale.package_amount
@@ -709,7 +653,6 @@ export default function AdminSalesPage() {
           GuestsCount: totalGuests,
           GroupDetails: groupDetails,
           Amount: amountRupees,
-          // UPDATED: Export "REDEMPTION" if applicable
           PaymentMethod: sale.is_package_customer 
             ? 'REDEMPTION' 
             : (sale.payment_method ? sale.payment_method.toUpperCase() : ''),
@@ -726,10 +669,8 @@ export default function AdminSalesPage() {
         };
       };
 
-      // ALL SALES
       const allSalesRows = sales.map(buildRow);
 
-      // OUTLET-WISE SHEETS
       const outletSheets: Record<string, any[]> = {};
       sales.forEach((sale) => {
         const key = sale.outlet_name || 'Unknown Outlet';
@@ -737,7 +678,6 @@ export default function AdminSalesPage() {
         outletSheets[key].push(buildRow(sale));
       });
 
-      // SUMMARY SHEET
       const summaryRows = [
         { Metric: 'Date Range', Value: `${startDate} to ${endDate}` },
         { Metric: 'Outlet Filter', Value: selectedOutletId === 'all' ? 'All Outlets' : OUTLETS.find((o) => o.id === selectedOutletId)?.name || selectedOutletId },
@@ -765,6 +705,7 @@ export default function AdminSalesPage() {
       setIsExporting(false);
     }
   };
+
   /* ===================== UI ===================== */
 
   return (
@@ -779,7 +720,6 @@ export default function AdminSalesPage() {
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
           </label>
-
           <select
             value={selectedOutletId}
             onChange={(e) => setSelectedOutletId(e.target.value)}
@@ -872,8 +812,8 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* NEW: Client Category Counts */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Client Category Counts */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-orange-500 flex items-center justify-between">
           <div>
             <h3 className="text-gray-500 text-xs font-semibold uppercase">New Clients</h3>
@@ -884,7 +824,7 @@ export default function AdminSalesPage() {
 
         <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-blue-500 flex items-center justify-between">
           <div>
-            <h3 className="text-gray-500 text-xs font-semibold uppercase">Regular Clients</h3>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">Regular</h3>
             <p className="text-3xl font-bold text-gray-800">{regularClientsCount}</p>
           </div>
           <Users className="text-blue-200 h-10 w-10" />
@@ -892,15 +832,23 @@ export default function AdminSalesPage() {
 
         <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-indigo-600 flex items-center justify-between">
           <div>
-            <h3 className="text-gray-500 text-xs font-semibold uppercase">Therapist Clients</h3>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">Therapist</h3>
             <p className="text-3xl font-bold text-gray-800">{therapistClientsCount}</p>
           </div>
           <Stethoscope className="text-indigo-200 h-10 w-10" />
         </div>
+
+        <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-gray-600 flex items-center justify-between">
+          <div>
+            <h3 className="text-gray-500 text-xs font-semibold uppercase">Office</h3>
+            <p className="text-3xl font-bold text-gray-800">{officeClientsCount}</p>
+          </div>
+          <Users className="text-gray-200 h-10 w-10" />
+        </div>
       </div>
 
       {/* Sales Table */}
-      <div className="bg-white shadow rounded-lg overflow-hidden">
+      <div className="bg-white shadow rounded-lg overflow-hidden mt-6">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -944,227 +892,119 @@ export default function AdminSalesPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td
-                    colSpan={11}
-                    className="p-6 text-center text-gray-500"
-                  >
+                  <td colSpan={11} className="p-6 text-center text-gray-500">
                     Loading…
                   </td>
                 </tr>
               ) : sales.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={11}
-                    className="p-6 text-center text-gray-500"
-                  >
+                  <td colSpan={11} className="p-6 text-center text-gray-500">
                     No sales found.
                   </td>
                 </tr>
               ) : (
                 sales.map((sale) => {
-                  const groupCount = sale.group_customers
-                    ? sale.group_customers.length
-                    : 0;
+                  const groupCount = sale.group_customers ? sale.group_customers.length : 0;
                   const totalGuests = 1 + groupCount;
-                  const customerLabel =
-                    groupCount > 0
-                      ? `${sale.name} + ${groupCount} more`
-                      : sale.name;
-
+                  const customerLabel = groupCount > 0 ? `${sale.name} + ${groupCount} more` : sale.name;
                   const isGroupExpanded = !!expandedGroups[sale.id];
 
-                  // Main customer time display (prefers manual in_time/out_time)
-                  const mainInDisplay = sale.in_time
-                    ? formatPlainTime(sale.in_time)
-                    : formatTime(sale.check_in_time);
-
+                  const mainInDisplay = sale.in_time ? formatPlainTime(sale.in_time) : formatTime(sale.check_in_time);
                   const hasManualOut = !!sale.out_time;
                   const mainOutDisplay = hasManualOut
                     ? formatPlainTime(sale.out_time)
                     : sale.check_out_time
                     ? formatTime(sale.check_out_time)
                     : (() => {
-                        const expected = getExpectedCheckoutTime(
-                          sale.check_in_time,
-                          sale.session_hours,
-                        );
-                        return expected
-                          ? formatTime(expected.toISOString())
-                          : '—';
+                        const expected = getExpectedCheckoutTime(sale.check_in_time, sale.session_hours);
+                        return expected ? formatTime(expected.toISOString()) : '—';
                       })();
 
-                  const showEstimated =
-                    !sale.out_time && !sale.check_out_time;
-                    
-                  // Safe category display check
+                  const showEstimated = !sale.out_time && !sale.check_out_time;
                   const cType = (sale.client_type || '').trim().toLowerCase();
                   const displayType = cType === '' ? 'new' : cType;
 
                   return (
-                    <tr
-                      key={sale.id}
-                      className={
-                        sale.check_out_time ? 'bg-gray-50 opacity-60' : ''
-                      }
-                    >
-                      {/* CUSTOMER */}
+                    <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : ''}>
                       <td className="px-3 py-2 text-xs align-top">
-                        <div className="font-medium text-black">
-                          {customerLabel}
-                        </div>
+                        <div className="font-medium text-black">{customerLabel}</div>
                         <div className="text-black">{sale.mobile}</div>
-                        {totalGuests > 1 && (
-                          <div className="text-[11px] text-gray-500 mt-0.5">
-                            Group of {totalGuests}
-                          </div>
-                        )}
+                        {totalGuests > 1 && <div className="text-[11px] text-gray-500 mt-0.5">Group of {totalGuests}</div>}
                       </td>
 
-                      {/* TYPE (NEW) */}
                       <td className="px-3 py-2 text-xs align-top">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                           displayType === 'regular' ? 'bg-blue-100 text-blue-700' :
                           displayType === 'therapist' ? 'bg-indigo-100 text-indigo-700' :
+                          displayType === 'office' ? 'bg-gray-200 text-gray-800' :
                           'bg-orange-100 text-orange-700'
                         }`}>
                           {displayType}
                         </span>
                       </td>
 
-                      {/* OUTLET */}
-                      <td className="px-3 py-2 text-xs text-black align-top">
-                        {sale.outlet_name}
-                      </td>
+                      <td className="px-3 py-2 text-xs text-black align-top">{sale.outlet_name}</td>
+                      <td className="px-3 py-2 text-xs text-black align-top">{toInputDate(sale.date)}</td>
 
-                      {/* SALE DATE */}
-                      <td className="px-3 py-2 text-xs text-black align-top">
-                        {toInputDate(sale.date)}
-                      </td>
-
-                      {/* SERVICE + GROUP DETAILS */}
                       <td className="px-3 py-2 text-xs max-w-xs text-black align-top">
-                        {/* Top row: service + dropdown button */}
                         <div className="flex items-start justify-between gap-2">
-                          <div className="text-black font-semibold">
-                            {formatService(sale)}
-                          </div>
-
+                          <div className="text-black font-semibold">{formatService(sale)}</div>
                           {groupCount > 0 && (
                             <button
                               type="button"
                               onClick={() => toggleGroup(sale.id)}
                               className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-gray-300 text-gray-700 hover:bg-gray-100"
                             >
-                              {isGroupExpanded ? (
-                                <>
-                                  <ChevronUp className="h-3 w-3" />
-                                  Hide group
-                                </>
-                              ) : (
-                                <>
-                                  <ChevronDown className="h-3 w-3" />
-                                  View group ({groupCount})
-                                </>
-                              )}
+                              {isGroupExpanded ? <><ChevronUp className="h-3 w-3" />Hide group</> : <><ChevronDown className="h-3 w-3" />View group ({groupCount})</>}
                             </button>
                           )}
                         </div>
 
-                        {/* Main customer line (always visible) */}
                         <div className="mt-2 space-y-1 text-[11px] text-gray-700">
                           <div>
-                            <span className="font-semibold text-gray-800">
-                              Main:
-                            </span>{' '}
-                            {sale.treatment || '—'} ·{' '}
-                            {formatDuration(sale.session_hours)} ·{' '}
-                            {sale.therapist_name || '—'} · Room{' '}
-                            {sale.room || '—'} · In {mainInDisplay} / Out{' '}
-                            {mainOutDisplay}
+                            <span className="font-semibold text-gray-800">Main:</span> {sale.treatment || '—'} · {formatDuration(sale.session_hours)} · {sale.therapist_name || '—'} · Room {sale.room || '—'} · In {mainInDisplay} / Out {mainOutDisplay}
                           </div>
                         </div>
 
-                        {/* Group members details (only when expanded) */}
-                        {sale.group_customers &&
-                          sale.group_customers.length > 0 &&
-                          isGroupExpanded && (
-                            <div className="mt-2 pt-2 border-t border-gray-200 space-y-1 text-[11px] text-gray-700">
-                              <div className="font-semibold text-gray-800">
-                                Group Members:
+                        {sale.group_customers && sale.group_customers.length > 0 && isGroupExpanded && (
+                          <div className="mt-2 pt-2 border-t border-gray-200 space-y-1 text-[11px] text-gray-700">
+                            <div className="font-semibold text-gray-800">Group Members:</div>
+                            {sale.group_customers.map((gc, idx) => (
+                              <div key={idx}>
+                                <span className="font-medium">{gc.name || `Guest ${idx + 2}`}</span>{': '}
+                                {gc.treatment || '—'} · {formatDuration(gc.sessionHours)} · {gc.therapist_name || '—'} · Room {gc.room || '—'} · In {formatPlainTime(gc.in_time)} / Out {formatPlainTime(gc.out_time)}
                               </div>
-                              {sale.group_customers.map((gc, idx) => (
-                                <div key={idx}>
-                                  <span className="font-medium">
-                                    {gc.name || `Guest ${idx + 2}`}
-                                  </span>
-                                  {': '}
-                                  {gc.treatment || '—'} ·{' '}
-                                  {formatDuration(gc.sessionHours)} ·{' '}
-                                  {gc.therapist_name || '—'} · Room{' '}
-                                  {gc.room || '—'} · In{' '}
-                                  {formatPlainTime(gc.in_time)} / Out{' '}
-                                  {formatPlainTime(gc.out_time)}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                      </td>
-
-                      {/* AMOUNT */}
-                      <td className="px-3 py-2 text-xs font-bold text-black align-top">
-                        {formatCurrency(
-                          sale.took_package
-                            ? sale.package_amount
-                            : sale.amount_paid,
+                            ))}
+                          </div>
                         )}
                       </td>
 
-                      {/* PAYMENT (UPDATED) */}
+                      <td className="px-3 py-2 text-xs font-bold text-black align-top">
+                        {formatCurrency(sale.took_package ? sale.package_amount : sale.amount_paid)}
+                      </td>
+
                       <td className="px-3 py-2 text-xs text-black align-top">
                         {formatPaymentMethod(sale.payment_method, sale.is_package_customer)}
                       </td>
 
-                      {/* TIME (MAIN) */}
                       <td className="px-3 py-2 text-xs text-black align-top">
                         <div>In: {mainInDisplay}</div>
-                        {showEstimated ? (
-                          <div className="text-black">
-                            Est: {mainOutDisplay}
-                          </div>
-                        ) : (
-                          <div>Out: {mainOutDisplay}</div>
-                        )}
+                        {showEstimated ? <div className="text-black">Est: {mainOutDisplay}</div> : <div>Out: {mainOutDisplay}</div>}
                       </td>
 
-                      {/* THERAPIST MAIN */}
-                      <td className="px-3 py-2 text-xs text-black align-top">
-                        {sale.therapist_name || '—'}
-                      </td>
+                      <td className="px-3 py-2 text-xs text-black align-top">{sale.therapist_name || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-black align-top">{sale.room || '—'}</td>
 
-                      {/* ROOM MAIN */}
-                      <td className="px-3 py-2 text-xs text-black align-top">
-                        {sale.room || '—'}
-                      </td>
-
-                      {/* ACTIONS */}
                       <td className="px-3 py-2 text-xs align-top">
                         <div className="flex flex-col gap-1">
-                          <button
-                            onClick={() => handleOpenEdit(sale)}
-                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
-                          >
+                          <button onClick={() => handleOpenEdit(sale)} className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
                             Edit
                           </button>
-
                           {!sale.check_out_time && (
-                            <button
-                              onClick={() => handleCheckOut(sale.id)}
-                              className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700"
-                            >
+                            <button onClick={() => handleCheckOut(sale.id)} className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700">
                               Check Out
                             </button>
                           )}
-
                           <button
                             onClick={() => {
                               setSelectedSaleForDelete(sale);
@@ -1191,320 +1031,129 @@ export default function AdminSalesPage() {
       {/* EDIT MODAL */}
       {isEditModalOpen && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center p-4 z-50">
-          <form
-            onSubmit={handleSaveEdit}
-            className="bg-white text-black rounded-xl w-full max-w-lg p-6 shadow-xl border border-gray-200"
-          >
-            <h2 className="text-xl font-bold border-b pb-2 text-black">
-              Edit Sale Details
-            </h2>
+          <form onSubmit={handleSaveEdit} className="bg-white text-black rounded-xl w-full max-w-lg p-6 shadow-xl border border-gray-200">
+            <h2 className="text-xl font-bold border-b pb-2 text-black">Edit Sale Details</h2>
 
-            {saveError && (
-              <div className="p-3 bg-red-100 text-red-700 border border-red-300 rounded">
-                {saveError}
-              </div>
-            )}
+            {saveError && <div className="p-3 bg-red-100 text-red-700 border border-red-300 rounded">{saveError}</div>}
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  name="name"
-                  value={editForm.name}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                  required
-                />
+                <label className="text-xs font-semibold text-black">Name</label>
+                <input type="text" name="name" value={editForm.name} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" required />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Mobile
-                </label>
-                <input
-                  type="text"
-                  name="mobile"
-                  value={editForm.mobile}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                  required
-                />
+                <label className="text-xs font-semibold text-black">Mobile</label>
+                <input type="text" name="mobile" value={editForm.mobile} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" required />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Outlet
-                </label>
-                <select
-                  name="outlet_id"
-                  value={editForm.outlet_id}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black"
-                >
-                  {OUTLETS.map((o) => (
-                    <option
-                      key={o.id}
-                      value={o.id}
-                      className="text-black"
-                    >
-                      {o.name}
-                    </option>
-                  ))}
+                <label className="text-xs font-semibold text-black">Outlet</label>
+                <select name="outlet_id" value={editForm.outlet_id} onChange={handleEditFormChange} className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black">
+                  {OUTLETS.map((o) => <option key={o.id} value={o.id} className="text-black">{o.name}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Date
-                </label>
-                <input
-                  type="date"
-                  name="date"
-                  value={editForm.date}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                  required
-                />
+                <label className="text-xs font-semibold text-black">Date</label>
+                <input type="date" name="date" value={editForm.date} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" required />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Treatment
-                </label>
-                <input
-                  type="text"
-                  name="treatment"
-                  value={editForm.treatment}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                  required
-                />
+                <label className="text-xs font-semibold text-black">Treatment</label>
+                <input type="text" name="treatment" value={editForm.treatment} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" required />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Client Category
-                </label>
-                <select
-                  name="client_type"
-                  value={editForm.client_type || 'new'}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black"
-                >
+                <label className="text-xs font-semibold text-black">Client Category</label>
+                <select name="client_type" value={editForm.client_type || 'new'} onChange={handleEditFormChange} className="w-full p-2 border rounded bg-white text-black focus:outline-none focus:ring-0 focus:text-black">
                   <option value="new" className="text-black">New Client</option>
                   <option value="regular" className="text-black">Regular Client</option>
                   <option value="therapist" className="text-black">Therapist Reference</option>
+                  <option value="office" className="text-black">Office Client</option>
                 </select>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Amount (₹)
-                </label>
-                <input
-                  type="number"
-                  name="amount"
-                  value={editForm.amount as number | ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                  required
-                />
+                <label className="text-xs font-semibold text-black">Amount (₹)</label>
+                <input type="number" name="amount" value={editForm.amount as number | ''} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" required />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Payment Method
-                </label>
-                <select
-                  name="payment_method"
-                  value={editForm.payment_method}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black"
-                >
-                  <option value="cash" className="text-black">
-                    Cash
-                  </option>
-                  <option value="card" className="text-black">
-                    Card
-                  </option>
-                  <option value="upi" className="text-black">
-                    UPI
-                  </option>
-                  <option value="package" className="text-black">
-                    Package Redemption
-                  </option>
+                <label className="text-xs font-semibold text-black">Payment Method</label>
+                <select name="payment_method" value={editForm.payment_method} onChange={handleEditFormChange} className="w-full p-2 border rounded bg-white text-black">
+                  <option value="cash" className="text-black">Cash</option>
+                  <option value="card" className="text-black">Card</option>
+                  <option value="upi" className="text-black">UPI</option>
+                  <option value="package" className="text-black">Package Redemption</option>
                 </select>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4"> </div>
-              {/* Updated Therapist Selection: Spans 2 columns */}
+            <div className="grid grid-cols-3 gap-4 mt-4">
               <div className="col-span-2">
-                <label className="text-xs font-semibold text-black">
-                  Therapist 1
-                </label>
-                <select
-                  name="therapist_name1"
-                  value={editForm.therapist_name1 ?? ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black mb-2"
-                >
+                <label className="text-xs font-semibold text-black">Therapist 1</label>
+                <select name="therapist_name1" value={editForm.therapist_name1 ?? ''} onChange={handleEditFormChange} className="w-full p-2 border rounded bg-white text-black mb-2">
                   <option value="">— Select Therapist —</option>
-                  {therapists.map((t) => (
-                    <option key={t.id} value={t.name}>
-                      {t.name}
-                    </option>
-                  ))}
+                  {therapists.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                 </select>
 
-                <label className="text-xs font-semibold text-black">
-                  Therapist 2 (Optional)
-                </label>
-                <select
-                  name="therapist_name2"
-                  value={editForm.therapist_name2 ?? ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded bg-white text-black"
-                >
+                <label className="text-xs font-semibold text-black">Therapist 2 (Optional)</label>
+                <select name="therapist_name2" value={editForm.therapist_name2 ?? ''} onChange={handleEditFormChange} className="w-full p-2 border rounded bg-white text-black">
                   <option value="">— None —</option>
-                  {therapists.map((t) => (
-                    <option key={`edit-sec-${t.id}`} value={t.name}>
-                      {t.name}
-                    </option>
-                  ))}
+                  {therapists.map((t) => <option key={`edit-sec-${t.id}`} value={t.name}>{t.name}</option>)}
                 </select>
               </div>
 
-             <div>
-                <label className="text-xs font-semibold text-black">
-                  Room
-                </label>
-                <input
-                  type="text"
-                  name="room"
-                  // 🛑 FIX: Use ?? '' to prevent null value error
-                  value={editForm.room ?? ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                />
-              </div>
-
-            {/* DURATION (Split into Hrs / Mins) */}
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Duration
-                </label>
-                <div className="flex gap-2">
-                  <div className="relative w-1/2">
-                    <input
-                      type="number"
-                      placeholder="Hrs"
-                      name="session_hours_h"
-                      value={editForm.session_hours_h ?? ''}
-                      onChange={handleDurationChange} // <--- MUST BE THIS HANDLER
-                      className="w-full p-2 border rounded text-black bg-white pr-8"
-                      min="0"
-                    />
-                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">HR</span>
-                  </div>
-                  <div className="relative w-1/2">
-                    <input
-                      type="number"
-                      placeholder="Mins"
-                      name="session_hours_m"
-                      value={editForm.session_hours_m ?? ''}
-                      onChange={handleDurationChange} // <--- MUST BE THIS HANDLER
-                      className="w-full p-2 border rounded text-black bg-white pr-8"
-                      min="0"
-                    />
-                    <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">MIN</span>
-                  </div>
+                <label className="text-xs font-semibold text-black">Room</label>
+                <input type="text" name="room" value={editForm.room ?? ''} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" />
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="text-xs font-semibold text-black">Duration</label>
+              <div className="flex gap-2">
+                <div className="relative w-1/2">
+                  <input type="number" placeholder="Hrs" name="session_hours_h" value={editForm.session_hours_h ?? ''} onChange={handleDurationChange} className="w-full p-2 border rounded text-black bg-white pr-8" min="0" />
+                  <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">HR</span>
+                </div>
+                <div className="relative w-1/2">
+                  <input type="number" placeholder="Mins" name="session_hours_m" value={editForm.session_hours_m ?? ''} onChange={handleDurationChange} className="w-full p-2 border rounded text-black bg-white pr-8" min="0" />
+                  <span className="absolute right-2 top-2 text-xs text-gray-400 font-bold">MIN</span>
                 </div>
               </div>
+            </div>
 
-            {/* TIME */}
-            {/* REPLACED: Time Inputs Grid */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Check-In Time
-                </label>
-                <input
-                  type="time"
-                  name="check_in_time"
-                  value={editForm.check_in_time || ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                />
+                <label className="text-xs font-semibold text-black">Check-In Time</label>
+                <input type="time" name="check_in_time" value={editForm.check_in_time || ''} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-black">
-                  Check-Out Time
-                </label>
-                <input
-                  type="time"
-                  name="check_out_time"
-                  value={editForm.check_out_time || ''}
-                  onChange={handleEditFormChange}
-                  className="w-full p-2 border rounded text-black bg-white"
-                />
+                <label className="text-xs font-semibold text-black">Check-Out Time</label>
+                <input type="time" name="check_out_time" value={editForm.check_out_time || ''} onChange={handleEditFormChange} className="w-full p-2 border rounded text-black bg-white" />
               </div>
             </div>
 
-            {/* REQUIRED EDIT REMARK */}
-            <div>
-              <label className="text-xs font-semibold text-black">
-                What did you edit? (Required)
-              </label>
-              <textarea
-                rows={3}
-                className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500"
-                value={editRemark}
-                onChange={(e) => setEditRemark(e.target.value)}
-                required
-              />
+            <div className="mt-4">
+              <label className="text-xs font-semibold text-black">What did you edit? (Required)</label>
+              <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500" value={editRemark} onChange={(e) => setEditRemark(e.target.value)} required />
             </div>
 
-            {/* PASSWORD */}
-            <div className="pt-4 border-t">
-              <label className="text-xs font-bold text-black">
-                Admin Password
-              </label>
-              <input
-                type="password"
-                value={editPassword}
-                onChange={(e) => setEditPassword(e.target.value)}
-                className="w-full p-2 border rounded border-gray-300 text-black bg-white"
-                placeholder="Enter admin123"
-              />
+            <div className="pt-4 border-t mt-4">
+              <label className="text-xs font-bold text-black">Admin Password</label>
+              <input type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} className="w-full p-2 border rounded border-gray-300 text-black bg-white" placeholder="Enter admin123" />
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleCloseEdit}
-                className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-black"
-              >
-                Cancel
-              </button>
-
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-              >
-                {isSaving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  'Save Changes'
-                )}
+            <div className="flex justify-end gap-3 pt-2 mt-4">
+              <button type="button" onClick={handleCloseEdit} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-black">Cancel</button>
+              <button type="submit" disabled={isSaving} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save Changes'}
               </button>
             </div>
           </form>
@@ -1517,57 +1166,25 @@ export default function AdminSalesPage() {
           <div className="bg-white text-black rounded-xl w-full max-w-md p-6 shadow-xl border border-gray-200 space-y-4">
             <h2 className="text-xl font-bold text-black">Delete Sale</h2>
 
-            {deleteError && (
-              <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">
-                {deleteError}
-              </div>
-            )}
+            {deleteError && <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">{deleteError}</div>}
 
             <p className="text-sm text-gray-700">
-              You are deleting:{' '}
-              <strong className="text-black">
-                {selectedSaleForDelete?.name}
-              </strong>
+              You are deleting: <strong className="text-black">{selectedSaleForDelete?.name}</strong>
             </p>
 
             <div>
-              <label className="text-xs font-semibold text-black">
-                Admin Password
-              </label>
-              <input
-                type="password"
-                className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500"
-                value={deletePassword}
-                onChange={(e) => setDeletePassword(e.target.value)}
-              />
+              <label className="text-xs font-semibold text-black">Admin Password</label>
+              <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-black">
-                Reason for deleting
-              </label>
-              <textarea
-                rows={3}
-                className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500"
-                value={deleteRemark}
-                onChange={(e) => setDeleteRemark(e.target.value)}
-                required
-              />
+              <label className="text-xs font-semibold text-black">Reason for deleting</label>
+              <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500" value={deleteRemark} onChange={(e) => setDeleteRemark(e.target.value)} required />
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                onClick={() => setIsDeleteModalOpen(false)}
-                className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-black"
-              >
-                Cancel
-              </button>
-
-              <button
-                onClick={handleDelete}
-                disabled={isDeleting}
-                className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800"
-              >
+            <div className="flex justify-end gap-3 pt-2 mt-4">
+              <button onClick={() => setIsDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-black">Cancel</button>
+              <button onClick={handleDelete} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800">
                 {isDeleting ? 'Deleting…' : 'Delete'}
               </button>
             </div>

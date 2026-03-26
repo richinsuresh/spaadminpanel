@@ -1,3 +1,4 @@
+// src/app/outlet/dashboard/layout.tsx
 'use client'; 
 
 import { useState, useEffect } from 'react';
@@ -137,6 +138,7 @@ export default function OutletDashboardLayout({
             <Link
               key={item.href}
               href={resolveHref(item.href)}
+              prefetch={false} 
               className={getLinkClass(item.href)}
               onClick={() => setIsSidebarOpen(false)} 
             >

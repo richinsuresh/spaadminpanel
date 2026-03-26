@@ -1,6 +1,7 @@
 // src/app/api/sales/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers'; // <-- ADDED FOR SECURITY
 
 /**
  * GET: list sales (basic fields)
@@ -22,6 +23,17 @@ async function logActivity(action: string, description: string, user: string) {
 
 export async function GET(req: NextRequest) {
   try {
+    // --- ADDED SECURITY CHECK ---
+    const cookieStore = await cookies();
+    const authRole = cookieStore.get('auth_role')?.value;
+    const adminSession = cookieStore.get('admin_session')?.value;
+    
+    // Basic check to ensure caller is an admin or outlet
+    if (!authRole && adminSession !== 'true' && adminSession !== '1') {
+      return NextResponse.json({ error: 'Unauthorized request' }, { status: 401 });
+    }
+    // -----------------------------
+
     const { searchParams } = new URL(req.url);
     const outletId = searchParams.get('outletId') || null;
 
@@ -45,6 +57,16 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // --- ADDED SECURITY CHECK ---
+    const cookieStore = await cookies();
+    const authRole = cookieStore.get('auth_role')?.value;
+    const adminSession = cookieStore.get('admin_session')?.value;
+    
+    if (!authRole && adminSession !== 'true' && adminSession !== '1') {
+      return NextResponse.json({ error: 'Unauthorized request' }, { status: 401 });
+    }
+    // -----------------------------
+
     const body = await req.json().catch(() => ({}));
     const bulk = Array.isArray(body?.bulk) ? body.bulk : (Array.isArray(body) ? body : null);
     if (!bulk) return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });

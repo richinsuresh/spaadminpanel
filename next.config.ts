@@ -11,12 +11,12 @@ const withPWA = require("next-pwa")({
 const nextConfig: NextConfig = {
   /* config options here */
   reactStrictMode: true,
-  // Ensure images from external sources (if any) are allowed
+  // Ensure images from external sources are strictly limited to your domains
   images: {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: '**',
+        hostname: '*.supabase.co', // <-- FIXED: Restricts image optimization to Supabase domains only
       },
     ],
   },

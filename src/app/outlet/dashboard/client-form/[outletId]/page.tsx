@@ -762,6 +762,10 @@ export default function ClientCheckinForm() {
                       <input type="radio" name="clientType" value="therapist" checked={formData.clientType === 'therapist'} onChange={handleChange} className="w-4 h-4 text-red-600 bg-gray-800 border-gray-600 focus:ring-red-500" />
                       <span className="text-sm font-medium text-gray-300">Therapist Client</span>
                   </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="clientType" value="office" checked={formData.clientType === 'office'} onChange={handleChange} className="w-4 h-4 text-red-600 bg-gray-800 border-gray-600 focus:ring-red-500" />
+                      <span className="text-sm font-medium text-gray-300">Office Client</span>
+                  </label>
               </div>
           </div>
 
