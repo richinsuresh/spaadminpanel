@@ -504,10 +504,14 @@ export default function ClientForm() {
                     <input type="radio" name="clientType" value="regular" checked={formData.clientType === 'regular'} onChange={handleChange} className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
                     <span className="text-sm font-medium text-gray-700">Regular Client</span>
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="clientType" value="therapist" checked={formData.clientType === 'therapist'} onChange={handleChange} className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500" />
-                    <span className="text-sm font-medium text-gray-700">Therapist Client</span>
-                </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+    <input type="radio" name="clientType" value="therapist" checked={formData.clientType === 'therapist'} onChange={handleChange} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 focus:ring-blue-500" />
+    <span className="text-sm font-medium text-gray-700">Therapist Client</span>
+</label>
+<label className="flex items-center gap-2 cursor-pointer">
+    <input type="radio" name="clientType" value="office" checked={formData.clientType === 'office'} onChange={handleChange} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 focus:ring-blue-500" />
+    <span className="text-sm font-medium text-gray-700">Office Client</span>
+</label>
             </div>
         </div>
 
