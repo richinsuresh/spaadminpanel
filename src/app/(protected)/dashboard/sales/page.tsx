@@ -184,6 +184,8 @@ export default function AdminSalesPage() {
   const [startDate, setStartDate] = useState<string>(getToday());
   const [endDate, setEndDate] = useState<string>(getToday());
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
+  const [selectedTherapistFilter, setSelectedTherapistFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc'>('date_desc');
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
@@ -276,9 +278,40 @@ export default function AdminSalesPage() {
     };
   }, [fetchSales]);
 
+  /* ===================== FILTERING & SORTING LOGIC ===================== */
+
+  const filteredSales = useMemo(() => {
+    if (selectedTherapistFilter === 'all') return sales;
+    
+    return sales.filter((sale) => {
+      const matchesMain = sale.therapist_name?.includes(selectedTherapistFilter);
+      const matchesGroup = sale.group_customers?.some(gc => gc.therapist_name?.includes(selectedTherapistFilter));
+      return matchesMain || matchesGroup;
+    });
+  }, [sales, selectedTherapistFilter]);
+  
+  const sortedSales = useMemo(() => {
+    const sortableSales = [...filteredSales];
+    return sortableSales.sort((a, b) => {
+      if (sortBy === 'date_desc') {
+        return new Date(b.check_in_time || 0).getTime() - new Date(a.check_in_time || 0).getTime();
+      }
+      if (sortBy === 'date_asc') {
+        return new Date(a.check_in_time || 0).getTime() - new Date(b.check_in_time || 0).getTime();
+      }
+      if (sortBy === 'therapist_asc') {
+        return (a.therapist_name || '').localeCompare(b.therapist_name || '');
+      }
+      if (sortBy === 'therapist_desc') {
+        return (b.therapist_name || '').localeCompare(a.therapist_name || '');
+      }
+      return 0;
+    });
+  }, [filteredSales, sortBy]);
+
   /* ===================== TOTALS ===================== */
 
-  const activeSales = useMemo(() => sales.filter((s) => s.check_out_time), [sales]);
+  const activeSales = useMemo(() => filteredSales.filter((s) => s.check_out_time), [filteredSales]);
 
   const totalSales = useMemo(
     () => activeSales.reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
@@ -308,26 +341,26 @@ export default function AdminSalesPage() {
   const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
 
   const newClientsCount = useMemo(() => 
-    sales.filter(s => {
+    filteredSales.filter(s => {
       const type = (s.client_type || '').trim().toLowerCase();
       return type === 'new' || type === '';
     }).length, 
-    [sales]
+    [filteredSales]
   );
 
   const regularClientsCount = useMemo(() => 
-    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'regular').length, 
-    [sales]
+    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'regular').length, 
+    [filteredSales]
   );
 
   const therapistClientsCount = useMemo(() => 
-    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
-    [sales]
+    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
+    [filteredSales]
   );
 
   const officeClientsCount = useMemo(() => 
-    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'office').length, 
-    [sales]
+    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'office').length, 
+    [filteredSales]
   );
 
  /* ===================== EDIT ===================== */
@@ -590,7 +623,7 @@ export default function AdminSalesPage() {
   /* ===================== EXPORT ===================== */
 
   const handleExport = async () => {
-    if (sales.length === 0) {
+    if (sortedSales.length === 0) {
       alert('No sales to export for the selected filters.');
       return;
     }
@@ -669,10 +702,10 @@ export default function AdminSalesPage() {
         };
       };
 
-      const allSalesRows = sales.map(buildRow);
+      const allSalesRows = sortedSales.map(buildRow);
 
       const outletSheets: Record<string, any[]> = {};
-      sales.forEach((sale) => {
+      sortedSales.forEach((sale) => {
         const key = sale.outlet_name || 'Unknown Outlet';
         if (!outletSheets[key]) outletSheets[key] = [];
         outletSheets[key].push(buildRow(sale));
@@ -681,6 +714,7 @@ export default function AdminSalesPage() {
       const summaryRows = [
         { Metric: 'Date Range', Value: `${startDate} to ${endDate}` },
         { Metric: 'Outlet Filter', Value: selectedOutletId === 'all' ? 'All Outlets' : OUTLETS.find((o) => o.id === selectedOutletId)?.name || selectedOutletId },
+        { Metric: 'Therapist Filter', Value: selectedTherapistFilter === 'all' ? 'All Therapists' : selectedTherapistFilter },
         {},
         { Metric: 'Total Completed Sales (₹)', Value: totalSales / 100 },
         { Metric: 'Total Cash Sales (₹)', Value: totalCashSales / 100 },
@@ -715,7 +749,7 @@ export default function AdminSalesPage() {
       </h1>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
@@ -759,6 +793,41 @@ export default function AdminSalesPage() {
             onChange={(e) => setEndDate(e.target.value)}
             className="w-full px-3 py-2 border rounded-lg text-black bg-white"
           />
+        </div>
+
+        {/* THERAPIST FILTER */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Therapist Filter
+          </label>
+          <select
+            value={selectedTherapistFilter}
+            onChange={(e) => setSelectedTherapistFilter(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0"
+          >
+            <option value="all" className="text-black">All Therapists</option>
+            {therapists.map((t) => (
+              <option key={t.id} value={t.name} className="text-black">
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Sort By
+          </label>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0"
+          >
+            <option value="date_desc">Date (Newest First)</option>
+            <option value="date_asc">Date (Oldest First)</option>
+            <option value="therapist_asc">Therapist (A to Z)</option>
+            <option value="therapist_desc">Therapist (Z to A)</option>
+          </select>
         </div>
 
         <div className="flex flex-col gap-1">
@@ -896,14 +965,14 @@ export default function AdminSalesPage() {
                     Loading…
                   </td>
                 </tr>
-              ) : sales.length === 0 ? (
+              ) : sortedSales.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="p-6 text-center text-gray-500">
-                    No sales found.
+                    No sales found for these filters.
                   </td>
                 </tr>
               ) : (
-                sales.map((sale) => {
+                sortedSales.map((sale) => {
                   const groupCount = sale.group_customers ? sale.group_customers.length : 0;
                   const totalGuests = 1 + groupCount;
                   const customerLabel = groupCount > 0 ? `${sale.name} + ${groupCount} more` : sale.name;
