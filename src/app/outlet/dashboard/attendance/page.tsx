@@ -8,7 +8,9 @@ import {
   Calendar as CalendarIcon, 
   Search,
   XCircle,
-  CalendarOff
+  CalendarOff,
+  MapPin,
+  Clock
 } from 'lucide-react';
 
 // --- Types ---
@@ -20,6 +22,9 @@ type Employee = {
   join_date?: string | null;
   exit_date?: string | null;
   is_active?: boolean;
+  // Added fields to track global status
+  is_checked_in?: boolean;
+  current_outlet_name?: string | null;
 };
 
 type AttendanceRecord = {
@@ -60,17 +65,14 @@ export default function OutletAttendancePage() {
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [markingId, setMarkingId] = useState<string | null>(null); // For button loading state
+  const [markingId, setMarkingId] = useState<string | null>(null);
   
-  // Filters
   const [dateFilter, setDateFilter] = useState(currentISTDate);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Outlet Info
   const [outletId, setOutletId] = useState<string | null>(null);
   const [outletName, setOutletName] = useState('My Outlet');
 
-  // 1. Fetch Outlet Session
   useEffect(() => {
     async function fetchOutletSession() {
       try {
@@ -87,20 +89,17 @@ export default function OutletAttendancePage() {
     fetchOutletSession();
   }, []);
 
-  // 2. Fetch Employees (With outlet_id to filter roster)
-  // FIX: Fetch is_active/join/exit fields to properly filter ex-employees
   const fetchEmployees = useCallback(async () => {
+    // Included is_checked_in and current_outlet_name to see global status
     const { data } = await supabase
       .from('employees')
-      .select('id, name, role, outlet_id, join_date, exit_date, is_active')
+      .select('id, name, role, outlet_id, join_date, exit_date, is_active, is_checked_in, current_outlet_name')
       .order('name'); 
     setEmployees(data || []);
   }, []);
 
-  // 3. Fetch Attendance (Filtered by this Outlet)
   const fetchAttendance = useCallback(async () => {
     if (!outletId) return;
-    
     setLoading(true);
     try {
       const { data, error } = await supabase
@@ -120,6 +119,13 @@ export default function OutletAttendancePage() {
 
   useEffect(() => {
     fetchEmployees();
+    
+    // Real-time subscription so if Gayathri logs in elsewhere, the UI updates immediately
+    const channel = supabase.channel('global-roster')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, fetchEmployees)
+      .subscribe();
+      
+    return () => { supabase.removeChannel(channel); };
   }, [fetchEmployees]);
 
   useEffect(() => {
@@ -128,7 +134,6 @@ export default function OutletAttendancePage() {
     }
   }, [fetchAttendance, outletId]);
 
-  // 4. Mark Absent / Off Logic
   const handleMarkStatus = async (emp: Employee, status: 'Absent' | 'Weekly Off') => {
     if (!outletId) return;
     setMarkingId(emp.id);
@@ -154,7 +159,7 @@ export default function OutletAttendancePage() {
             message: `Marked ${emp.name} as ${status}`
         });
 
-        await fetchAttendance(); // Refresh list
+        await fetchAttendance();
     } catch (err: any) {
         alert('Failed to mark status: ' + err.message);
     } finally {
@@ -162,38 +167,22 @@ export default function OutletAttendancePage() {
     }
   };
 
-  // Combine Data & FILTER
   const filteredData = employees.map(emp => ({
     employee: emp,
     record: records.find(r => r.employee_id === emp.id) || null
   })).filter(item => {
-    // 1. Must match search
     const nameMatch = item.employee.name.toLowerCase().includes(searchTerm.toLowerCase());
     if (!nameMatch) return false;
 
-    // 2. Must be relevant to this outlet
+    // Show if they belong to this outlet OR they have a record here today
     const belongsToOutlet = item.employee.outlet_id === outletId;
     const hasRecordHere = !!item.record;
     
     if (!belongsToOutlet && !hasRecordHere) return false;
 
-    // 3. STRICT EX-EMPLOYEE FILTERING
     const filterDateStr = dateFilter; 
-    
-    // Hide if joined strictly AFTER selected date
-    if (item.employee.join_date) {
-        const joinDateStr = item.employee.join_date.split('T')[0];
-        if (filterDateStr < joinDateStr) return false;
-    }
-    
-    // Hide if left BEFORE selected date
-    if (item.employee.exit_date) {
-        const exitDateStr = item.employee.exit_date.split('T')[0];
-        if (filterDateStr > exitDateStr) return false;
-    }
-
-    // Hide if explicitly inactive AND no record for today (Corrected Logic)
-    // Only hide if strictly inactive (false). Undefined/null is treated as active.
+    if (item.employee.join_date && filterDateStr < item.employee.join_date.split('T')[0]) return false;
+    if (item.employee.exit_date && filterDateStr > item.employee.exit_date.split('T')[0]) return false;
     if (item.employee.is_active === false && !item.record) {
          if (!item.employee.exit_date) return false;
     }
@@ -204,7 +193,6 @@ export default function OutletAttendancePage() {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       
-      {/* HEADER */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">{outletName} Attendance</h1>
@@ -212,7 +200,6 @@ export default function OutletAttendancePage() {
         </div>
         
         <div className="flex flex-wrap gap-3 items-center">
-            {/* Search */}
             <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <input 
@@ -220,12 +207,11 @@ export default function OutletAttendancePage() {
                     placeholder="Search staff..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-900 outline-none focus:ring-2 focus:ring-indigo-500 w-full md:w-64"
+                    className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white text-gray-900 outline-none focus:ring-2 focus:ring-indigo-500 w-full md:w-64 shadow-sm"
                 />
             </div>
 
-            {/* Date Picker */}
-            <div className="flex items-center px-4 py-2 border border-gray-200 rounded-xl bg-white gap-2">
+            <div className="flex items-center px-4 py-2 border border-gray-200 rounded-xl bg-white gap-2 shadow-sm">
               <CalendarIcon size={16} className="text-gray-900" />
               <input 
                 type="date" 
@@ -238,7 +224,6 @@ export default function OutletAttendancePage() {
         </div>
       </div>
 
-      {/* DATA TABLE */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -258,17 +243,20 @@ export default function OutletAttendancePage() {
               ) : (
                 filteredData.map(({ employee, record }) => {
                     const isProcessing = markingId === employee.id;
+                    
+                    // Logic to check if they are currently working at a different outlet
+                    const isWorkingElsewhere = employee.is_checked_in && employee.current_outlet_name !== outletName;
 
                     return (
                       <tr key={employee.id} className="hover:bg-gray-50/50 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center text-white font-bold text-xs">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs ${employee.is_checked_in ? 'bg-indigo-600 shadow-md shadow-indigo-100' : 'bg-gray-900'}`}>
                                   {employee.name.charAt(0)}
                               </div>
                               <div>
                                   <div className="text-sm font-bold text-gray-900">{employee.name}</div>
-                                  <div className="text-[10px] text-gray-500 font-bold uppercase">{employee.role || 'Therapist'}</div>
+                                  <div className="text-[10px] text-gray-500 font-bold uppercase tracking-tight">{employee.role || 'Therapist'}</div>
                               </div>
                           </div>
                         </td>
@@ -279,36 +267,46 @@ export default function OutletAttendancePage() {
                           {formatTime(record?.check_out_time)}
                         </td>
                         <td className="px-6 py-4">
-                           {/* LOGIC FOR STATUS DISPLAY */}
+                           {/* STATUS LOGIC */}
                            {record ? (
-                               // Record exists: Show Status
+                               // A record exists for this specific outlet today
                                record.status === 'Absent' ? (
-                                   <span className="px-2 py-1 rounded bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
+                                   <span className="px-2 py-1 rounded-md bg-rose-50 text-rose-700 text-[10px] font-bold uppercase border border-rose-100 flex items-center gap-1 w-fit">
                                        <XCircle size={12} /> Absent
                                    </span>
                                ) : record.status === 'Weekly Off' ? (
-                                   <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
+                                   <span className="px-2 py-1 rounded-md bg-gray-100 text-gray-600 text-[10px] font-bold uppercase border border-gray-200 flex items-center gap-1 w-fit">
                                        <CalendarOff size={12} /> Weekly Off
                                    </span>
                                ) : record.check_out_time ? (
-                                   <span className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
+                                   <span className="px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase border border-emerald-100">Shift End</span>
                                ) : (
-                                   <span className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase border border-indigo-100 animate-pulse">On Duty</span>
+                                   <span className="px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase border border-indigo-100 animate-pulse">On Duty</span>
                                )
+                           ) : isWorkingElsewhere ? (
+                               // Priority: If logged in at another outlet (like Gayathri at Kaggadasapura)
+                               <div className="flex flex-col gap-1">
+                                   <span className="px-2 py-1 rounded-md bg-amber-50 text-amber-700 text-[10px] font-extrabold uppercase border border-amber-200 w-fit flex items-center gap-1">
+                                       Working Elsewhere
+                                   </span>
+                                   <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1">
+                                       <MapPin size={10} /> {employee.current_outlet_name}
+                                   </span>
+                               </div>
                            ) : (
-                               // No Record: Show Buttons
+                               // No record and not logged in elsewhere: Show Action Buttons
                                <div className="flex items-center gap-2">
                                    <button 
                                        disabled={isProcessing}
                                        onClick={() => handleMarkStatus(employee, 'Absent')}
-                                       className="px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded text-[10px] font-bold uppercase hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                       className="px-2.5 py-1.5 bg-white border border-rose-200 text-rose-700 rounded-lg text-[10px] font-bold uppercase hover:bg-rose-50 transition-all shadow-sm disabled:opacity-50"
                                    >
                                        {isProcessing ? '...' : 'Mark Absent'}
                                    </button>
                                    <button 
                                        disabled={isProcessing}
                                        onClick={() => handleMarkStatus(employee, 'Weekly Off')}
-                                       className="px-2 py-1 bg-white border border-gray-300 text-gray-700 rounded text-[10px] font-bold uppercase hover:bg-gray-100 transition-colors disabled:opacity-50"
+                                       className="px-2.5 py-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg text-[10px] font-bold uppercase hover:bg-gray-100 transition-all shadow-sm disabled:opacity-50"
                                    >
                                        {isProcessing ? '...' : 'Mark Off'}
                                    </button>
