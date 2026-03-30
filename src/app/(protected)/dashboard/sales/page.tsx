@@ -185,6 +185,7 @@ export default function AdminSalesPage() {
   const [endDate, setEndDate] = useState<string>(getToday());
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
   const [selectedTherapistFilter, setSelectedTherapistFilter] = useState<string>('all');
+  const [selectedClientTypeFilter, setSelectedClientTypeFilter] = useState<string>('all'); // NEW
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc'>('date_desc');
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -281,14 +282,25 @@ export default function AdminSalesPage() {
   /* ===================== FILTERING & SORTING LOGIC ===================== */
 
   const filteredSales = useMemo(() => {
-    if (selectedTherapistFilter === 'all') return sales;
-    
     return sales.filter((sale) => {
-      const matchesMain = sale.therapist_name?.includes(selectedTherapistFilter);
-      const matchesGroup = sale.group_customers?.some(gc => gc.therapist_name?.includes(selectedTherapistFilter));
-      return matchesMain || matchesGroup;
+      // Therapist Filter
+      let matchesTherapist = true;
+      if (selectedTherapistFilter !== 'all') {
+        const matchesMain = sale.therapist_name?.includes(selectedTherapistFilter);
+        const matchesGroup = sale.group_customers?.some(gc => gc.therapist_name?.includes(selectedTherapistFilter));
+        matchesTherapist = !!(matchesMain || matchesGroup);
+      }
+
+      // Client Type Filter
+      let matchesClientType = true;
+      if (selectedClientTypeFilter !== 'all') {
+        const type = (sale.client_type || '').trim().toLowerCase() || 'new';
+        matchesClientType = type === selectedClientTypeFilter;
+      }
+
+      return matchesTherapist && matchesClientType;
     });
-  }, [sales, selectedTherapistFilter]);
+  }, [sales, selectedTherapistFilter, selectedClientTypeFilter]);
   
   const sortedSales = useMemo(() => {
     const sortableSales = [...filteredSales];
@@ -341,26 +353,26 @@ export default function AdminSalesPage() {
   const activeSalesCount = useMemo(() => activeSales.length, [activeSales]);
 
   const newClientsCount = useMemo(() => 
-    filteredSales.filter(s => {
+    sales.filter(s => {
       const type = (s.client_type || '').trim().toLowerCase();
       return type === 'new' || type === '';
     }).length, 
-    [filteredSales]
+    [sales]
   );
 
   const regularClientsCount = useMemo(() => 
-    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'regular').length, 
-    [filteredSales]
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'regular').length, 
+    [sales]
   );
 
   const therapistClientsCount = useMemo(() => 
-    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
-    [filteredSales]
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'therapist').length, 
+    [sales]
   );
 
   const officeClientsCount = useMemo(() => 
-    filteredSales.filter(s => (s.client_type || '').trim().toLowerCase() === 'office').length, 
-    [filteredSales]
+    sales.filter(s => (s.client_type || '').trim().toLowerCase() === 'office').length, 
+    [sales]
   );
 
  /* ===================== EDIT ===================== */
@@ -715,6 +727,7 @@ export default function AdminSalesPage() {
         { Metric: 'Date Range', Value: `${startDate} to ${endDate}` },
         { Metric: 'Outlet Filter', Value: selectedOutletId === 'all' ? 'All Outlets' : OUTLETS.find((o) => o.id === selectedOutletId)?.name || selectedOutletId },
         { Metric: 'Therapist Filter', Value: selectedTherapistFilter === 'all' ? 'All Therapists' : selectedTherapistFilter },
+        { Metric: 'Client Type Filter', Value: selectedClientTypeFilter === 'all' ? 'All Types' : selectedClientTypeFilter.toUpperCase() },
         {},
         { Metric: 'Total Completed Sales (₹)', Value: totalSales / 100 },
         { Metric: 'Total Cash Sales (₹)', Value: totalCashSales / 100 },
@@ -749,7 +762,7 @@ export default function AdminSalesPage() {
       </h1>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end">
+      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
@@ -758,15 +771,10 @@ export default function AdminSalesPage() {
             value={selectedOutletId}
             onChange={(e) => setSelectedOutletId(e.target.value)}
             className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0 focus:text-black"
-            aria-label="Select outlet"
           >
-            <option value="all" className="text-black">
-              All Outlets
-            </option>
+            <option value="all" className="text-black">All Outlets</option>
             {OUTLETS.map((o) => (
-              <option key={o.id} value={o.id} className="text-black">
-                {o.name}
-              </option>
+              <option key={o.id} value={o.id} className="text-black">{o.name}</option>
             ))}
           </select>
         </div>
@@ -793,6 +801,24 @@ export default function AdminSalesPage() {
             onChange={(e) => setEndDate(e.target.value)}
             className="w-full px-3 py-2 border rounded-lg text-black bg-white"
           />
+        </div>
+
+        {/* CLIENT TYPE FILTER */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Client Type
+          </label>
+          <select
+            value={selectedClientTypeFilter}
+            onChange={(e) => setSelectedClientTypeFilter(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0"
+          >
+            <option value="all">All Types</option>
+            <option value="new">New</option>
+            <option value="regular">Regular</option>
+            <option value="therapist">Therapist</option>
+            <option value="office">Office</option>
+          </select>
         </div>
 
         {/* THERAPIST FILTER */}
@@ -922,54 +948,28 @@ export default function AdminSalesPage() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Customer
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Type
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Outlet
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Sale Date
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Service / Group Details
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Amount
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Payment
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Time (Main)
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Therapist (Main)
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Room (Main)
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
-                  Action
-                </th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Customer</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Outlet</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Sale Date</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Service / Group Details</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Amount</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Payment</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Time (Main)</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Therapist (Main)</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Room (Main)</th>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Action</th>
               </tr>
             </thead>
 
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">
-                    Loading…
-                  </td>
+                  <td colSpan={11} className="p-6 text-center text-gray-500">Loading…</td>
                 </tr>
               ) : sortedSales.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">
-                    No sales found for these filters.
-                  </td>
+                  <td colSpan={11} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
                 </tr>
               ) : (
                 sortedSales.map((sale) => {
@@ -1097,7 +1097,7 @@ export default function AdminSalesPage() {
         </div>
       </div>
 
-      {/* EDIT MODAL */}
+      {/* EDIT MODAL - (Unchanged, keep as provided in your original file) */}
       {isEditModalOpen && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center p-4 z-50">
           <form onSubmit={handleSaveEdit} className="bg-white text-black rounded-xl w-full max-w-lg p-6 shadow-xl border border-gray-200">
@@ -1229,31 +1229,24 @@ export default function AdminSalesPage() {
         </div>
       )}
 
-      {/* DELETE MODAL */}
+      {/* DELETE MODAL - (Unchanged) */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center p-4 z-50">
           <div className="bg-white text-black rounded-xl w-full max-w-md p-6 shadow-xl border border-gray-200 space-y-4">
             <h2 className="text-xl font-bold text-black">Delete Sale</h2>
-
             {deleteError && <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">{deleteError}</div>}
-
-            <p className="text-sm text-gray-700">
-              You are deleting: <strong className="text-black">{selectedSaleForDelete?.name}</strong>
-            </p>
-
+            <p className="text-sm text-gray-700">You are deleting: <strong className="text-black">{selectedSaleForDelete?.name}</strong></p>
             <div>
               <label className="text-xs font-semibold text-black">Admin Password</label>
-              <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} />
+              <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} />
             </div>
-
             <div>
               <label className="text-xs font-semibold text-black">Reason for deleting</label>
-              <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black placeholder-gray-500" value={deleteRemark} onChange={(e) => setDeleteRemark(e.target.value)} required />
+              <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={deleteRemark} onChange={(e) => setDeleteRemark(e.target.value)} required />
             </div>
-
             <div className="flex justify-end gap-3 pt-2 mt-4">
-              <button onClick={() => setIsDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-black">Cancel</button>
-              <button onClick={handleDelete} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded hover:bg-red-800">
+              <button onClick={() => setIsDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
+              <button onClick={handleDelete} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded">
                 {isDeleting ? 'Deleting…' : 'Delete'}
               </button>
             </div>
