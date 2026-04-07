@@ -6,9 +6,6 @@ import { useUser } from '@/context/UserContext';
 import { Lock, User, Loader2, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
-// Offline auth helpers (you already had these)
-import { saveLocalAdminHash, verifyLocalAdminPassword } from '@/lib/offlineAuth';
-
 export default function AdminLoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -17,28 +14,6 @@ export default function AdminLoginPage() {
 
   const router = useRouter();
   const { login } = useUser();
-
-  const goToDashboard = () => {
-    router.push('/dashboard');
-  };
-
-  const handleServerAuth = async (uname: string, pwd: string) => {
-    try {
-      const res = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: uname, password: pwd }),
-      });
-
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return { ok: false, error: body?.error || `Auth failed (${res.status})` };
-      }
-      return { ok: true, body };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || String(err) };
-    }
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,56 +29,28 @@ export default function AdminLoginPage() {
       return;
     }
 
-    // Prefer server auth when online
-    if (navigator.onLine) {
-      const server = await handleServerAuth(uname, pwd);
-
-      if (server.ok) {
-        // Use returned role (admin | developer | staff)
-        const role = server.body?.role ?? 'admin';
-
-        // Update app context
-        login({ username: uname, role });
-
-        // Save local salted hash for offline login (non-blocking)
-        try { await saveLocalAdminHash(pwd); } catch (err) { console.warn('saveLocalAdminHash failed', err); }
-
-        // Keep legacy cookie for compatibility (harmless)
-        document.cookie = 'admin_session=true; path=/; max-age=86400';
-
-        goToDashboard();
-        return;
-      }
-
-      // If server explicitly returned invalid credentials, stop and show message
-      if (!server.ok && server.error && !server.error.toLowerCase().includes('network')) {
-        setError(server.error || 'Authentication failed');
-        setLoading(false);
-        return;
-      }
-
-      // If server failed due to network or unexpected issue, fall through to offline attempts
-    }
-
-    // OFFLINE fallback
     try {
-      const ok = await verifyLocalAdminPassword(pwd);
-      if (ok) {
-        login({ username: uname || 'admin', role: 'admin' });
-        document.cookie = 'admin_session=true; path=/; max-age=86400';
-        sessionStorage.setItem('offline_admin_logged_in', '1');
-        goToDashboard();
-        return;
-      } else {
-        setError('Offline login failed — wrong password or no cached credentials.');
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: uname, password: pwd }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(body?.error || 'Authentication failed.');
         setLoading(false);
         return;
       }
-    } catch (verifyErr: any) {
-      console.error('Offline verify error:', verifyErr);
-      setError('Offline login failed.');
+
+      const role = body?.role ?? 'admin';
+      login({ username: uname, role });
+      document.cookie = 'admin_session=true; path=/; max-age=86400';
+      router.push('/dashboard');
+    } catch (err: any) {
+      setError('Network error — please check your connection and try again.');
       setLoading(false);
-      return;
     }
   };
 

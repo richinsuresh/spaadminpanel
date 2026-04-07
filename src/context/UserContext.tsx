@@ -43,7 +43,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
     setUser(null);
     try {
       localStorage.removeItem('app_user');
-      sessionStorage.removeItem('offline_admin_logged_in');
       document.cookie = 'admin_session=; path=/; max-age=0';
       document.cookie = 'auth_role=; path=/; max-age=0';
     } catch {}

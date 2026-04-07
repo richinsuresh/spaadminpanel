@@ -103,10 +103,9 @@ export default function OutletsPage() {
 
       setIsLoggingOut(true);
       
-      const channel = supabase.channel('online-outlets');
+      const channel = supabase.channel('admin-force-logout');
       channel.subscribe(async (status) => {
           if (status === 'SUBSCRIBED') {
-              // Broadcast the kill command
               await channel.send({
                   type: 'broadcast',
                   event: 'force_logout',

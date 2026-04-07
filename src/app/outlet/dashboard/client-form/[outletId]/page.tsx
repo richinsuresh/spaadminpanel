@@ -16,9 +16,6 @@ import {
   Info,
 } from 'lucide-react';
 
-// OFFLINE imports
-import { offlineDb } from '@/lib/offlineDb';
-import { OfflineClientPayload } from '@/lib/types';
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Type Definitions ---
@@ -634,56 +631,8 @@ export default function ClientCheckinForm() {
       
     } catch (err: any) {
         console.error('Submit error:', err);
-
-        // OFFLINE FALLBACK
-        try {
-            const localPayload: OfflineClientPayload = {
-              client_uuid: clientUuid,
-              name: String(formData.name || '').trim(),
-              mobile,
-              date: new Date().toISOString().split('T')[0],
-              treatment: formData.treatment,
-              tookPackage: false,
-              packageAmount: 0,
-              totalPackageHours: 0,
-              packageSoldBy: null,
-              packageValidity: null,
-              amountPaid: isPackageRedemption ? 0 : finalAmountInPaise,
-              sessionHours: getSessionDuration(),
-              isPackageCustomer: isPackageRedemption,
-              packageId: isPackageRedemption ? clientInfo?.packageId : null,
-              outlet: outlet.name,
-              outlet_id: outlet.id,
-              paymentMethod: effectivePaymentMethod,
-              finalAmountInPaise: finalAmountInPaise,
-              check_in_time: new Date().toISOString(),
-              therapist_name: null,
-              therapist_primary: null,
-              therapist_secondary: null,
-              room: null,
-              client_type: formData.clientType, // NEW OFFLINE
-              created_local_at: new Date().toISOString(),
-              status: 'pending',
-              sync_error: String(err?.message || err),
-            };
-
-            await offlineDb.pending_clients.add(localPayload);
-
-            setSuccess('Saved locally — server unreachable. Entry will sync automatically when server is back.');
-            setLoading(false);
-
-            setFormData({
-              name: '', treatment: '', amountPaid: 0, sessionHours: 0, sessionMinutes: 0, paymentMethod: 'cash', clientType: 'new', splitCash: 0, splitUpi: 0, splitCard: 0
-            });
-            setMobile('');
-            setClientInfo(null);
-            setUsePackageCredit(false);
-            setAdditionalCustomers([]);
-          } catch (dexErr) {
-            console.error('Failed to save offline:', dexErr);
-            setError(err?.message || 'An unknown error occurred and local save failed.');
-            setLoading(false);
-          }
+        setError(err?.message || 'Submission failed. Please check your connection and try again.');
+        setLoading(false);
     }
   };
 

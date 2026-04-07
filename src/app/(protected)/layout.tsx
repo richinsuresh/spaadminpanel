@@ -2,10 +2,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useUser } from '@/context/UserContext';
 import { Loader2 } from 'lucide-react';
-import SmartAssistant from '@/components/SmartAssistant'; // <-- IMPORT THE CHATBOT
+import SmartAssistant from '@/components/SmartAssistant';
 
 function readCookie(name: string) {
   if (typeof document === 'undefined') return null;
@@ -15,7 +15,6 @@ function readCookie(name: string) {
 }
 
 export default function ProtectedLayout({ children }: { children: React.ReactNode }) {
-  
   const router = useRouter();
   const { user, isLoading } = useUser();
   const [isChecking, setIsChecking] = useState(true);
@@ -28,7 +27,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
       // 1) Context
       if (user) return true;
 
-      // 2) Server cookie set by /api/auth (recommended)
+      // 2) Server cookie set by /api/auth
       const authRole = readCookie('auth_role');
       if (authRole && authRole === 'admin') return true;
 
@@ -36,15 +35,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
       const adminSession = readCookie('admin_session');
       if (adminSession && adminSession !== '') return true;
 
-      // 4) Offline session flag
-      try {
-        if (typeof window !== 'undefined') {
-          const offlineFlag = sessionStorage.getItem('offline_admin_logged_in');
-          if (offlineFlag === '1' || offlineFlag === 'true') return true;
-        }
-      } catch (e) { /* ignore */ }
-
-      // 5) Legacy localStorage fallback
+      // 4) Legacy localStorage fallback
       try {
         if (typeof window !== 'undefined') {
           const appUser = localStorage.getItem('app_user');
@@ -60,13 +51,11 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
     setIsChecking(false);
 
     if (!ok) {
-      const preferred = '/admin-login';
-      router.replace(preferred);
+      router.replace('/admin-login');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, user, router]);
 
-  // Show loader while checking
   if (isLoading || isChecking || !isAuthorized) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -77,11 +66,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
 
   return (
     <>
-      
-      {/* PAGE CONTENT */}
       {children}
-
-      {/* 🤖 FLOATING SMART ASSISTANT 🤖 */}
       <SmartAssistant />
     </>
   );
