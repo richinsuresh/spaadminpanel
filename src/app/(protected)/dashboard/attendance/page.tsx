@@ -140,7 +140,10 @@ export default function AttendancePage() {
 
   const fetchAttendance = useCallback(async () => {
     try {
-      let query = supabase.from('attendance').select(`*`).eq('date', dateFilter);
+      // Order newest-first as a safety net: if any duplicate rows exist from
+      // before the upsert fix above, this ensures the most recently marked
+      // status is the one `records.find()` picks up for display.
+      let query = supabase.from('attendance').select(`*`).eq('date', dateFilter).order('created_at', { ascending: false });
       const { data, error } = await query;
       if (error) throw error;
       setRecords(data || []);
@@ -281,18 +284,50 @@ export default function AttendancePage() {
             }
         }
 
-        const { error } = await supabase.from('attendance').insert({
-            employee_id: emp.id,
-            employee_name: emp.name,
-            outlet_id: targetOutletId,
-            outlet_name: targetOutlet?.name || 'Unknown',
-            date: dateFilter,
-            status: status,
-            check_in_time: checkInTime,
-            check_out_time: null
-        });
+        // Check whether an attendance record already exists for this employee
+        // on this date. Previously this always INSERTed a new row, so marking
+        // a second status (e.g. Half Day) for an employee who already had a
+        // record for the day created a DUPLICATE row instead of updating the
+        // existing one. Since `records.find()` elsewhere just grabs whichever
+        // row comes back first, the newly marked status could be silently
+        // hidden behind the older duplicate — which is why "Half Day" looked
+        // like it wasn't being saved. Upserting on (employee_id, date) fixes
+        // both the visibility bug and the duplicate-row bug.
+        const { data: existingRecord, error: findError } = await supabase
+            .from('attendance')
+            .select('id')
+            .eq('employee_id', emp.id)
+            .eq('date', dateFilter)
+            .limit(1)
+            .maybeSingle();
 
-        if (error) throw error;
+        if (findError) throw findError;
+
+        if (existingRecord && existingRecord.id) {
+            const { error: updateError } = await supabase
+                .from('attendance')
+                .update({
+                    outlet_id: targetOutletId,
+                    outlet_name: targetOutlet?.name || 'Unknown',
+                    status: status,
+                    check_in_time: checkInTime,
+                    check_out_time: null
+                })
+                .eq('id', existingRecord.id);
+            if (updateError) throw updateError;
+        } else {
+            const { error: insertError } = await supabase.from('attendance').insert({
+                employee_id: emp.id,
+                employee_name: emp.name,
+                outlet_id: targetOutletId,
+                outlet_name: targetOutlet?.name || 'Unknown',
+                date: dateFilter,
+                status: status,
+                check_in_time: checkInTime,
+                check_out_time: null
+            });
+            if (insertError) throw insertError;
+        }
         
         if (status === 'Present' || status === 'Half Day') {
              await supabase.from('employees').update({ 
