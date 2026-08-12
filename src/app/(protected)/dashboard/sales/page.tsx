@@ -186,7 +186,16 @@ export default function AdminSalesPage() {
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
   const [selectedTherapistFilter, setSelectedTherapistFilter] = useState<string>('all');
   const [selectedClientTypeFilter, setSelectedClientTypeFilter] = useState<string>('all'); // NEW
-  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc'>('date_desc');
+  const [selectedPaymentMethodFilter, setSelectedPaymentMethodFilter] = useState<string>('all'); // NEW
+  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc' | 'payment_asc' | 'payment_desc'>('date_desc');
+
+  // Bulk selection / bulk delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [bulkDeletePassword, setBulkDeletePassword] = useState('');
+  const [bulkDeleteRemark, setBulkDeleteRemark] = useState('');
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
@@ -298,12 +307,24 @@ export default function AdminSalesPage() {
         matchesClientType = type === selectedClientTypeFilter;
       }
 
-      return matchesTherapist && matchesClientType;
+      // Payment Method Filter
+      let matchesPaymentMethod = true;
+      if (selectedPaymentMethodFilter !== 'all') {
+        if (selectedPaymentMethodFilter === 'redemption') {
+          matchesPaymentMethod = !!sale.is_package_customer;
+        } else {
+          const method = (sale.payment_method || '').trim().toLowerCase();
+          matchesPaymentMethod = !sale.is_package_customer && method === selectedPaymentMethodFilter;
+        }
+      }
+
+      return matchesTherapist && matchesClientType && matchesPaymentMethod;
     });
-  }, [sales, selectedTherapistFilter, selectedClientTypeFilter]);
+  }, [sales, selectedTherapistFilter, selectedClientTypeFilter, selectedPaymentMethodFilter]);
   
   const sortedSales = useMemo(() => {
     const sortableSales = [...filteredSales];
+    const paymentLabel = (s: Sale) => s.is_package_customer ? 'redemption' : (s.payment_method || '').toLowerCase();
     return sortableSales.sort((a, b) => {
       if (sortBy === 'date_desc') {
         return new Date(b.check_in_time || 0).getTime() - new Date(a.check_in_time || 0).getTime();
@@ -317,9 +338,45 @@ export default function AdminSalesPage() {
       if (sortBy === 'therapist_desc') {
         return (b.therapist_name || '').localeCompare(a.therapist_name || '');
       }
+      if (sortBy === 'payment_asc') {
+        return paymentLabel(a).localeCompare(paymentLabel(b));
+      }
+      if (sortBy === 'payment_desc') {
+        return paymentLabel(b).localeCompare(paymentLabel(a));
+      }
       return 0;
     });
   }, [filteredSales, sortBy]);
+
+  // Clear any selections that no longer match the current filters (e.g. the
+  // person filtered by "Cash", selected some rows, then switched to "UPI" —
+  // selections for rows that are no longer visible get dropped automatically).
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const visibleIds = new Set(sortedSales.map(s => s.id));
+      const next = new Set<string>();
+      prev.forEach(id => { if (visibleIds.has(id)) next.add(id); });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [sortedSales]);
+
+  const allVisibleSelected = sortedSales.length > 0 && sortedSales.every(s => selectedIds.has(s.id));
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(sortedSales.map(s => s.id)));
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   /* ===================== TOTALS ===================== */
 
@@ -632,6 +689,56 @@ export default function AdminSalesPage() {
     setIsDeleting(false);
   };
 
+  /* ===================== BULK DELETE ===================== */
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+
+    if (bulkDeletePassword !== 'admin123') {
+      setBulkDeleteError('Wrong Password');
+      return;
+    }
+    if (!bulkDeleteRemark.trim()) {
+      setBulkDeleteError('Remark required');
+      return;
+    }
+
+    setIsBulkDeleting(true);
+
+    const idsToDelete = Array.from(selectedIds);
+    const salesBeingDeleted = sales.filter((s) => selectedIds.has(s.id));
+
+    const { error } = await supabase
+      .from('customers')
+      .delete()
+      .in('id', idsToDelete);
+
+    if (error) {
+      setBulkDeleteError(error.message);
+      setIsBulkDeleting(false);
+      return;
+    }
+
+    await supabase.from('activity_logs').insert({
+      action_type: 'bulk_delete_sales',
+      description: JSON.stringify({
+        remark: bulkDeleteRemark,
+        count: idsToDelete.length,
+        payment_method_filter: selectedPaymentMethodFilter,
+        before: salesBeingDeleted,
+      }),
+      username: user?.username || 'System',
+    });
+
+    setIsBulkDeleteModalOpen(false);
+    setBulkDeletePassword('');
+    setBulkDeleteRemark('');
+    setBulkDeleteError('');
+    setSelectedIds(new Set());
+    await fetchSales();
+    setIsBulkDeleting(false);
+  };
+
   /* ===================== EXPORT ===================== */
 
   const handleExport = async () => {
@@ -762,7 +869,7 @@ export default function AdminSalesPage() {
       </h1>
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-4 items-end">
+      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
@@ -821,6 +928,25 @@ export default function AdminSalesPage() {
           </select>
         </div>
 
+        {/* PAYMENT METHOD FILTER */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Payment Method
+          </label>
+          <select
+            value={selectedPaymentMethodFilter}
+            onChange={(e) => setSelectedPaymentMethodFilter(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0"
+          >
+            <option value="all">All Payment Methods</option>
+            <option value="cash">Cash</option>
+            <option value="upi">UPI</option>
+            <option value="card">Card</option>
+            <option value="bank_transfer">Bank Transfer</option>
+            <option value="redemption">Redemption</option>
+          </select>
+        </div>
+
         {/* THERAPIST FILTER */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -853,6 +979,8 @@ export default function AdminSalesPage() {
             <option value="date_asc">Date (Oldest First)</option>
             <option value="therapist_asc">Therapist (A to Z)</option>
             <option value="therapist_desc">Therapist (Z to A)</option>
+            <option value="payment_asc">Payment Method (A to Z)</option>
+            <option value="payment_desc">Payment Method (Z to A)</option>
           </select>
         </div>
 
@@ -866,6 +994,39 @@ export default function AdminSalesPage() {
           </button>
           <LastAction actionType="export_sales" />
         </div>
+      </div>
+
+      {/* Bulk selection bar — appears once at least one row is checked.
+          Typical flow for "delete all sales by a payment method": set the
+          Payment Method filter above, click "Select all N filtered rows",
+          then Delete Selected. */}
+      <div className="bg-white p-4 rounded-xl shadow-sm flex flex-wrap items-center justify-between gap-3">
+        <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={allVisibleSelected}
+            onChange={toggleSelectAll}
+            className="h-4 w-4"
+          />
+          {allVisibleSelected ? 'Unselect all' : `Select all ${sortedSales.length} filtered rows`}
+        </label>
+
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-gray-700">{selectedIds.size} selected</span>
+            <button
+              onClick={() => {
+                setBulkDeleteError('');
+                setBulkDeletePassword('');
+                setBulkDeleteRemark('');
+                setIsBulkDeleteModalOpen(true);
+              }}
+              className="px-4 py-2 bg-red-700 text-white rounded-lg hover:bg-red-800 text-sm font-medium"
+            >
+              Delete Selected ({selectedIds.size})
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Totals */}
@@ -948,6 +1109,14 @@ export default function AdminSalesPage() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4"
+                  />
+                </th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Customer</th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
                 <th className="px-3 py-2 text-left text-xs font-bold text-gray-600 uppercase">Outlet</th>
@@ -965,11 +1134,11 @@ export default function AdminSalesPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">Loading…</td>
+                  <td colSpan={12} className="p-6 text-center text-gray-500">Loading…</td>
                 </tr>
               ) : sortedSales.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
+                  <td colSpan={12} className="p-6 text-center text-gray-500">No sales found for these filters.</td>
                 </tr>
               ) : (
                 sortedSales.map((sale) => {
@@ -995,6 +1164,14 @@ export default function AdminSalesPage() {
 
                   return (
                     <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : ''}>
+                      <td className="px-3 py-2 text-xs align-top">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(sale.id)}
+                          onChange={() => toggleSelectOne(sale.id)}
+                          className="h-4 w-4"
+                        />
+                      </td>
                       <td className="px-3 py-2 text-xs align-top">
                         <div className="font-medium text-black">{customerLabel}</div>
                         <div className="text-black">{sale.mobile}</div>
@@ -1248,6 +1425,36 @@ export default function AdminSalesPage() {
               <button onClick={() => setIsDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
               <button onClick={handleDelete} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded">
                 {isDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK DELETE MODAL */}
+      {isBulkDeleteModalOpen && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center p-4 z-50">
+          <div className="bg-white text-black rounded-xl w-full max-w-md p-6 shadow-xl border border-gray-200 space-y-4">
+            <h2 className="text-xl font-bold text-black">Delete {selectedIds.size} Sales</h2>
+            {bulkDeleteError && <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">{bulkDeleteError}</div>}
+            <p className="text-sm text-gray-700">
+              You are about to permanently delete <strong className="text-black">{selectedIds.size}</strong> sale record{selectedIds.size === 1 ? '' : 's'}
+              {selectedPaymentMethodFilter !== 'all' && (
+                <> matching payment method <strong className="text-black uppercase">{selectedPaymentMethodFilter}</strong></>
+              )}. This cannot be undone.
+            </p>
+            <div>
+              <label className="text-xs font-semibold text-black">Admin Password</label>
+              <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={bulkDeletePassword} onChange={(e) => setBulkDeletePassword(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-black">Reason for deleting</label>
+              <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={bulkDeleteRemark} onChange={(e) => setBulkDeleteRemark(e.target.value)} required />
+            </div>
+            <div className="flex justify-end gap-3 pt-2 mt-4">
+              <button onClick={() => setIsBulkDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
+              <button onClick={handleBulkDelete} disabled={isBulkDeleting} className="px-4 py-2 bg-red-700 text-white rounded">
+                {isBulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
               </button>
             </div>
           </div>
