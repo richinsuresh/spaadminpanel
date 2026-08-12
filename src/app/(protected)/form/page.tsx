@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
 import { Trash2, UserPlus, Calendar, Clock } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
 
 // --- Type Definitions ---
 type ClientInfo = {
@@ -77,6 +78,9 @@ export default function ClientForm() {
   const [additionalCustomers, setAdditionalCustomers] = useState<AdditionalCustomer[]>([]);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Synchronous re-entrancy guard: prevents a fast double-click on "Save Record"
+  // from firing two requests before React re-renders the disabled button.
+  const submittingRef = useRef(false);
   const [success, setSuccess] = useState(false);
   const [inputError, setInputError] = useState('');
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -215,6 +219,11 @@ export default function ClientForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Block re-entrant submissions immediately (synchronous, no React state lag).
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+
     setIsSubmitting(true);
     setInputError('');
 
@@ -222,6 +231,7 @@ export default function ClientForm() {
     if (formData.isPackageCustomer && sessionHours <= 0) {
       setInputError('Please enter Session Duration when using package credits.');
       setIsSubmitting(false);
+      submittingRef.current = false;
       return;
     }
     
@@ -235,6 +245,7 @@ export default function ClientForm() {
         if (totalGroupHours > clientInfo.remainingHours) {
             setInputError(`Insufficient package hours. Total needed: ${totalGroupHours.toFixed(1)} hrs, Remaining: ${clientInfo.remainingHours.toFixed(1)} hrs.`);
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
     }
@@ -242,6 +253,7 @@ export default function ClientForm() {
     if ((sessionHours > 0 || formData.isPackageCustomer) && !String(formData.therapistName || '').trim()) {
       setInputError("Please select at least one Therapist for the Main Customer.");
       setIsSubmitting(false);
+      submittingRef.current = false;
       return;
     }
 
@@ -251,11 +263,13 @@ export default function ClientForm() {
         if (!c.name || !c.treatment || dur <= 0) {
             setInputError(`Please complete details for Guest ${i + 1} (Name, Treatment, Duration).`);
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
         if(!c.therapistName) {
             setInputError(`Please select a therapist for Guest ${i + 1} (${c.name}).`);
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
     }
@@ -264,11 +278,13 @@ export default function ClientForm() {
       if (!formData.packageAmount || formData.packageAmount <= 0 || !formData.totalPackageHours || formData.totalPackageHours <= 0) {
         setInputError('Please enter a valid Package Amount and Total Hours for the new package.');
         setIsSubmitting(false);
+        submittingRef.current = false;
         return;
       }
       if (!String(formData.sold_by || '').trim()) {
         setInputError('Please enter the name of the person who sold the package.');
         setIsSubmitting(false);
+        submittingRef.current = false;
         return;
       }
     }
@@ -276,11 +292,13 @@ export default function ClientForm() {
     if (!formData.isPackageCustomer && !formData.tookPackage && (Number(formData.amountPaid) <= 0 || !formData.amountPaid)) {
         setInputError('Please enter a valid Amount for the treatment.');
         setIsSubmitting(false);
+        submittingRef.current = false;
         return;
     }
     if (!formData.outlet) {
       setInputError('Please select an outlet.');
       setIsSubmitting(false);
+      submittingRef.current = false;
       return;
     }
 
@@ -295,6 +313,7 @@ export default function ClientForm() {
         if (totalSplit !== Number(targetAmount)) {
             setInputError(`Split payment amounts (₹${totalSplit}) must exactly equal the total amount (₹${targetAmount}).`);
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
         
@@ -319,6 +338,7 @@ export default function ClientForm() {
     if (isNaN(checkInDateTime.getTime())) {
         setInputError("Invalid Date or Time selection.");
         setIsSubmitting(false);
+        submittingRef.current = false;
         return;
     }
 
@@ -380,7 +400,13 @@ export default function ClientForm() {
         in_time: mainCheckInStr,
         out_time: mainCheckOutStr, 
 
-        group_customers: groupCustomersPayload.length > 0 ? groupCustomersPayload : null
+        group_customers: groupCustomersPayload.length > 0 ? groupCustomersPayload : null,
+
+        // Idempotency key: lets /api/client-form-submit detect and skip a
+        // retried/duplicated submission instead of creating a second
+        // package/customer row. See the "PACKAGE SALE" duplicate-prevention
+        // fix in that route.
+        client_uuid: uuidv4(),
       };
 
       const response = await fetch('/api/client-form-submit', {
@@ -400,6 +426,7 @@ export default function ClientForm() {
           if (data.ok) {
             setSuccess(true);
             setIsSubmitting(false);
+            submittingRef.current = false;
             setTimeout(() => {
               router.refresh();
               router.push('/dashboard/sales');
@@ -409,11 +436,13 @@ export default function ClientForm() {
             const err = data.error || data.message || 'Server rejected the request';
             setInputError(String(err));
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
           }
         }
         setSuccess(true);
         setIsSubmitting(false);
+        submittingRef.current = false;
         setTimeout(() => {
           router.refresh();
           router.push('/dashboard/sales');
@@ -424,11 +453,13 @@ export default function ClientForm() {
       const serverMsg = data?.error ?? data?.message ?? text ?? `${response.status} ${response.statusText}`;
       setInputError(String(serverMsg));
       setIsSubmitting(false);
+      submittingRef.current = false;
 
     } catch (err: any) {
       console.error('Error saving record:', err);
       setInputError('An unexpected error occurred.');
       setIsSubmitting(false);
+      submittingRef.current = false;
     }
   };
   
