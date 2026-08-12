@@ -19,7 +19,8 @@ import {
   Menu,
   X,
   History,
-  Activity // <--- Added for Activity Log icon
+  Activity, // <--- Added for Activity Log icon
+  ShieldCheck
 } from 'lucide-react';
 
 import { useUser } from '@/context/UserContext';
@@ -169,6 +170,7 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
           />
           
           <SideNavItem icon={<Building size={20} />} text="Outlets" href="/dashboard/outlets" />
+          <SideNavItem icon={<ShieldCheck size={20} />} text="Data Health Check" href="/dashboard/audit" />
 
           {/* ACTIVITY LOGS: Developer ONLY */}
           {user?.role === 'developer' && (
