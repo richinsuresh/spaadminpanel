@@ -216,32 +216,92 @@ async function processPayload(payload: any) {
 
     // 2. PACKAGE SALE
     if (payload.tookPackage) {
-      const newTotalHours = Number(payload.totalPackageHours || 0);
-      const sessionHours = Number(payload.sessionHours || 0);
-      const packagePrice = payload.packageAmount || 0;
-      const validityPeriod = payload.packageValidity || '3 months';
+      // Idempotency guard: use client_uuid as the package's op_uuid so that
+      // retries/double-submits of the same request never create a second row.
+      const pkgOpUuid = payload.client_uuid || null;
 
-      const newExpiry = calculateNewExpiryDate(null, validityPeriod);
+      if (pkgOpUuid) {
+        const { data: existingPkg, error: existingPkgErr } = await supabase
+          .from('packages')
+          .select('id')
+          .eq('op_uuid', pkgOpUuid)
+          .limit(1)
+          .maybeSingle();
 
-      const basePkg: any = {
-        name: payload.name,
-        mobile: payload.mobile,
-        package_amount: packagePrice,
-        package_sold_by: payload.packageSoldBy,
-        outlet_id: payload.outlet_id,
-        outlet: payload.outlet,
-        outlet_name: payload.outlet,
-        payment_method: payload.paymentMethod,
-        status: 'active',
-        start_date: new Date().toISOString().split('T')[0],
-        remaining_hours: newTotalHours - sessionHours,
-        total_hours: newTotalHours,
-        used_hours: sessionHours,
-        expiry_date: newExpiry
-      };
+        if (!existingPkgErr && existingPkg && (existingPkg as any).id) {
+          // Package for this exact submission already exists — skip re-creating it.
+          result.ok = true;
+          result.skipped = true;
+          result.message = 'Package already created for this submission';
+          result.package_id = (existingPkg as any).id;
+          // Fall through so the normal session/customer insert logic below still runs
+          // (it has its own client_uuid-based idempotency check at the top of this function).
+        } else {
+          const newTotalHours = Number(payload.totalPackageHours || 0);
+          const sessionHours = Number(payload.sessionHours || 0);
+          const packagePrice = payload.packageAmount || 0;
+          const validityPeriod = payload.packageValidity || '3 months';
 
-      const { error: insertError } = await supabase.from('packages').insert([basePkg]);
-      if (insertError) throw new Error('Error creating new package: ' + insertError.message);
+          const newExpiry = calculateNewExpiryDate(null, validityPeriod);
+
+          const basePkg: any = {
+            name: payload.name,
+            mobile: payload.mobile,
+            package_amount: packagePrice,
+            package_sold_by: payload.packageSoldBy,
+            outlet_id: payload.outlet_id,
+            outlet: payload.outlet,
+            outlet_name: payload.outlet,
+            payment_method: payload.paymentMethod,
+            status: 'active',
+            start_date: new Date().toISOString().split('T')[0],
+            remaining_hours: newTotalHours - sessionHours,
+            total_hours: newTotalHours,
+            used_hours: sessionHours,
+            expiry_date: newExpiry,
+            op_uuid: pkgOpUuid,
+          };
+
+          const { error: insertError } = await supabase.from('packages').insert([basePkg]);
+          if (insertError) {
+            const lower = (insertError.message || '').toLowerCase();
+            // If a unique constraint on op_uuid exists and a concurrent request beat us to it,
+            // treat it as a benign duplicate instead of failing the whole submission.
+            if (!(lower.includes('unique') || lower.includes('duplicate') || lower.includes('op_uuid'))) {
+              throw new Error('Error creating new package: ' + insertError.message);
+            }
+          }
+        }
+      } else {
+        // No client_uuid supplied — proceed as before (legacy callers), but this
+        // path has no duplicate protection. Frontend should always send client_uuid.
+        const newTotalHours = Number(payload.totalPackageHours || 0);
+        const sessionHours = Number(payload.sessionHours || 0);
+        const packagePrice = payload.packageAmount || 0;
+        const validityPeriod = payload.packageValidity || '3 months';
+
+        const newExpiry = calculateNewExpiryDate(null, validityPeriod);
+
+        const basePkg: any = {
+          name: payload.name,
+          mobile: payload.mobile,
+          package_amount: packagePrice,
+          package_sold_by: payload.packageSoldBy,
+          outlet_id: payload.outlet_id,
+          outlet: payload.outlet,
+          outlet_name: payload.outlet,
+          payment_method: payload.paymentMethod,
+          status: 'active',
+          start_date: new Date().toISOString().split('T')[0],
+          remaining_hours: newTotalHours - sessionHours,
+          total_hours: newTotalHours,
+          used_hours: sessionHours,
+          expiry_date: newExpiry
+        };
+
+        const { error: insertError } = await supabase.from('packages').insert([basePkg]);
+        if (insertError) throw new Error('Error creating new package: ' + insertError.message);
+      }
     }
 
     // 3. INSERT NON-REDEMPTION SESSION
