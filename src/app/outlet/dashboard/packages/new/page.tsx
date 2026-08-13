@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback, FormEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS, Outlet } from '@/lib/outlet';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import { Loader2, Save, ArrowLeft, Users, Clock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { v4 as uuidv4 } from 'uuid';
 
 /* ===================== TYPES ===================== */
 
@@ -81,6 +82,12 @@ export default function NewPackageSalePage() {
     const [submitError, setSubmitError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    // Hard, synchronous guard against double-submission (e.g. a fast double-click
+    // before React re-renders with the disabled button). React state updates are
+    // async, so relying on `isSubmitting` alone isn't enough to stop a second
+    // click that lands before the first render happens.
+    const submittingRef = useRef(false);
+
     const fetchData = useCallback(async (outletId: string) => {
         if (!outletId) return;
         try {
@@ -140,28 +147,39 @@ export default function NewPackageSalePage() {
     
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
+
+        // Block re-entrant submissions immediately (synchronous, no React state lag).
+        if (submittingRef.current) return;
+        submittingRef.current = true;
+
         setSubmitError(null);
         setIsSubmitting(true);
         
         if (currentSessionDuration <= 0) {
             setSubmitError('Please set a valid duration for the first session.');
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
 
         if (currentSessionDuration > form.totalPackageHours) {
             setSubmitError('First session duration cannot exceed total package hours.');
             setIsSubmitting(false);
+            submittingRef.current = false;
             return;
         }
 
         try {
             const amountInPaise = Math.round(form.packageAmount * 100);
+            // Stable idempotency key for this submission attempt. The server uses this
+            // to make sure retries/double-submits never create a second package/customer row.
+            const clientUuid = uuidv4();
             const res = await fetch('/api/client-form-submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     ...form,
+                    client_uuid: clientUuid,
                     date: getToday(),
                     packageAmount: amountInPaise,
                     sessionHours: currentSessionDuration,
@@ -177,10 +195,11 @@ export default function NewPackageSalePage() {
             if (!res.ok) throw new Error('Submission failed');
             alert(`Success! Sale recorded.`);
             router.push('/outlet/dashboard/sales');
+            // Deliberately not resetting submittingRef here — we're navigating away.
         } catch (err: any) {
             setSubmitError(err.message);
-        } finally {
             setIsSubmitting(false);
+            submittingRef.current = false;
         }
     };
 

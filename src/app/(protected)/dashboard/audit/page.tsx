@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
+import { getISTToday, getISTDateString } from '@/lib/dateTime';
 import {
   Loader2,
   AlertTriangle,
@@ -73,7 +74,8 @@ type Severity = 'high' | 'medium' | 'low';
 type FixAction =
   | { type: 'recompute_remaining_hours'; packageId: string }
   | { type: 'mark_expired'; packageId: string }
-  | { type: 'zero_amount_paid'; customerId: string };
+  | { type: 'zero_amount_paid'; customerId: string }
+  | { type: 'correct_date_from_checkin'; customerId: string; correctDate: string };
 
 type EditFieldType = 'text' | 'number' | 'currency' | 'select' | 'date' | 'time';
 
@@ -123,12 +125,12 @@ const isValidMobile = (m: string | null | undefined) =>
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-const getToday = () => new Date().toISOString().split('T')[0];
+const getToday = () => getISTToday();
 
 const daysAgo = (n: number) => {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().split('T')[0];
+  return getISTDateString(d);
 };
 
 const toInputTime = (d: string | null | undefined) => {
@@ -187,6 +189,8 @@ const CATEGORY_HELP: Record<string, string> = {
     'The customer paid an amount but no payment method (cash/UPI/card) was recorded against it.',
   'Unknown outlet':
     "This record's outlet_id doesn't match any outlet currently configured in the app — possibly an outlet that was renamed or removed after this sale was recorded.",
+  'Entry filed under the wrong date':
+    "Before the IST/UTC date fix was deployed, sessions that happened between roughly 12:00 AM and 5:30 AM IST could get their `date` field written as the previous calendar day, because the old code computed \"today\" using UTC instead of IST. The session's actual timestamp (check_in_time) is unaffected and still correct — only the `date` label used for filtering/reporting was wrong. \"Fix\" re-derives the correct date directly from check_in_time.",
   'Possible duplicate sale entry':
     'These entries share the same mobile, date, treatment, hours and amount, checked in within the same minute — the fingerprint of a double-submitted form before the client_uuid fix was deployed. Review and keep only the real one.',
   'Duplicate attendance entries':
@@ -463,6 +467,26 @@ function checkOneCustomer(c: CustomerRow): Issue[] {
       linkHref: `/dashboard/sales/${c.id}`,
       edit: { table: 'customers', recordId: c.id, fields: editFields() },
     });
+  }
+
+  if (c.check_in_time && c.date) {
+    const actualISTDate = getISTDateString(c.check_in_time);
+    if (actualISTDate && actualISTDate !== c.date) {
+      issues.push({
+        id: `cust-datemismatch-${c.id}`,
+        category: 'Entry filed under the wrong date',
+        severity: 'high',
+        title: `${c.name || 'Unknown'} — stored date doesn't match the actual check-in day`,
+        detail: `date is stored as ${c.date}, but check_in_time (${fmtDateTime(c.check_in_time)}) actually falls on ${actualISTDate} in IST. This is the fingerprint of the pre-fix UTC/IST date bug — sessions near midnight got filed a day off.`,
+        table: 'customers',
+        recordIds: [c.id],
+        mobile: c.mobile,
+        name: c.name,
+        linkHref: `/dashboard/sales/${c.id}`,
+        fix: { type: 'correct_date_from_checkin', customerId: c.id, correctDate: actualISTDate },
+        edit: { table: 'customers', recordId: c.id, fields: editFields() },
+      });
+    }
   }
 
   return issues;
@@ -810,6 +834,17 @@ export default function DataAuditPage() {
         const { error } = await supabase.from('customers').update({ amount_paid: 0 }).eq('id', fix.customerId);
         if (error) throw error;
         await logActivity('audit_auto_fix', { issue_id: issue.id, category: issue.category, action: 'zero_amount_paid' });
+      }
+
+      if (fix.type === 'correct_date_from_checkin') {
+        const { error } = await supabase.from('customers').update({ date: fix.correctDate }).eq('id', fix.customerId);
+        if (error) throw error;
+        await logActivity('audit_auto_fix', {
+          issue_id: issue.id,
+          category: issue.category,
+          action: 'correct_date_from_checkin',
+          new_date: fix.correctDate,
+        });
       }
 
       setResolvedIds((prev) => new Set(prev).add(issue.id));

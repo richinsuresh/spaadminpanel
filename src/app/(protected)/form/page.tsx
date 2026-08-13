@@ -6,6 +6,7 @@ import { OUTLETS } from '@/lib/outlet';
 import { supabase } from '@/lib/supabase';
 import { Trash2, UserPlus, Calendar, Clock } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { getISTToday } from '@/lib/dateTime';
 
 // --- Type Definitions ---
 type ClientInfo = {
@@ -52,7 +53,7 @@ export default function ClientForm() {
 
   const [formData, setFormData] = useState({
     name: '',
-    date: new Date().toISOString().split('T')[0],
+    date: getISTToday(),
     checkInTime: getCurrentTime(), 
     treatment: '',
     amountPaid: 0,

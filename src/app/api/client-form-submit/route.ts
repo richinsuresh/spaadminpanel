@@ -1,6 +1,7 @@
 // src/app/api/client-form-submit/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
 import { NextRequest, NextResponse } from 'next/server';
+import { getISTToday, addMonthsAsISTDateString } from '@/lib/dateTime';
 
 function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPeriod: string): string {
   const parts = validityPeriod.split(' ');
@@ -18,9 +19,11 @@ function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPer
     baseDate = new Date();
   }
 
-  const newExpiryDate = new Date(baseDate.getTime());
-  newExpiryDate.setMonth(newExpiryDate.getMonth() + monthsToAdd);
-  return newExpiryDate.toISOString().split('T')[0];
+  // NOTE: this route runs server-side on Vercel, which defaults to UTC.
+  // addMonthsAsISTDateString() cancels out the server's UTC offset before
+  // applying IST, so the resulting expiry date matches the IST calendar
+  // day regardless of what timezone the serverless function is running in.
+  return addMonthsAsISTDateString(baseDate, monthsToAdd);
 }
 
 async function processPayload(payload: any) {
@@ -254,7 +257,7 @@ async function processPayload(payload: any) {
             outlet_name: payload.outlet,
             payment_method: payload.paymentMethod,
             status: 'active',
-            start_date: new Date().toISOString().split('T')[0],
+            start_date: getISTToday(),
             remaining_hours: newTotalHours - sessionHours,
             total_hours: newTotalHours,
             used_hours: sessionHours,
@@ -292,7 +295,7 @@ async function processPayload(payload: any) {
           outlet_name: payload.outlet,
           payment_method: payload.paymentMethod,
           status: 'active',
-          start_date: new Date().toISOString().split('T')[0],
+          start_date: getISTToday(),
           remaining_hours: newTotalHours - sessionHours,
           total_hours: newTotalHours,
           used_hours: sessionHours,

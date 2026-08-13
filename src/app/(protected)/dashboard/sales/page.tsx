@@ -11,6 +11,7 @@ import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
 import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
+import { getISTToday, formatISTTime } from '@/lib/dateTime';
 import { Loader2, ChevronDown, ChevronUp, UserPlus, Users, Stethoscope } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import LastAction from '@/components/LastAction';
@@ -72,15 +73,7 @@ const formatCurrency = (v: number) =>
     minimumFractionDigits: 0,
   }).format(v / 100);
 
-const formatTime = (d: string | null) => {
-  if (!d) return '—';
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return '—';
-  return dt.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
+const formatTime = (d: string | null) => formatISTTime(d);
 
 const formatPlainTime = (t: string | null | undefined) => {
   if (!t) return '—';
@@ -168,7 +161,7 @@ const toInputDate = (d: string | null): string => {
   return isNaN(dt.getTime()) ? '' : dt.toISOString().split('T')[0];
 };
 
-const getToday = () => new Date().toISOString().split('T')[0];
+const getToday = () => getISTToday();
 
 /* ===================== MAIN COMPONENT ===================== */
 
@@ -778,19 +771,13 @@ export default function AdminSalesPage() {
         const mainInDisplay = sale.in_time
           ? sale.in_time
           : sale.check_in_time
-          ? new Date(sale.check_in_time).toLocaleTimeString('en-IN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
+          ? formatISTTime(sale.check_in_time)
           : '';
 
         const mainOutDisplay = sale.out_time
           ? sale.out_time
           : sale.check_out_time
-          ? new Date(sale.check_out_time).toLocaleTimeString('en-IN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
+          ? formatISTTime(sale.check_out_time)
           : '';
 
         return {

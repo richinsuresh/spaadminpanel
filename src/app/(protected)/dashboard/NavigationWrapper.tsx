@@ -25,6 +25,7 @@ import {
 
 import { useUser } from '@/context/UserContext';
 import { supabase } from '@/lib/supabase';
+import { getISTToday } from '@/lib/dateTime';
 
 export default function NavigationWrapper({ children }: { children: React.ReactNode }) {
   const { logout, user } = useUser();
@@ -51,7 +52,7 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
 
     const fetchDevStats = async () => {
         try {
-            const today = new Date().toISOString().split('T')[0];
+            const today = getISTToday();
             const now = new Date();
 
             // 1. Overdue Checkouts

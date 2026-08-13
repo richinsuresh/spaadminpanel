@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { v4 as uuidv4 } from 'uuid';
+import { getISTToday } from '@/lib/dateTime';
 
 // --- Type Definitions ---
 type Treatment = { id: string; name: string };
@@ -578,7 +579,7 @@ export default function ClientCheckinForm() {
         client_uuid: clientUuid,
         name: String(formData.name || '').trim(),
         mobile: mobile,
-        date: new Date().toISOString().split('T')[0],
+        date: getISTToday(),
         treatment: formData.treatment,
         tookPackage: false, 
         packageAmount: 0,

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { getISTToday, addMonthsAsISTDateString } from '@/lib/dateTime';
 
 type Customer = {
   name: string;
@@ -70,7 +71,7 @@ export default function OutletDashboard() {
         setRecentCustomers(sorted);
 
         // Daily sales (treatment + package sales)
-        const today = new Date().toISOString().split('T')[0];
+        const today = getISTToday();
         const todayNonPackageSales = outletCustomers
           .filter(c => c.date === today && !c.tookPackage)
           .reduce((sum, c) => sum + (c.amountPaid || 0), 0);
@@ -119,7 +120,7 @@ export default function OutletDashboard() {
                 name: customer.name,
                 mobile: customer.mobile,
                 remainingHours: remaining,
-                expiryDate: expiry.toISOString().split('T')[0],
+                expiryDate: addMonthsAsISTDateString(startDate, 2),
                 daysLeft: daysLeft > 0 ? daysLeft : 0
               });
             }

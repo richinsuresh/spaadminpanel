@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { OUTLETS } from '@/lib/outlet';
 import { useUser } from '@/context/UserContext';
 import { Wifi, WifiOff } from 'lucide-react';
+import { getISTToday } from '@/lib/dateTime';
 
 interface OutletSale {
   name: string;
@@ -63,7 +64,7 @@ export default function Dashboard() {
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getISTToday();
 
       const { data: todaySales, error: customersError } = await supabase
         .from('customers')

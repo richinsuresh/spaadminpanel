@@ -6,6 +6,7 @@ import { OUTLETS } from '@/lib/outlet';
 import { exportToExcel } from '@/lib/exportToExcel';
 import { User, Calendar as CalendarIcon, AlertTriangle, RefreshCw, CheckCircle, Edit2, Trash2 } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
+import { getISTToday } from '@/lib/dateTime';
 
 /* ===================== TYPES ===================== */
 
@@ -223,7 +224,7 @@ export default function PackagesPage() {
 
     // FIX: String-based date comparison to avoid timezone shifts
     if (row.expiry_date) {
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getISTToday();
         if (row.expiry_date < todayStr && currentStatus === 'active') {
             currentStatus = 'expired';
             supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
@@ -520,7 +521,7 @@ export default function PackagesPage() {
       const remaining_hours = total_hours - used_hours;
 
       // Determine updated status based on new balance or expiry date
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getISTToday();
       let newStatus = editFormData.status;
       if (remaining_hours <= 0 || (editFormData.expiry_date && editFormData.expiry_date < todayStr)) {
         newStatus = 'expired';
@@ -716,7 +717,7 @@ export default function PackagesPage() {
       // SILENT BACKGROUND SYNC: Instantly fix the database if it doesn't match history accurately
       if (Math.abs(pkg.used_hours - realUsage) > 0.05) {
           const newRemaining = pkg.total_hours - realUsage;
-          const todayStr = new Date().toISOString().split('T')[0];
+          const todayStr = getISTToday();
           let newStatus = pkg.status;
           if (newRemaining <= 0 || (pkg.expiry_date && pkg.expiry_date < todayStr)) {
              newStatus = 'expired';
