@@ -26,6 +26,20 @@ function calculateNewExpiryDate(currentExpiryDateStr: string | null, validityPer
   return addMonthsAsISTDateString(baseDate, monthsToAdd);
 }
 
+// True only for a genuine Postgres unique-constraint violation (duplicate op_uuid).
+// Postgres error code 23505 = unique_violation. We check the code first (reliable),
+// and only fall back to string-matching on messages that explicitly say "already exists"
+// or "duplicate key" — NOT on messages that merely mention the column name "op_uuid",
+// because Supabase/PostgREST also uses that word in a completely different, fatal error:
+// "Could not find the 'op_uuid' column of 'packages' in the schema cache" (missing column).
+// The old code matched on that substring too and silently swallowed real insert failures.
+function isBenignDuplicateError(err: any): boolean {
+  if (!err) return false;
+  if (err.code === '23505') return true;
+  const msg = (err.message || '').toLowerCase();
+  return msg.includes('duplicate key value') || msg.includes('already exists');
+}
+
 async function processPayload(payload: any) {
   const result: any = {
     client_uuid: payload && payload.client_uuid ? payload.client_uuid : null,
@@ -37,6 +51,10 @@ async function processPayload(payload: any) {
       result.error = 'Invalid payload: missing name or mobile';
       return result;
     }
+
+    // Normalize the "sold by" field once. The form sends `sold_by`; some legacy
+    // callers may send `packageSoldBy`. Support both so we never silently save null.
+    const soldBy = payload.sold_by ?? payload.packageSoldBy ?? null;
 
     // Idempotency check
     if (payload.client_uuid) {
@@ -75,7 +93,7 @@ async function processPayload(payload: any) {
       took_package: payload.tookPackage,
       package_amount: payload.packageAmount,
       total_package_hours: payload.totalPackageHours,
-      package_sold_by: payload.packageSoldBy,
+      package_sold_by: soldBy,
       outlet_id: payload.outlet_id,
       outlet_name: payload.outlet,
       payment_method: payload.paymentMethod,
@@ -231,6 +249,13 @@ async function processPayload(payload: any) {
           .limit(1)
           .maybeSingle();
 
+        if (existingPkgErr) {
+          // The lookup itself failed (e.g. column doesn't exist, connection issue).
+          // Log it loudly instead of silently falling through to an insert attempt
+          // that's likely to fail the same way.
+          console.error('[client-form-submit] op_uuid lookup failed on packages table:', existingPkgErr);
+        }
+
         if (!existingPkgErr && existingPkg && (existingPkg as any).id) {
           // Package for this exact submission already exists — skip re-creating it.
           result.ok = true;
@@ -251,7 +276,7 @@ async function processPayload(payload: any) {
             name: payload.name,
             mobile: payload.mobile,
             package_amount: packagePrice,
-            package_sold_by: payload.packageSoldBy,
+            package_sold_by: soldBy,
             outlet_id: payload.outlet_id,
             outlet: payload.outlet,
             outlet_name: payload.outlet,
@@ -267,12 +292,18 @@ async function processPayload(payload: any) {
 
           const { error: insertError } = await supabase.from('packages').insert([basePkg]);
           if (insertError) {
-            const lower = (insertError.message || '').toLowerCase();
-            // If a unique constraint on op_uuid exists and a concurrent request beat us to it,
-            // treat it as a benign duplicate instead of failing the whole submission.
-            if (!(lower.includes('unique') || lower.includes('duplicate') || lower.includes('op_uuid'))) {
+            // Always log the real error so failures are visible in Vercel logs,
+            // even in the case below where we choose to treat it as benign.
+            console.error('[client-form-submit] Error inserting into packages table:', insertError);
+
+            if (!isBenignDuplicateError(insertError)) {
+              // This is a real failure (missing column, bad type, RLS, etc).
+              // Do NOT silently continue — surface it so the whole submission fails
+              // loudly instead of quietly skipping package creation.
               throw new Error('Error creating new package: ' + insertError.message);
             }
+            // Otherwise: genuine unique-constraint duplicate on op_uuid from a
+            // concurrent retry — safe to ignore and continue.
           }
         }
       } else {
@@ -289,7 +320,7 @@ async function processPayload(payload: any) {
           name: payload.name,
           mobile: payload.mobile,
           package_amount: packagePrice,
-          package_sold_by: payload.packageSoldBy,
+          package_sold_by: soldBy,
           outlet_id: payload.outlet_id,
           outlet: payload.outlet,
           outlet_name: payload.outlet,
@@ -303,7 +334,10 @@ async function processPayload(payload: any) {
         };
 
         const { error: insertError } = await supabase.from('packages').insert([basePkg]);
-        if (insertError) throw new Error('Error creating new package: ' + insertError.message);
+        if (insertError) {
+          console.error('[client-form-submit] Error inserting into packages table (no client_uuid):', insertError);
+          throw new Error('Error creating new package: ' + insertError.message);
+        }
       }
     }
 
