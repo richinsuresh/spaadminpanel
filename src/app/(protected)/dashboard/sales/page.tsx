@@ -53,6 +53,12 @@ type Sale = {
   out_time: string | null;
 
   group_customers: GroupCustomer[] | null;
+
+  // Soft-delete flag: true means this row is excluded from Sales Report /
+  // totals, but still exists so the Customer List, Customer Profile, and
+  // Package Activity pages (which read from this same table) keep showing
+  // it. Set via "Delete Sales Only" instead of a permanent delete.
+  hidden_from_sales?: boolean | null;
 };
 
 type Employee = { id: string; name: string };
@@ -181,6 +187,9 @@ export default function AdminSalesPage() {
   const [selectedClientTypeFilter, setSelectedClientTypeFilter] = useState<string>('all'); // NEW
   const [selectedPaymentMethodFilter, setSelectedPaymentMethodFilter] = useState<string>('all'); // NEW
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc' | 'payment_asc' | 'payment_desc'>('date_desc');
+  // When on, includes rows previously removed via "Delete Sales Only" so they
+  // can be reviewed/restored. These never count toward totals regardless.
+  const [showHiddenFromSales, setShowHiddenFromSales] = useState(false);
 
   // Bulk selection / bulk delete
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -205,6 +214,7 @@ export default function AdminSalesPage() {
   const [deleteError, setDeleteError] = useState('');
   const [selectedSaleForDelete, setSelectedSaleForDelete] = useState<Sale | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState<string | null>(null);
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
@@ -246,10 +256,17 @@ export default function AdminSalesPage() {
       query = query.eq('outlet_id', selectedOutletId);
     }
 
+    // By default, rows removed via "Delete Sales Only" stay out of view.
+    // Toggling "Show hidden" brings them back for review/restore — totals
+    // still never count them (see activeSales below).
+    if (!showHiddenFromSales) {
+      query = query.or('hidden_from_sales.is.null,hidden_from_sales.eq.false');
+    }
+
     const { data } = await query;
     setSales((data as Sale[]) || []);
     setLoading(false);
-  }, [startDate, endDate, selectedOutletId]);
+  }, [startDate, endDate, selectedOutletId, showHiddenFromSales]);
 
   useEffect(() => {
     fetchTherapists();
@@ -373,7 +390,10 @@ export default function AdminSalesPage() {
 
   /* ===================== TOTALS ===================== */
 
-  const activeSales = useMemo(() => filteredSales.filter((s) => s.check_out_time), [filteredSales]);
+  const activeSales = useMemo(
+    () => filteredSales.filter((s) => s.check_out_time && !s.hidden_from_sales),
+    [filteredSales],
+  );
 
   const totalSales = useMemo(
     () => activeSales.reduce((a, s) => a + (s.took_package ? s.package_amount : s.amount_paid), 0),
@@ -639,7 +659,7 @@ export default function AdminSalesPage() {
 
   /* ===================== DELETE ===================== */
 
-  const handleDelete = async () => {
+  const handleDelete = async (mode: 'hard' | 'soft') => {
     if (!selectedSaleForDelete) return;
 
     if (deletePassword !== 'admin123') {
@@ -655,10 +675,10 @@ export default function AdminSalesPage() {
 
     const before = { ...selectedSaleForDelete };
 
-    const { error } = await supabase
-      .from('customers')
-      .delete()
-      .eq('id', selectedSaleForDelete.id);
+    const { error } =
+      mode === 'hard'
+        ? await supabase.from('customers').delete().eq('id', selectedSaleForDelete.id)
+        : await supabase.from('customers').update({ hidden_from_sales: true }).eq('id', selectedSaleForDelete.id);
 
     if (error) {
       setDeleteError(error.message);
@@ -667,24 +687,45 @@ export default function AdminSalesPage() {
     }
 
     await supabase.from('activity_logs').insert({
-      action_type: 'delete_sale',
+      action_type: mode === 'hard' ? 'delete_sale' : 'hide_sale_only',
       description: JSON.stringify({
         remark: deleteRemark,
         before,
-        after: null,
+        after: mode === 'hard' ? null : { ...before, hidden_from_sales: true },
       }),
       username: user?.username || 'System',
     });
 
     setIsDeleteModalOpen(false);
     setSelectedSaleForDelete(null);
+    setDeletePassword('');
+    setDeleteRemark('');
+    setDeleteError('');
     await fetchSales();
     setIsDeleting(false);
   };
 
+  const handleRestoreToSales = async (sale: Sale) => {
+    setIsRestoring(sale.id);
+    try {
+      const { error } = await supabase.from('customers').update({ hidden_from_sales: false }).eq('id', sale.id);
+      if (error) throw error;
+      await supabase.from('activity_logs').insert({
+        action_type: 'restore_sale',
+        description: JSON.stringify({ before: { ...sale, hidden_from_sales: true }, after: { ...sale, hidden_from_sales: false } }),
+        username: user?.username || 'System',
+      });
+      await fetchSales();
+    } catch (err: any) {
+      alert('Failed to restore: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsRestoring(null);
+    }
+  };
+
   /* ===================== BULK DELETE ===================== */
 
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = async (mode: 'hard' | 'soft') => {
     if (selectedIds.size === 0) return;
 
     if (bulkDeletePassword !== 'admin123') {
@@ -701,10 +742,10 @@ export default function AdminSalesPage() {
     const idsToDelete = Array.from(selectedIds);
     const salesBeingDeleted = sales.filter((s) => selectedIds.has(s.id));
 
-    const { error } = await supabase
-      .from('customers')
-      .delete()
-      .in('id', idsToDelete);
+    const { error } =
+      mode === 'hard'
+        ? await supabase.from('customers').delete().in('id', idsToDelete)
+        : await supabase.from('customers').update({ hidden_from_sales: true }).in('id', idsToDelete);
 
     if (error) {
       setBulkDeleteError(error.message);
@@ -713,7 +754,7 @@ export default function AdminSalesPage() {
     }
 
     await supabase.from('activity_logs').insert({
-      action_type: 'bulk_delete_sales',
+      action_type: mode === 'hard' ? 'bulk_delete_sales' : 'bulk_hide_sales_only',
       description: JSON.stringify({
         remark: bulkDeleteRemark,
         count: idsToDelete.length,
@@ -988,15 +1029,26 @@ export default function AdminSalesPage() {
           Payment Method filter above, click "Select all N filtered rows",
           then Delete Selected. */}
       <div className="bg-white p-4 rounded-xl shadow-sm flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
-          <input
-            type="checkbox"
-            checked={allVisibleSelected}
-            onChange={toggleSelectAll}
-            className="h-4 w-4"
-          />
-          {allVisibleSelected ? 'Unselect all' : `Select all ${sortedSales.length} filtered rows`}
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAll}
+              className="h-4 w-4"
+            />
+            {allVisibleSelected ? 'Unselect all' : `Select all ${sortedSales.length} filtered rows`}
+          </label>
+          <label className="flex items-center gap-2 text-sm text-gray-500 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showHiddenFromSales}
+              onChange={(e) => setShowHiddenFromSales(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Show entries removed via "Delete Sales Only"
+          </label>
+        </div>
 
         {selectedIds.size > 0 && (
           <div className="flex items-center gap-3">
@@ -1150,7 +1202,7 @@ export default function AdminSalesPage() {
                   const displayType = cType === '' ? 'new' : cType;
 
                   return (
-                    <tr key={sale.id} className={sale.check_out_time ? 'bg-gray-50 opacity-60' : ''}>
+                    <tr key={sale.id} className={sale.hidden_from_sales ? 'bg-amber-50' : sale.check_out_time ? 'bg-gray-50 opacity-60' : ''}>
                       <td className="px-3 py-2 text-xs align-top">
                         <input
                           type="checkbox"
@@ -1163,6 +1215,11 @@ export default function AdminSalesPage() {
                         <div className="font-medium text-black">{customerLabel}</div>
                         <div className="text-black">{sale.mobile}</div>
                         {totalGuests > 1 && <div className="text-[11px] text-gray-500 mt-0.5">Group of {totalGuests}</div>}
+                        {sale.hidden_from_sales && (
+                          <div className="text-[10px] font-bold uppercase text-amber-700 bg-amber-100 inline-block px-1.5 py-0.5 rounded mt-1">
+                            Removed from Sales
+                          </div>
+                        )}
                       </td>
 
                       <td className="px-3 py-2 text-xs align-top">
@@ -1230,26 +1287,38 @@ export default function AdminSalesPage() {
 
                       <td className="px-3 py-2 text-xs align-top">
                         <div className="flex flex-col gap-1">
-                          <button onClick={() => handleOpenEdit(sale)} className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
-                            Edit
-                          </button>
-                          {!sale.check_out_time && (
-                            <button onClick={() => handleCheckOut(sale.id)} className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700">
-                              Check Out
+                          {sale.hidden_from_sales ? (
+                            <button
+                              onClick={() => handleRestoreToSales(sale)}
+                              disabled={isRestoring === sale.id}
+                              className="px-3 py-1 bg-amber-100 text-amber-800 rounded-lg hover:bg-amber-200 disabled:opacity-50"
+                            >
+                              {isRestoring === sale.id ? 'Restoring…' : 'Restore to Sales'}
                             </button>
+                          ) : (
+                            <>
+                              <button onClick={() => handleOpenEdit(sale)} className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
+                                Edit
+                              </button>
+                              {!sale.check_out_time && (
+                                <button onClick={() => handleCheckOut(sale.id)} className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                  Check Out
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setSelectedSaleForDelete(sale);
+                                  setDeleteError('');
+                                  setDeletePassword('');
+                                  setDeleteRemark('');
+                                  setIsDeleteModalOpen(true);
+                                }}
+                                className="px-3 py-1 bg-red-700 text-white rounded-lg hover:bg-red-800"
+                              >
+                                Delete
+                              </button>
+                            </>
                           )}
-                          <button
-                            onClick={() => {
-                              setSelectedSaleForDelete(sale);
-                              setDeleteError('');
-                              setDeletePassword('');
-                              setDeleteRemark('');
-                              setIsDeleteModalOpen(true);
-                            }}
-                            className="px-3 py-1 bg-red-700 text-white rounded-lg hover:bg-red-800"
-                          >
-                            Delete
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1393,13 +1462,18 @@ export default function AdminSalesPage() {
         </div>
       )}
 
-      {/* DELETE MODAL - (Unchanged) */}
+      {/* DELETE MODAL */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center p-4 z-50">
           <div className="bg-white text-black rounded-xl w-full max-w-md p-6 shadow-xl border border-gray-200 space-y-4">
             <h2 className="text-xl font-bold text-black">Delete Sale</h2>
             {deleteError && <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">{deleteError}</div>}
             <p className="text-sm text-gray-700">You are deleting: <strong className="text-black">{selectedSaleForDelete?.name}</strong></p>
+            <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-900">
+              <strong>Delete Sales Only</strong> removes this entry from the Sales Report and revenue
+              totals, but keeps it visible on the Customer List, Customer Profile, and Package
+              Activity pages. <strong>Delete Permanently</strong> removes it everywhere and can't be undone.
+            </div>
             <div>
               <label className="text-xs font-semibold text-black">Admin Password</label>
               <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={deletePassword} onChange={(e) => setDeletePassword(e.target.value)} />
@@ -1408,10 +1482,13 @@ export default function AdminSalesPage() {
               <label className="text-xs font-semibold text-black">Reason for deleting</label>
               <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={deleteRemark} onChange={(e) => setDeleteRemark(e.target.value)} required />
             </div>
-            <div className="flex justify-end gap-3 pt-2 mt-4">
+            <div className="flex justify-end gap-3 pt-2 mt-4 flex-wrap">
               <button onClick={() => setIsDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
-              <button onClick={handleDelete} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded">
-                {isDeleting ? 'Deleting…' : 'Delete'}
+              <button onClick={() => handleDelete('soft')} disabled={isDeleting} className="px-4 py-2 bg-amber-600 text-white rounded disabled:opacity-50">
+                {isDeleting ? 'Working…' : 'Delete Sales Only'}
+              </button>
+              <button onClick={() => handleDelete('hard')} disabled={isDeleting} className="px-4 py-2 bg-red-700 text-white rounded disabled:opacity-50">
+                {isDeleting ? 'Working…' : 'Delete Permanently'}
               </button>
             </div>
           </div>
@@ -1425,11 +1502,17 @@ export default function AdminSalesPage() {
             <h2 className="text-xl font-bold text-black">Delete {selectedIds.size} Sales</h2>
             {bulkDeleteError && <div className="p-2 bg-red-100 text-red-700 border border-red-300 rounded">{bulkDeleteError}</div>}
             <p className="text-sm text-gray-700">
-              You are about to permanently delete <strong className="text-black">{selectedIds.size}</strong> sale record{selectedIds.size === 1 ? '' : 's'}
+              Acting on <strong className="text-black">{selectedIds.size}</strong> sale record{selectedIds.size === 1 ? '' : 's'}
               {selectedPaymentMethodFilter !== 'all' && (
                 <> matching payment method <strong className="text-black uppercase">{selectedPaymentMethodFilter}</strong></>
-              )}. This cannot be undone.
+              )}.
             </p>
+            <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-900">
+              <strong>Delete Sales Only</strong> removes these entries from the Sales Report and revenue
+              totals, but keeps them visible on the Customer List, Customer Profile, and Package
+              Activity pages — package data is never touched either way. <strong>Delete Permanently</strong> removes
+              them everywhere and can't be undone.
+            </div>
             <div>
               <label className="text-xs font-semibold text-black">Admin Password</label>
               <input type="password" className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={bulkDeletePassword} onChange={(e) => setBulkDeletePassword(e.target.value)} />
@@ -1438,10 +1521,13 @@ export default function AdminSalesPage() {
               <label className="text-xs font-semibold text-black">Reason for deleting</label>
               <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={bulkDeleteRemark} onChange={(e) => setBulkDeleteRemark(e.target.value)} required />
             </div>
-            <div className="flex justify-end gap-3 pt-2 mt-4">
+            <div className="flex justify-end gap-3 pt-2 mt-4 flex-wrap">
               <button onClick={() => setIsBulkDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
-              <button onClick={handleBulkDelete} disabled={isBulkDeleting} className="px-4 py-2 bg-red-700 text-white rounded">
-                {isBulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
+              <button onClick={() => handleBulkDelete('soft')} disabled={isBulkDeleting} className="px-4 py-2 bg-amber-600 text-white rounded disabled:opacity-50">
+                {isBulkDeleting ? 'Working…' : `Delete Sales Only (${selectedIds.size})`}
+              </button>
+              <button onClick={() => handleBulkDelete('hard')} disabled={isBulkDeleting} className="px-4 py-2 bg-red-700 text-white rounded disabled:opacity-50">
+                {isBulkDeleting ? 'Working…' : `Delete Permanently (${selectedIds.size})`}
               </button>
             </div>
           </div>
