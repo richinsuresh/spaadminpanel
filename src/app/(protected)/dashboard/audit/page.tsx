@@ -178,7 +178,7 @@ const CATEGORY_HELP: Record<string, string> = {
   'Possible duplicate package':
     "These packages share the same mobile number, amount, hours, and start date — almost certainly created by the double-submission bug that existed before the client_uuid fix was deployed. Don't delete blindly: if a customer has already redeemed sessions against one of these packages, deleting the wrong one will orphan that session record. Review the \"used_hours\" column below — the one with usage on it is very likely the real one to keep.",
   'Redemption logged as paid':
-    'A package redemption (is_package_customer = true) should never have a cash/UPI amount attached — hours come out of the package, not the wallet. This was the signature symptom of a bug where the redemption lookup silently failed and the visit got logged as a regular paid session instead. "Fix" zeroes the amount out; if the customer actually did pay for something extra on top of their package, use "Edit" instead so you don't lose that context.',
+    "A package redemption (is_package_customer = true) should never have a cash/UPI amount attached — hours come out of the package, not the wallet. This was the signature symptom of a bug where the redemption lookup silently failed and the visit got logged as a regular paid session instead. \"Fix\" zeroes the amount out; if the customer actually did pay for something extra on top of their package, use \"Edit\" instead so you don't lose that context.",
   'Package sale with zero amount':
     'A package sale was recorded with ₹0. Check whether the amount was left blank at the point of sale.',
   'Checkout before check-in':
