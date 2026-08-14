@@ -114,15 +114,27 @@ export async function POST(req: NextRequest) {
             .single();
 
           if (insertErr) {
-            const lower = (insertErr.message || '').toLowerCase();
-            if (op_uuid && (lower.includes('unique') || lower.includes('duplicate') || lower.includes('op_uuid'))) {
+            // Only treat this as a benign "already exists" case if it's a genuine
+            // Postgres unique-violation (code 23505) or an explicit duplicate-key
+            // message — NOT just because the message happens to mention "op_uuid"
+            // (which also appears in the unrelated "column not found" error if the
+            // op_uuid column is ever missing/renamed — matching on that substring
+            // alone would silently swallow a real insert failure).
+            const code = (insertErr as any).code;
+            const msg = (insertErr.message || '').toLowerCase();
+            const looksLikeUniqueViolation = code === '23505' || msg.includes('duplicate key value');
+            if (op_uuid && looksLikeUniqueViolation) {
               const { data: existing2 } = await supabase
                 .from('packages')
                 .select('id')
                 .eq('op_uuid', op_uuid)
                 .limit(1)
                 .maybeSingle();
-              results.push({ op, op_uuid, status: 'skipped', reason: 'unique_violation', package_id: existing2?.id ?? null });
+              if (existing2?.id) {
+                results.push({ op, op_uuid, status: 'skipped', reason: 'unique_violation', package_id: existing2.id });
+              } else {
+                results.push({ op, op_uuid, status: 'failed', error: insertErr.message || String(insertErr) });
+              }
             } else {
               results.push({ op, op_uuid, status: 'failed', error: insertErr.message || String(insertErr) });
             }
