@@ -177,6 +177,7 @@ export default function AdminSalesPage() {
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [therapists, setTherapists] = useState<Employee[]>([]); 
 
@@ -198,6 +199,7 @@ export default function AdminSalesPage() {
   const [bulkDeleteRemark, setBulkDeleteRemark] = useState('');
   const [bulkDeleteError, setBulkDeleteError] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingSale, setEditingSale] = useState<Sale | null>(null);
@@ -244,28 +246,41 @@ export default function AdminSalesPage() {
 
   const fetchSales = useCallback(async () => {
     setLoading(true);
-    let query = supabase
-      .from('customers')
-      .select('*')
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .order('check_in_time', { ascending: false })
-      .limit(10000);
+    setFetchError(null);
+    try {
+      let query = supabase
+        .from('customers')
+        .select('*')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('check_in_time', { ascending: false })
+        .limit(10000);
 
-    if (selectedOutletId !== 'all') {
-      query = query.eq('outlet_id', selectedOutletId);
+      if (selectedOutletId !== 'all') {
+        query = query.eq('outlet_id', selectedOutletId);
+      }
+
+      // By default, rows removed via "Delete Sales Only" stay out of view.
+      // Toggling "Show hidden" brings them back for review/restore — totals
+      // still never count them (see activeSales below).
+      if (!showHiddenFromSales) {
+        query = query.or('hidden_from_sales.is.null,hidden_from_sales.eq.false');
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setSales((data as Sale[]) || []);
+    } catch (err: any) {
+      console.error('Failed to fetch sales:', err);
+      setSales([]);
+      setFetchError(
+        err?.message === 'Failed to fetch'
+          ? 'Network request failed loading sales for this range. Try a narrower date range, or check your connection and retry.'
+          : (err?.message || 'Failed to load sales.')
+      );
+    } finally {
+      setLoading(false);
     }
-
-    // By default, rows removed via "Delete Sales Only" stay out of view.
-    // Toggling "Show hidden" brings them back for review/restore — totals
-    // still never count them (see activeSales below).
-    if (!showHiddenFromSales) {
-      query = query.or('hidden_from_sales.is.null,hidden_from_sales.eq.false');
-    }
-
-    const { data } = await query;
-    setSales((data as Sale[]) || []);
-    setLoading(false);
   }, [startDate, endDate, selectedOutletId, showHiddenFromSales]);
 
   useEffect(() => {
@@ -675,34 +690,41 @@ export default function AdminSalesPage() {
 
     const before = { ...selectedSaleForDelete };
 
-    const { error } =
-      mode === 'hard'
-        ? await supabase.from('customers').delete().eq('id', selectedSaleForDelete.id)
-        : await supabase.from('customers').update({ hidden_from_sales: true }).eq('id', selectedSaleForDelete.id);
+    try {
+      const { error } =
+        mode === 'hard'
+          ? await supabase.from('customers').delete().eq('id', selectedSaleForDelete.id)
+          : await supabase.from('customers').update({ hidden_from_sales: true }).eq('id', selectedSaleForDelete.id);
 
-    if (error) {
-      setDeleteError(error.message);
+      if (error) throw error;
+
+      await supabase.from('activity_logs').insert({
+        action_type: mode === 'hard' ? 'delete_sale' : 'hide_sale_only',
+        description: JSON.stringify({
+          remark: deleteRemark,
+          before,
+          after: mode === 'hard' ? null : { ...before, hidden_from_sales: true },
+        }),
+        username: user?.username || 'System',
+      });
+
+      setIsDeleteModalOpen(false);
+      setSelectedSaleForDelete(null);
+      setDeletePassword('');
+      setDeleteRemark('');
+      setDeleteError('');
+      await fetchSales();
+    } catch (err: any) {
+      // A raw "Failed to fetch" here means the network request itself died
+      // (dropped connection, ad-blocker, etc.) rather than Supabase returning
+      // a proper error — still worth surfacing instead of leaving the button
+      // stuck forever.
+      setDeleteError(err?.message === 'Failed to fetch'
+        ? 'Network request failed — check your connection and try again.'
+        : (err?.message || 'Something went wrong. Please try again.'));
+    } finally {
       setIsDeleting(false);
-      return;
     }
-
-    await supabase.from('activity_logs').insert({
-      action_type: mode === 'hard' ? 'delete_sale' : 'hide_sale_only',
-      description: JSON.stringify({
-        remark: deleteRemark,
-        before,
-        after: mode === 'hard' ? null : { ...before, hidden_from_sales: true },
-      }),
-      username: user?.username || 'System',
-    });
-
-    setIsDeleteModalOpen(false);
-    setSelectedSaleForDelete(null);
-    setDeletePassword('');
-    setDeleteRemark('');
-    setDeleteError('');
-    await fetchSales();
-    setIsDeleting(false);
   };
 
   const handleRestoreToSales = async (sale: Sale) => {
@@ -717,13 +739,29 @@ export default function AdminSalesPage() {
       });
       await fetchSales();
     } catch (err: any) {
-      alert('Failed to restore: ' + (err.message || 'Unknown error'));
+      alert('Failed to restore: ' + (err?.message === 'Failed to fetch'
+        ? 'Network request failed — check your connection and try again.'
+        : (err?.message || 'Unknown error')));
     } finally {
       setIsRestoring(null);
     }
   };
 
   /* ===================== BULK DELETE ===================== */
+
+  // Supabase/PostgREST builds `.in('id', [...])` as a URL query parameter
+  // containing every ID. With a wide date range (e.g. 9 months) that can be
+  // several thousand rows — the resulting URL gets long enough that the
+  // browser or a proxy in between simply refuses to send it, which surfaces
+  // as a generic "TypeError: Failed to fetch" with no useful detail. Batching
+  // into small chunks keeps every individual request small and reliable.
+  const BULK_DELETE_CHUNK_SIZE = 150;
+
+  const chunkArray = <T,>(arr: T[], size: number): T[][] => {
+    const chunks: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+    return chunks;
+  };
 
   const handleBulkDelete = async (mode: 'hard' | 'soft') => {
     if (selectedIds.size === 0) return;
@@ -738,39 +776,81 @@ export default function AdminSalesPage() {
     }
 
     setIsBulkDeleting(true);
+    setBulkDeleteError('');
 
     const idsToDelete = Array.from(selectedIds);
     const salesBeingDeleted = sales.filter((s) => selectedIds.has(s.id));
+    const batches = chunkArray(idsToDelete, BULK_DELETE_CHUNK_SIZE);
+    const succeededIds: string[] = [];
 
-    const { error } =
-      mode === 'hard'
-        ? await supabase.from('customers').delete().in('id', idsToDelete)
-        : await supabase.from('customers').update({ hidden_from_sales: true }).in('id', idsToDelete);
+    try {
+      for (let i = 0; i < batches.length; i++) {
+        setBulkDeleteProgress({ done: succeededIds.length, total: idsToDelete.length });
+        const batch = batches[i];
 
-    if (error) {
-      setBulkDeleteError(error.message);
+        const { error } =
+          mode === 'hard'
+            ? await supabase.from('customers').delete().in('id', batch)
+            : await supabase.from('customers').update({ hidden_from_sales: true }).in('id', batch);
+
+        if (error) throw error;
+        succeededIds.push(...batch);
+      }
+
+      setBulkDeleteProgress({ done: succeededIds.length, total: idsToDelete.length });
+
+      await supabase.from('activity_logs').insert({
+        action_type: mode === 'hard' ? 'bulk_delete_sales' : 'bulk_hide_sales_only',
+        description: JSON.stringify({
+          remark: bulkDeleteRemark,
+          count: succeededIds.length,
+          payment_method_filter: selectedPaymentMethodFilter,
+          before: salesBeingDeleted,
+        }),
+        username: user?.username || 'System',
+      });
+
+      setIsBulkDeleteModalOpen(false);
+      setBulkDeletePassword('');
+      setBulkDeleteRemark('');
+      setBulkDeleteError('');
+      setSelectedIds(new Set());
+    } catch (err: any) {
+      // Some batches may have already succeeded before this one failed —
+      // log what actually went through so it isn't silently lost, and tell
+      // the admin exactly how far it got instead of a generic failure.
+      if (succeededIds.length > 0) {
+        await supabase.from('activity_logs').insert({
+          action_type: mode === 'hard' ? 'bulk_delete_sales' : 'bulk_hide_sales_only',
+          description: JSON.stringify({
+            remark: bulkDeleteRemark,
+            count: succeededIds.length,
+            partial: true,
+            payment_method_filter: selectedPaymentMethodFilter,
+            before: salesBeingDeleted.filter((s) => succeededIds.includes(s.id)),
+          }),
+          username: user?.username || 'System',
+        });
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          succeededIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
+
+      const friendly = err?.message === 'Failed to fetch'
+        ? 'Network request failed partway through.'
+        : (err?.message || 'Something went wrong.');
+      setBulkDeleteError(
+        succeededIds.length > 0
+          ? `${friendly} ${succeededIds.length} of ${idsToDelete.length} were processed before this happened — those are already done, the rest are still selected. Try again for the remainder.`
+          : `${friendly} Nothing was deleted — try again, or try a smaller date range / fewer selected rows at once.`
+      );
+    } finally {
+      setBulkDeleteProgress(null);
+      await fetchSales();
       setIsBulkDeleting(false);
-      return;
     }
-
-    await supabase.from('activity_logs').insert({
-      action_type: mode === 'hard' ? 'bulk_delete_sales' : 'bulk_hide_sales_only',
-      description: JSON.stringify({
-        remark: bulkDeleteRemark,
-        count: idsToDelete.length,
-        payment_method_filter: selectedPaymentMethodFilter,
-        before: salesBeingDeleted,
-      }),
-      username: user?.username || 'System',
-    });
-
-    setIsBulkDeleteModalOpen(false);
-    setBulkDeletePassword('');
-    setBulkDeleteRemark('');
-    setBulkDeleteError('');
-    setSelectedIds(new Set());
-    await fetchSales();
-    setIsBulkDeleting(false);
   };
 
   /* ===================== EXPORT ===================== */
@@ -895,6 +975,15 @@ export default function AdminSalesPage() {
       <h1 className="text-2xl font-bold text-gray-800">
         Admin Live Dashboard &amp; Sales
       </h1>
+
+      {fetchError && (
+        <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded-xl text-sm flex items-center justify-between gap-4">
+          <span>{fetchError}</span>
+          <button onClick={fetchSales} className="px-3 py-1.5 bg-red-700 text-white rounded-lg text-xs font-medium shrink-0">
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
@@ -1521,8 +1610,22 @@ export default function AdminSalesPage() {
               <label className="text-xs font-semibold text-black">Reason for deleting</label>
               <textarea rows={3} className="w-full p-2 border border-gray-300 rounded bg-white text-black" value={bulkDeleteRemark} onChange={(e) => setBulkDeleteRemark(e.target.value)} required />
             </div>
+            {bulkDeleteProgress && (
+              <div className="space-y-1">
+                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-2 transition-all"
+                    style={{ width: `${Math.round((bulkDeleteProgress.done / Math.max(1, bulkDeleteProgress.total)) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-500">
+                  {bulkDeleteProgress.done} of {bulkDeleteProgress.total} processed — large date ranges are
+                  sent in small batches so one huge request doesn't fail.
+                </p>
+              </div>
+            )}
             <div className="flex justify-end gap-3 pt-2 mt-4 flex-wrap">
-              <button onClick={() => setIsBulkDeleteModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded text-black">Cancel</button>
+              <button onClick={() => setIsBulkDeleteModalOpen(false)} disabled={isBulkDeleting} className="px-4 py-2 bg-gray-200 rounded text-black disabled:opacity-50">Cancel</button>
               <button onClick={() => handleBulkDelete('soft')} disabled={isBulkDeleting} className="px-4 py-2 bg-amber-600 text-white rounded disabled:opacity-50">
                 {isBulkDeleting ? 'Working…' : `Delete Sales Only (${selectedIds.size})`}
               </button>
