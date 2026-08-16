@@ -187,6 +187,7 @@ export default function AdminSalesPage() {
   const [selectedTherapistFilter, setSelectedTherapistFilter] = useState<string>('all');
   const [selectedClientTypeFilter, setSelectedClientTypeFilter] = useState<string>('all'); // NEW
   const [selectedPaymentMethodFilter, setSelectedPaymentMethodFilter] = useState<string>('all'); // NEW
+  const [selectedSaleTypeFilter, setSelectedSaleTypeFilter] = useState<'all' | 'new_package' | 'redemption' | 'regular'>('all');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'therapist_asc' | 'therapist_desc' | 'payment_asc' | 'payment_desc'>('date_desc');
   // When on, includes rows previously removed via "Delete Sales Only" so they
   // can be reviewed/restored. These never count toward totals regardless.
@@ -343,9 +344,20 @@ export default function AdminSalesPage() {
         }
       }
 
-      return matchesTherapist && matchesClientType && matchesPaymentMethod;
+      // Sale Type Filter — distinguishes a brand-new package purchase from a
+      // redemption against an existing package from a regular walk-in sale.
+      let matchesSaleType = true;
+      if (selectedSaleTypeFilter === 'new_package') {
+        matchesSaleType = !!sale.took_package;
+      } else if (selectedSaleTypeFilter === 'redemption') {
+        matchesSaleType = !!sale.is_package_customer;
+      } else if (selectedSaleTypeFilter === 'regular') {
+        matchesSaleType = !sale.took_package && !sale.is_package_customer;
+      }
+
+      return matchesTherapist && matchesClientType && matchesPaymentMethod && matchesSaleType;
     });
-  }, [sales, selectedTherapistFilter, selectedClientTypeFilter, selectedPaymentMethodFilter]);
+  }, [sales, selectedTherapistFilter, selectedClientTypeFilter, selectedPaymentMethodFilter, selectedSaleTypeFilter]);
   
   const sortedSales = useMemo(() => {
     const sortableSales = [...filteredSales];
@@ -986,7 +998,7 @@ export default function AdminSalesPage() {
       )}
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-4 items-end">
+      <div className="bg-white p-4 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 lg:grid-cols-9 gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Outlet
@@ -1061,6 +1073,23 @@ export default function AdminSalesPage() {
             <option value="card">Card</option>
             <option value="bank_transfer">Bank Transfer</option>
             <option value="redemption">Redemption</option>
+          </select>
+        </div>
+
+        {/* SALE TYPE FILTER */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Sale Type
+          </label>
+          <select
+            value={selectedSaleTypeFilter}
+            onChange={(e) => setSelectedSaleTypeFilter(e.target.value as typeof selectedSaleTypeFilter)}
+            className="w-full px-3 py-2 border rounded-lg bg-white text-black focus:outline-none focus:ring-0"
+          >
+            <option value="all">All Sale Types</option>
+            <option value="new_package">New Package Sale</option>
+            <option value="redemption">Package Redemption</option>
+            <option value="regular">Regular Sale (no package)</option>
           </select>
         </div>
 
