@@ -110,30 +110,27 @@ async function processPayload(payload: any) {
     };
 
     // 1. PACKAGE REDEMPTION (Multi-Package FIFO Support)
+    //
+    // The eligibility check + hour deduction happens atomically in Postgres
+    // (redeem_package_hours) instead of being read-computed-written here in
+    // JS. That old pattern (SELECT remaining_hours, subtract in JS, UPDATE)
+    // was a classic lost-update race: two near-simultaneous redemptions for
+    // the same mobile could both read the same starting balance and both
+    // succeed, over-drawing the package. The Postgres function locks every
+    // eligible package row for this mobile (FOR UPDATE) for the duration of
+    // the check-and-deduct, so a concurrent call always sees the up-to-date
+    // balance. It also enforces expiry_date server-side on every call,
+    // instead of relying on the admin UI's lazy "mark expired on page load"
+    // side effect.
     if (payload.isPackageCustomer) {
-        // Fetch active packages ordered by oldest first
-        const { data: activePackages, error: findError } = await supabase
-          .from('packages')
-          .select('id, remaining_hours, used_hours, status')
-          .eq('mobile', payload.mobile)
-          .eq('status', 'active')
-          .gt('remaining_hours', 0)
-          .order('created_at', { ascending: true }); 
-
-        if (findError) throw new Error('Error fetching active packages: ' + findError.message);
-        if (!activePackages || activePackages.length === 0) throw new Error('Active package not found. It may have been deleted or expired.');
-
-        let totalAvailable = activePackages.reduce((sum, p) => sum + Number(p.remaining_hours), 0);
-
-        // Queue all participants who need hours
-        let people: any[] = [
-            { isMain: true, name: payload.name, treatment: payload.treatment, hours: Number(payload.sessionHours) || 0, therapist_name: payload.therapist_name, room: payload.room, in_time: payload.in_time, out_time: payload.out_time }
+        const people: any[] = [
+            { is_main: true, name: payload.name, treatment: payload.treatment, hours: Number(payload.sessionHours) || 0, therapist_name: payload.therapist_name, room: payload.room, in_time: payload.in_time, out_time: payload.out_time }
         ];
 
         if (payload.group_customers && Array.isArray(payload.group_customers)) {
             payload.group_customers.forEach((g: any) => {
                 people.push({
-                    isMain: false,
+                    is_main: false,
                     name: g.name,
                     treatment: g.treatment,
                     hours: Number(g.sessionHours ?? g.session_hours ?? g.duration ?? 0),
@@ -145,89 +142,53 @@ async function processPayload(payload: any) {
             });
         }
 
-        let totalNeeded = people.reduce((sum, p) => sum + p.hours, 0);
+        const { data: splits, error: redeemError } = await supabase.rpc('redeem_package_hours', {
+            p_mobile: payload.mobile,
+            p_today: getISTToday(),
+            p_people: people,
+        });
 
-        if (totalNeeded > totalAvailable) {
-            throw new Error(`Insufficient package balance across all active packages. Needed: ${totalNeeded.toFixed(2)}, Available: ${totalAvailable.toFixed(2)}`);
+        if (redeemError) {
+            // Surfaces the exact message raised inside the SQL function
+            // (e.g. "Active package not found..." or "Insufficient package
+            // balance...") so the staff member sees the same clear error
+            // they always did.
+            throw new Error(redeemError.message || 'Failed to redeem package hours');
+        }
+        if (!splits || splits.length === 0) {
+            throw new Error('Active package not found. It may have been deleted or expired.');
         }
 
-        const sessionsToInsert = [];
-        const packagesToUpdate = [];
+        // Build one session row per package the hours were actually taken
+        // from, exactly as before — just sourced from the atomic RPC's
+        // result instead of a locally-computed (and racy) split.
+        const sessionsToInsert = splits.map((s: any, idx: number) => ({
+            ...baseCustomerInsert,
+            session_hours: s.session_main_hours,
+            group_customers: s.session_guests && s.session_guests.length > 0 ? s.session_guests : null,
+            package_id: s.package_id,
+            client_uuid: payload.client_uuid ? (idx === 0 ? payload.client_uuid : `${payload.client_uuid}-${s.package_id}`) : null
+        }));
 
-        // Distribute hours across packages sequentially
-        for (let pkg of activePackages) {
-            if (people.length === 0) break;
-
-            let rem = Number(pkg.remaining_hours);
-            let usedFromThisPkg = 0;
-            let sessionMainHours = 0;
-            let sessionGuests = [];
-
-            while (people.length > 0 && rem > 0.001) {
-                let p = people[0];
-                let allocate = Math.min(p.hours, rem);
-                
-                allocate = Math.round(allocate * 100) / 100; // Float precision safety
-
-                if (p.isMain) {
-                    sessionMainHours += allocate;
-                } else {
-                    sessionGuests.push({
-                        name: p.name,
-                        treatment: p.treatment,
-                        sessionHours: allocate,
-                        therapist_name: p.therapist_name,
-                        room: p.room,
-                        in_time: p.in_time,
-                        out_time: p.out_time
-                    });
-                }
-
-                usedFromThisPkg += allocate;
-                rem -= allocate;
-                p.hours -= allocate;
-
-                // Move to next person if current person's hours are fulfilled
-                if (p.hours <= 0.001) {
-                    people.shift();
-                }
-            }
-
-            if (usedFromThisPkg > 0) {
-                packagesToUpdate.push({
-                    id: pkg.id,
-                    used_hours: Number(pkg.used_hours) + usedFromThisPkg,
-                    remaining_hours: Math.round(rem * 100) / 100,
-                    status: rem <= 0.001 ? 'expired' : 'active'
-                });
-
-                // Create a dedicated session split for this specific package so history sync works
-                sessionsToInsert.push({
-                    ...baseCustomerInsert,
-                    session_hours: sessionMainHours,
-                    group_customers: sessionGuests.length > 0 ? sessionGuests : null,
-                    package_id: pkg.id,
-                    client_uuid: payload.client_uuid ? (sessionsToInsert.length === 0 ? payload.client_uuid : `${payload.client_uuid}-${pkg.id}`) : null
-                });
-            }
-        }
-
-        // Apply package updates
-        for (let pu of packagesToUpdate) {
-            const { error: puError } = await supabase
-                .from('packages')
-                .update({ used_hours: pu.used_hours, remaining_hours: pu.remaining_hours, status: pu.status })
-                .eq('id', pu.id);
-            if (puError) throw new Error('Failed to update package: ' + puError.message);
-        }
-
-        // Insert session splits
         const { data: insertedSessions, error: insertSessionError } = await supabase
             .from('customers')
             .insert(sessionsToInsert)
             .select('id');
-            
-        if (insertSessionError) throw new Error('Error saving sessions: ' + insertSessionError.message);
+
+        if (insertSessionError) {
+            // The hours were already deducted atomically above. Since the
+            // visit records failed to save, credit every package back
+            // exactly what was taken from it — otherwise this would look
+            // identical to a lost-update bug from the outside (hours gone,
+            // no session on file, no way to tell why).
+            const { error: revertError } = await supabase.rpc('revert_package_hours', {
+                p_splits: splits.map((s: any) => ({ package_id: s.package_id, used_hours: s.used_hours })),
+            });
+            if (revertError) {
+                console.error('[client-form-submit] CRITICAL: failed to revert package hours after a failed session insert. Splits that need manual review:', JSON.stringify(splits), revertError);
+            }
+            throw new Error('Error saving sessions: ' + insertSessionError.message);
+        }
 
         result.ok = true;
         result.customer_session_id = insertedSessions?.[0]?.id || null;

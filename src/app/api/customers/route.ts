@@ -1,6 +1,7 @@
 // src/app/api/customers/route.ts
 import { supabaseServer as supabase } from '@/lib/supabaseServer'; // Changed to supabaseServer for better permissions
 import { NextRequest, NextResponse } from 'next/server';
+import { getISTToday } from '@/lib/dateTime';
 
 async function logActivity(action: string, description: string, user: string) {
   try {
@@ -21,12 +22,16 @@ export async function GET(request: NextRequest) {
 
     // Lookup by Mobile (for client form usage)
     if (mobile) {
+      // Excludes packages that are past expiry_date even if their status
+      // hasn't been lazily flipped to 'expired' yet, so this never reports a
+      // package as usable that redeem_package_hours() would then refuse.
       const { data: pkg } = await supabase
         .from('packages')
         .select('*')
         .eq('mobile', mobile)
         .eq('status', 'active')
         .gt('remaining_hours', 0)
+        .or(`expiry_date.is.null,expiry_date.gte.${getISTToday()}`)
         .order('expiry_date', { ascending: false })
         .limit(1)
         .maybeSingle();

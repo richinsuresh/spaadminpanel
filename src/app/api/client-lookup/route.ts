@@ -1,4 +1,5 @@
 import { supabaseServer as supabase } from '@/lib/supabaseServer';
+import { getISTToday } from '@/lib/dateTime';
 
 export async function GET(request: Request) {
   try {
@@ -25,18 +26,29 @@ export async function GET(request: Request) {
 
     if (!pkgs || pkgs.length === 0) return Response.json(null);
 
-    // Aggregate totals only for strictly active packages
+    const today = getISTToday();
+
+    // A package only counts toward the redeemable balance shown to staff if
+    // it's actually redeemable: status='active' AND not past its expiry
+    // date. Checking status alone isn't enough — status only flips to
+    // 'expired' when someone happens to load the Packages/Audit admin page
+    // (a lazy client-side effect), so a date-expired package can otherwise
+    // sit at status='active' indefinitely. Without this check staff would
+    // be shown hours here that redeem_package_hours() (which checks
+    // expiry_date directly) would then correctly refuse to redeem.
+    const isEligible = (p: any) =>
+      p.status === 'active' && (!p.expiry_date || p.expiry_date >= today);
+
     let totalPackageHours = 0;
     let usedPackageHours = 0;
     let remainingHours = 0;
-    
-    // Find the latest valid expiry date among all packages
-    const activePkgs = pkgs.filter(p => p.status === 'active');
-    const primaryPkg = activePkgs.length > 0 ? activePkgs[0] : pkgs[0];
+
+    const eligiblePkgs = pkgs.filter(isEligible);
+    const primaryPkg = eligiblePkgs.length > 0 ? eligiblePkgs[0] : pkgs[0];
     let latestExpiry = primaryPkg.expiry_date;
 
     for (const p of pkgs) {
-        if (p.status === 'active') {
+        if (isEligible(p)) {
             totalPackageHours += Number(p.total_hours);
             usedPackageHours += Number(p.used_hours);
             remainingHours += Number(p.remaining_hours);
@@ -46,8 +58,12 @@ export async function GET(request: Request) {
         }
     }
 
+    // 'active' only when there's at least one package that's genuinely
+    // redeemable right now (correct status, unexpired, hours left).
+    const status = eligiblePkgs.length > 0 && remainingHours > 0 ? 'active' : 'expired';
+
     return Response.json({
-      status: (remainingHours <= 0 && pkgs.some(p => p.status === 'active')) ? 'expired' : primaryPkg.status,
+      status,
       name: primaryPkg.name,
       mobile: primaryPkg.mobile,
       packageAmount: pkgs.reduce((sum, p) => sum + Number(p.package_amount), 0),

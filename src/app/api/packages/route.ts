@@ -182,11 +182,42 @@ export async function POST(req: NextRequest) {
           const tHours = getVal('totalHours', 'total_hours');
           if (tHours !== undefined) updateObj.total_hours = tHours;
 
-          const rHours = getVal('remainingHours', 'remaining_hours');
-          if (rHours !== undefined) updateObj.remaining_hours = rHours;
-
           const uHours = getVal('usedHours', 'used_hours');
           if (uHours !== undefined) updateObj.used_hours = uHours;
+
+          // Never trust a caller-supplied remaining_hours when total_hours
+          // or used_hours is also changing — always re-derive it from the
+          // other two. Accepting all three independently is exactly how
+          // this table ends up with total_hours - used_hours != remaining_hours
+          // (the "Package hour mismatch" issue the Audit page has to detect
+          // and patch after the fact). If only one of total/used is present
+          // in this payload, fetch the row's current value of the other so
+          // the recompute is against real data, not an assumed 0.
+          if (tHours !== undefined || uHours !== undefined) {
+            let currentTotal = tHours;
+            let currentUsed = uHours;
+
+            if (tHours === undefined || uHours === undefined) {
+              let existingQuery = supabase.from('packages').select('total_hours, used_hours');
+              existingQuery = identifier.op_uuid
+                ? existingQuery.eq('op_uuid', identifier.op_uuid)
+                : existingQuery.eq('id', identifier.id);
+              const { data: existingRow } = await existingQuery.maybeSingle();
+              if (tHours === undefined) currentTotal = existingRow?.total_hours ?? 0;
+              if (uHours === undefined) currentUsed = existingRow?.used_hours ?? 0;
+            }
+
+            const recomputedRemaining = Math.max(0, Number(currentTotal) - Number(currentUsed));
+            updateObj.remaining_hours = Math.round(recomputedRemaining * 100) / 100;
+          } else {
+            // Neither total nor used is changing in this call, so a direct
+            // remaining_hours value is accepted as an explicit manual
+            // correction (this is what the Audit page's "recompute" fix
+            // sends, and it always sends a value that already equals
+            // total-used).
+            const rHours = getVal('remainingHours', 'remaining_hours');
+            if (rHours !== undefined) updateObj.remaining_hours = rHours;
+          }
 
           const expDate = getVal('expiryDate', 'expiry_date');
           if (expDate !== undefined) updateObj.expiry_date = expDate;
