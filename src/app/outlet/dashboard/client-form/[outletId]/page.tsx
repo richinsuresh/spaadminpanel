@@ -271,6 +271,13 @@ export default function ClientCheckinForm() {
   const [mobile, setMobile] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
+  // Synchronous re-entrancy guard: `loading` is React state and only takes
+  // effect on the next render, so a fast double-tap on submit can fire two
+  // full requests before the button visually disables. Each call generates
+  // its own client_uuid, so the server's op_uuid idempotency check doesn't
+  // catch this — it looks like two separate visits. This ref blocks the
+  // second call immediately, no render needed.
+  const submittingRef = useRef(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -467,6 +474,12 @@ export default function ClientCheckinForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Block re-entrant submissions immediately (synchronous, no React
+    // state/render lag) — see the comment on submittingRef above.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+
     setError('');
     setSuccess('');
     setLoading(true);
@@ -474,12 +487,14 @@ export default function ClientCheckinForm() {
     if (!outlet) {
       setError('Outlet information is missing. Please refresh the page.');
       setLoading(false);
+      submittingRef.current = false;
       return;
     }
 
     if (!mobile || mobile.length !== 10) {
         setError('Phone number must be exactly 10 digits.');
         setLoading(false);
+        submittingRef.current = false;
         return;
     }
 
@@ -492,12 +507,14 @@ export default function ClientCheckinForm() {
     if (sessionHours <= 0) {
       setError('Please enter a valid Session Duration (Main Customer).');
       setLoading(false);
+      submittingRef.current = false;
       return;
     }
     
     if (!formData.name.trim()) {
         setError('Please enter the Main Customer\'s full name.');
         setLoading(false);
+        submittingRef.current = false;
         return;
     }
 
@@ -511,6 +528,7 @@ export default function ClientCheckinForm() {
         if (totalGroupHours > (clientInfo?.remainingHours || 0)) {
             setError(`Insufficient package balance. Total needed: ${formatDuration(totalGroupHours)}, Remaining: ${formatDuration(clientInfo?.remainingHours || 0)}.`);
             setLoading(false);
+            submittingRef.current = false;
             return;
         }
     } else {
@@ -518,6 +536,7 @@ export default function ClientCheckinForm() {
         if (amountInRupees < MIN_AMOUNT_RUPEES) {
             setError(`Amount (₹${amountInRupees}) is below the minimum of ₹${MIN_AMOUNT_RUPEES}.`);
             setLoading(false);
+            submittingRef.current = false;
             return;
         }
     }
@@ -528,6 +547,7 @@ export default function ClientCheckinForm() {
       if (!c.name || !c.treatment || duration <= 0) {
         setError(`Please fill name, treatment, and duration for Customer ${i + 2}.`);
         setLoading(false);
+        submittingRef.current = false;
         return;
       }
     }
@@ -541,6 +561,7 @@ export default function ClientCheckinForm() {
         if (totalSplit !== amountInRupees) {
             setError(`Split payment amounts (₹${totalSplit}) must exactly equal the total amount (₹${amountInRupees}).`);
             setLoading(false);
+            submittingRef.current = false;
             return;
         }
         let splitParts = [];
@@ -617,6 +638,9 @@ export default function ClientCheckinForm() {
 
       const paymentRequired = !isPackageRedemption;
       
+      // Note: submittingRef intentionally stays true through the redirect
+      // below (loading also stays true) — the form is navigating away, so
+      // there's no legitimate second submission to allow here.
       // QR Redirect logic specifically checks for split UPI portion as well
       if (paymentRequired && (formData.paymentMethod === 'upi' || (formData.paymentMethod === 'split' && upiAmountForQr > 0))) {
         setSuccess('Registration complete. Redirecting to payment QR...');
@@ -634,6 +658,7 @@ export default function ClientCheckinForm() {
         console.error('Submit error:', err);
         setError(err?.message || 'Submission failed. Please check your connection and try again.');
         setLoading(false);
+        submittingRef.current = false;
     }
   };
 
