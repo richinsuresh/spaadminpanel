@@ -222,18 +222,23 @@ export default function PackagesPage() {
     
     let currentStatus = row.status ?? 'active';
 
-    // FIX: String-based date comparison to avoid timezone shifts
-    if (row.expiry_date) {
+    // Recompute what the status SHOULD be from the actual data, every time.
+    // Important: this has to be able to go BOTH ways. A package that was
+    // marked 'expired' (old expiry date, or hours ran out) can become valid
+    // again later — e.g. staff extends the expiry date, or a usage-hours
+    // correction frees up remaining hours. Only ever flipping active -> expired
+    // and never expired -> active is what left corrected/renewed packages
+    // stuck showing EXPIRED.
+    if (currentStatus === 'active' || currentStatus === 'expired') {
         const todayStr = getISTToday();
-        if (row.expiry_date < todayStr && currentStatus === 'active') {
-            currentStatus = 'expired';
-            supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
-        }
-    }
+        const isPastExpiry = !!(row.expiry_date && row.expiry_date < todayStr);
+        const isOutOfHours = remaining_hours <= 0;
+        const correctStatus = (isPastExpiry || isOutOfHours) ? 'expired' : 'active';
 
-    if (remaining_hours <= 0 && currentStatus === 'active') {
-        currentStatus = 'expired';
-        supabase.from('packages').update({ status: 'expired' }).eq('id', row.id).then(); 
+        if (correctStatus !== currentStatus) {
+            currentStatus = correctStatus;
+            supabase.from('packages').update({ status: correctStatus }).eq('id', row.id).then();
+        }
     }
 
     return {
@@ -404,12 +409,36 @@ export default function PackagesPage() {
 
     try {
         const ids = Array.from(selectedIds);
-        const { error } = await supabase
-            .from('packages')
-            .update({ expiry_date: bulkExpiryDate })
-            .in('id', ids);
+        const todayStr = getISTToday();
 
-        if (error) throw error;
+        // Extending a package's expiry date must also re-evaluate its status.
+        // Previously this only wrote expiry_date, so a package that had
+        // already been auto-marked 'expired' stayed 'expired' in the DB even
+        // after staff pushed its expiry into the future — the UI kept
+        // showing EXPIRED on an otherwise valid, renewed package.
+        const activeIds: string[] = [];
+        const expiredIds: string[] = [];
+        ids.forEach((id) => {
+            const pkg = packages.find((p) => p.id === id);
+            const remaining = pkg ? pkg.remaining_hours : 0;
+            const willBeExpired = remaining <= 0 || bulkExpiryDate < todayStr;
+            (willBeExpired ? expiredIds : activeIds).push(id);
+        });
+
+        if (activeIds.length) {
+            const { error } = await supabase
+                .from('packages')
+                .update({ expiry_date: bulkExpiryDate, status: 'active' })
+                .in('id', activeIds);
+            if (error) throw error;
+        }
+        if (expiredIds.length) {
+            const { error } = await supabase
+                .from('packages')
+                .update({ expiry_date: bulkExpiryDate, status: 'expired' })
+                .in('id', expiredIds);
+            if (error) throw error;
+        }
 
         logActivity('bulk_edit_package', `Updated expiry for ${ids.length} packages to ${bulkExpiryDate}. Remark: ${bulkRemark}`);
         
@@ -715,14 +744,18 @@ export default function PackagesPage() {
       }, 0);
       
       // SILENT BACKGROUND SYNC: Instantly fix the database if it doesn't match history accurately
-      if (Math.abs(pkg.used_hours - realUsage) > 0.05) {
-          const newRemaining = pkg.total_hours - realUsage;
-          const todayStr = getISTToday();
-          let newStatus = pkg.status;
-          if (newRemaining <= 0 || (pkg.expiry_date && pkg.expiry_date < todayStr)) {
-             newStatus = 'expired';
-          }
+      const newRemaining = pkg.total_hours - realUsage;
+      const todayStr = getISTToday();
+      const shouldBeExpired = newRemaining <= 0 || (pkg.expiry_date && pkg.expiry_date < todayStr);
+      const newStatus = shouldBeExpired ? 'expired' : 'active';
 
+      const usageOutOfSync = Math.abs(pkg.used_hours - realUsage) > 0.05;
+      // Same bidirectional fix as normalizeRow: also re-sync when the status
+      // itself is wrong (e.g. expiry date was extended after the package was
+      // auto-expired), not only when the hours are out of sync.
+      const statusOutOfSync = (pkg.status === 'active' || pkg.status === 'expired') && pkg.status !== newStatus;
+
+      if (usageOutOfSync || statusOutOfSync) {
           await supabase.from('packages').update({
               used_hours: realUsage,
               remaining_hours: newRemaining,
