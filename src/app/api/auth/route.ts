@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     if (username) {
       const { data, error } = await supabaseServer
         .from('app_users')
-        .select('username, role')
+        .select('username, role, is_active')
         .eq('username', username)
         .eq('password', password)
         .single();
@@ -38,6 +38,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { error: 'Invalid credentials' },
           { status: 401 }
+        );
+      }
+
+      if (data.is_active === false) {
+        return NextResponse.json(
+          { error: 'This account has been deactivated' },
+          { status: 403 }
         );
       }
 
