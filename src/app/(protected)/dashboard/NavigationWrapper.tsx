@@ -20,7 +20,8 @@ import {
   X,
   History,
   Activity, // <--- Added for Activity Log icon
-  ShieldCheck
+  ShieldCheck,
+  Lock
 } from 'lucide-react';
 
 import { useUser } from '@/context/UserContext';
@@ -183,6 +184,11 @@ export default function NavigationWrapper({ children }: { children: React.ReactN
                  icon={<Activity size={20} />} 
                  text="Activity Logs" 
                  href="/dashboard/activity" 
+               />
+               <SideNavItem 
+                 icon={<Lock size={20} />} 
+                 text="Super Admin" 
+                 href="/dashboard/super-admin" 
                />
              </>
           )}
