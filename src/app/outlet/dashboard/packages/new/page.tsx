@@ -88,6 +88,18 @@ export default function NewPackageSalePage() {
     // click that lands before the first render happens.
     const submittingRef = useRef(false);
 
+    // Idempotency key for this in-progress submission. Generated lazily on the
+    // FIRST attempt and reused for every retry (network timeout, server
+    // hiccup, etc.) for as long as this form stays open. Regenerating it on
+    // every attempt would defeat the server's duplicate-detection (which keys
+    // off this value) and let a slow/flaky outlet connection create two
+    // packages for one customer instead of one.
+    const clientUuidRef = useRef<string | null>(null);
+    const getOrCreateClientUuid = () => {
+        if (!clientUuidRef.current) clientUuidRef.current = uuidv4();
+        return clientUuidRef.current;
+    };
+
     const fetchData = useCallback(async (outletId: string) => {
         if (!outletId) return;
         try {
@@ -173,7 +185,7 @@ export default function NewPackageSalePage() {
             const amountInPaise = Math.round(form.packageAmount * 100);
             // Stable idempotency key for this submission attempt. The server uses this
             // to make sure retries/double-submits never create a second package/customer row.
-            const clientUuid = uuidv4();
+            const clientUuid = getOrCreateClientUuid();
             const res = await fetch('/api/client-form-submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
