@@ -16,6 +16,7 @@ type SaleData = {
   check_out_time: string | null;
   date: string;
   outlet_name: string; // 1. Added outlet_name to type
+  package_id: string | null;
 };
 
 /* ===================== HELPERS ===================== */
@@ -68,19 +69,48 @@ const AddonTimingOptions: React.FC<{ sale: SaleData }> = ({ sale }) => {
 
     const handleAddTime = async () => {
         if (addonTime <= 0) return;
-        const newTotalHours = (sale.session_hours || 0) + (addonTime / 60);
-        
+        const extraHours = addonTime / 60;
+        const newTotalHours = (sale.session_hours || 0) + extraHours;
+
         try {
+            // Extending a package-redemption session must also take the
+            // extra hours out of that package - otherwise the customer's
+            // package balance and their actual session hours drift apart.
+            if (sale.package_id) {
+                const { error: pkgError } = await supabase.rpc('adjust_package_hours', {
+                    p_package_id: sale.package_id,
+                    p_delta_hours: extraHours,
+                });
+                if (pkgError) {
+                    if (pkgError.message?.includes('INSUFFICIENT_BALANCE')) {
+                        alert("This customer's package doesn't have enough hours left for this extension.");
+                    } else {
+                        alert(`Could not update the linked package: ${pkgError.message}`);
+                    }
+                    return;
+                }
+            }
+
             const { error } = await supabase
                 .from('customers')
                 .update({ session_hours: newTotalHours })
                 .eq('id', sale.id);
 
-            if (error) throw error;
+            if (error) {
+                // Roll back the package deduction since the session update failed.
+                if (sale.package_id) {
+                    await supabase.rpc('adjust_package_hours', {
+                        p_package_id: sale.package_id,
+                        p_delta_hours: -extraHours,
+                    });
+                }
+                throw error;
+            }
             alert(`Added ${addonTime} minutes.`);
             window.location.reload(); 
         } catch (e) {
             console.error("Add time failed:", e);
+            alert("Add time failed.");
         }
     };
 
@@ -134,7 +164,7 @@ export default function SaleDashboard({ params }: { params: Promise<{ id: string
         const { data, error } = await supabase
           .from('customers') 
           // 2. Added outlet_name to the select query
-          .select('id, name, check_in_time, session_hours, check_out_time, date, outlet_name')
+          .select('id, name, check_in_time, session_hours, check_out_time, date, outlet_name, package_id')
           .eq('id', id)
           .single();
         

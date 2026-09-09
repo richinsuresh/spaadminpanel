@@ -48,6 +48,7 @@ type Sale = {
   payment_method: string | null;
   is_package_customer: boolean;
   client_type: string | null;
+  package_id: string | null;
 
   in_time: string | null;
   out_time: string | null;
@@ -616,25 +617,61 @@ export default function AdminSalesPage() {
       out_time: null,
     };
 
+    // If this session came from a package and its hours are being changed,
+    // move the difference in/out of that specific package first (atomically,
+    // row-locked) so the package balance stays in sync with what's actually
+    // recorded here. Scoped to before.package_id - never touched by mobile,
+    // so it can't affect a different package that happens to share a phone
+    // number.
+    const hoursDelta = totalHours - (before.session_hours || 0);
+    if (before.package_id && hoursDelta !== 0) {
+      const { error: hoursError } = await supabase.rpc('adjust_package_hours', {
+        p_package_id: before.package_id,
+        p_delta_hours: hoursDelta,
+      });
+      if (hoursError) {
+        setSaveError(
+          hoursError.message?.includes('INSUFFICIENT_BALANCE')
+            ? "This customer's package doesn't have enough hours left for this change."
+            : `Could not update the linked package: ${hoursError.message}`,
+        );
+        setIsSaving(false);
+        return;
+      }
+    }
+
     const { error } = await supabase
       .from('customers')
       .update(updates)
       .eq('id', editingSale.id);
 
     if (error) {
+      // Roll back the package hours change since the session update failed.
+      if (before.package_id && hoursDelta !== 0) {
+        await supabase.rpc('adjust_package_hours', {
+          p_package_id: before.package_id,
+          p_delta_hours: -hoursDelta,
+        });
+      }
       setSaveError(error.message);
       setIsSaving(false);
       return;
     }
 
-    if (before.name !== editForm.name || before.mobile !== editForm.mobile) {
+    // Rename/re-number the SPECIFIC package this sale belongs to - not
+    // "every package with this old mobile number", which could rename a
+    // different customer's package if two people share a phone number.
+    if (
+      before.package_id &&
+      (before.name !== editForm.name || before.mobile !== editForm.mobile)
+    ) {
         const { error: pkgError } = await supabase
             .from('packages')
             .update({
                 name: editForm.name,
                 mobile: editForm.mobile
             })
-            .eq('mobile', before.mobile);
+            .eq('id', before.package_id);
 
         if (pkgError) {
             console.error('Failed to sync package update:', pkgError);
@@ -703,12 +740,38 @@ export default function AdminSalesPage() {
     const before = { ...selectedSaleForDelete };
 
     try {
+      // A hard delete permanently removes the visit record. If it was a
+      // package redemption, credit those hours back to the package first -
+      // otherwise the package permanently loses hours with no session left
+      // to explain why. A soft delete ("hide from sales") keeps the row (and
+      // its package_id link) intact, so it needs no adjustment.
+      if (mode === 'hard' && before.package_id && before.session_hours) {
+        const { error: revertError } = await supabase.rpc('adjust_package_hours', {
+          p_package_id: before.package_id,
+          p_delta_hours: -before.session_hours,
+        });
+        if (revertError) {
+          throw new Error(`Could not credit hours back to the package: ${revertError.message}`);
+        }
+      }
+
       const { error } =
         mode === 'hard'
           ? await supabase.from('customers').delete().eq('id', selectedSaleForDelete.id)
           : await supabase.from('customers').update({ hidden_from_sales: true }).eq('id', selectedSaleForDelete.id);
 
-      if (error) throw error;
+      if (error) {
+        // The delete itself failed - undo the hours credit we just made so
+        // the package isn't left with phantom extra hours for a session
+        // that's still on record.
+        if (mode === 'hard' && before.package_id && before.session_hours) {
+          await supabase.rpc('adjust_package_hours', {
+            p_package_id: before.package_id,
+            p_delta_hours: before.session_hours,
+          });
+        }
+        throw error;
+      }
 
       await supabase.from('activity_logs').insert({
         action_type: mode === 'hard' ? 'delete_sale' : 'hide_sale_only',
@@ -800,12 +863,48 @@ export default function AdminSalesPage() {
         setBulkDeleteProgress({ done: succeededIds.length, total: idsToDelete.length });
         const batch = batches[i];
 
+        // Same as the single-delete path: a hard delete of a package
+        // redemption must credit its hours back first, or the package
+        // permanently loses them with no session left to explain why.
+        if (mode === 'hard') {
+          const rowsInBatch = salesBeingDeleted.filter((s) => batch.includes(s.id));
+          for (const row of rowsInBatch) {
+            if (row.package_id && row.session_hours) {
+              const { error: revertError } = await supabase.rpc('adjust_package_hours', {
+                p_package_id: row.package_id,
+                p_delta_hours: -row.session_hours,
+              });
+              if (revertError) {
+                throw new Error(
+                  `Could not credit hours back for ${row.name} (${row.mobile}): ${revertError.message}`,
+                );
+              }
+            }
+          }
+        }
+
         const { error } =
           mode === 'hard'
             ? await supabase.from('customers').delete().in('id', batch)
             : await supabase.from('customers').update({ hidden_from_sales: true }).in('id', batch);
 
-        if (error) throw error;
+        if (error) {
+          // This batch's deletes failed after we already credited hours
+          // back above - undo those credits so packages aren't left with
+          // phantom extra hours for sessions that are still on record.
+          if (mode === 'hard') {
+            const rowsInBatch = salesBeingDeleted.filter((s) => batch.includes(s.id));
+            for (const row of rowsInBatch) {
+              if (row.package_id && row.session_hours) {
+                await supabase.rpc('adjust_package_hours', {
+                  p_package_id: row.package_id,
+                  p_delta_hours: row.session_hours,
+                });
+              }
+            }
+          }
+          throw error;
+        }
         succeededIds.push(...batch);
       }
 
