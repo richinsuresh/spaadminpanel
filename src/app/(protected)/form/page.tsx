@@ -82,6 +82,18 @@ export default function ClientForm() {
   // Synchronous re-entrancy guard: prevents a fast double-click on "Save Record"
   // from firing two requests before React re-renders the disabled button.
   const submittingRef = useRef(false);
+  // Idempotency key for this in-progress submission. Generated lazily on the
+  // FIRST attempt and then reused for every retry (network timeout, server
+  // hiccup, validation fix-and-resubmit, etc.) for as long as this form stays
+  // open. If it were regenerated on every attempt, the server's duplicate
+  // detection (which keys off this value) could never catch a retry, and a
+  // slow network could create two packages/sessions for one customer instead
+  // of one.
+  const clientUuidRef = useRef<string | null>(null);
+  const getOrCreateClientUuid = () => {
+    if (!clientUuidRef.current) clientUuidRef.current = uuidv4();
+    return clientUuidRef.current;
+  };
   const [success, setSuccess] = useState(false);
   const [inputError, setInputError] = useState('');
   const lookupTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -407,7 +419,7 @@ export default function ClientForm() {
         // retried/duplicated submission instead of creating a second
         // package/customer row. See the "PACKAGE SALE" duplicate-prevention
         // fix in that route.
-        client_uuid: uuidv4(),
+        client_uuid: getOrCreateClientUuid(),
       };
 
       const response = await fetch('/api/client-form-submit', {
