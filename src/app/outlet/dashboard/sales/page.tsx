@@ -40,6 +40,7 @@ type Sale = {
   therapist_name: string | null;
   session_hours: number | null;
   payment_method: string | null;
+  package_id: string | null;
 
   group_customers: GroupCustomer[] | null;
 };
@@ -625,6 +626,7 @@ export default function OutletSalesPage() {
           room,
           therapist_name,
           payment_method,
+          package_id,
           group_customers
         `,
         )
@@ -828,6 +830,28 @@ export default function OutletSalesPage() {
         const newAmount =
           (currentSale.amount_paid || 0) + extraAmount * 100;
 
+        // If this visit was a package redemption, the addon minutes must
+        // also come out of that package's balance - otherwise the customer
+        // gets bonus hours the package was never charged for. This is done
+        // FIRST and atomically (row-locked in Postgres via adjust_package_hours),
+        // so if the package doesn't have enough hours left, we throw before
+        // ever touching the session row, and nothing is left half-updated.
+        if (currentSale.package_id && extraHours > 0) {
+          const { error: pkgError } = await supabase.rpc(
+            'adjust_package_hours',
+            {
+              p_package_id: currentSale.package_id,
+              p_delta_hours: extraHours,
+            },
+          );
+          if (pkgError) {
+            const msg = pkgError.message?.includes('INSUFFICIENT_BALANCE')
+              ? "This customer's package doesn't have enough hours left for this addon."
+              : `Could not update the linked package: ${pkgError.message}`;
+            throw new Error(msg);
+          }
+        }
+
         const { error } = await supabase
           .from('customers')
           .update({
@@ -837,11 +861,22 @@ export default function OutletSalesPage() {
           })
           .eq('id', saleId);
 
-        if (error) throw error;
+        if (error) {
+          // The package was already debited above - credit it back so we
+          // don't leave hours deducted with no addon actually recorded.
+          if (currentSale.package_id && extraHours > 0) {
+            await supabase.rpc('adjust_package_hours', {
+              p_package_id: currentSale.package_id,
+              p_delta_hours: -extraHours,
+            });
+          }
+          throw error;
+        }
         console.log('Add-on saved successfully.');
         handleCloseAddonModal();
       } catch (err: any) {
         console.error(`Error saving add-on: ${err.message}`);
+        alert(err.message || 'Error saving add-on.');
       }
     },
     [handleCloseAddonModal],
